@@ -1,0 +1,439 @@
+:root{
+  --glass: rgba(210, 210, 210, 0.12);
+  --glass-strong: rgba(210, 210, 210, 0.18);
+  --stroke: rgba(255, 255, 255, 0.25);
+  --text: rgba(255, 255, 255, 0.88);
+  --text-dim: rgba(255, 255, 255, 0.62);
+  --shadow: rgba(0, 0, 0, 0.28);
+
+  /* --- Responsive UI scale tokens --- */
+  /* Thinner panels + smaller max; also allow much smaller mins for small windows */
+  --ui-scale: clamp(0.70, 0.45 + 0.40vw, 0.98);
+  --ui-gap: clamp(8px, 1.0vw, 16px);
+  --ui-radius: clamp(14px, 1.6vw, 22px);
+
+  --ui-panel-w: clamp(170px, 15vw, 260px);
+  --ui-panel-w-right: clamp(190px, 16vw, 290px);
+
+  --ui-panel-top: clamp(44px, 6vh, 72px);
+  --ui-panel-bottom: clamp(44px, 6vh, 72px);
+
+  --ui-pad: clamp(10px, 1.0vw, 16px);
+
+  --ui-font: clamp(10px, 0.85vw, 13px);
+  --ui-font-sm: clamp(9px, 0.75vw, 12px);
+  --ui-font-xs: clamp(9px, 0.70vw, 11px);
+
+  --ui-btn-h: clamp(34px, 4.4vh, 46px);
+  /* Title/header hit target height (kept in sync for expanded + collapsed) */
+  --ui-title-h: calc(var(--ui-btn-h) + (var(--ui-pad) * 0.2));
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; font-size: var(--ui-font); }
+#app { position: relative; width: 100%; height: 100%; overflow: hidden; background: #0b0f14; }
+
+#map { position: absolute; inset: 0; z-index: 1; }
+
+/* Overlay for drones + links: ensure full coverage and stable sizing */
+#overlay {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  /* Keep drones/links above the map, but below UI panels */
+  z-index: 5;
+}
+
+.timestamp{
+  position: absolute;
+  left: var(--ui-gap);
+  top: calc(var(--ui-gap) * 0.75);
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  text-shadow: 0 10px 25px var(--shadow);
+  z-index: 10;
+}
+.timestamp #timeLine{ font-size: calc(var(--ui-font-sm) * 1.05); opacity: 0.95; }
+.timestamp #dateLine{ font-size: var(--ui-font-sm); opacity: 0.75; margin-top: 2px; }
+
+.panel{
+  position: absolute;
+  top: var(--ui-panel-top);
+  bottom: var(--ui-panel-bottom);
+  width: var(--ui-panel-w);
+  border-radius: var(--ui-radius);
+  border: 1px solid var(--stroke);
+  background: var(--glass);
+  box-shadow: 0 18px 40px var(--shadow);
+  overflow: hidden;
+  z-index: 10;
+}
+.panel.left { left: var(--ui-gap); }
+.panel.right { right: var(--ui-gap); width: var(--ui-panel-w-right); }
+
+.panel-blur{
+  position:absolute; inset:0;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  background: linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.05));
+}
+.panel-content{
+  position: relative;
+  height: 100%;
+  padding: var(--ui-pad);
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--ui-gap) * 0.65);
+  color: var(--text);
+}
+
+/* Panel header/title */
+.panel-top{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap: 10px;
+  margin-bottom: 4px;
+  /* Make header area (and therefore title hit-area) consistently large */
+  min-height: var(--ui-title-h);
+}
+
+.panel-top.panel-top-center{
+  justify-content: center;
+}
+
+.panel-title{
+  appearance: none;
+  border: 0;
+  background: transparent;
+  /* Expand clickable area in expanded state to match the collapsed feel */
+  width: 100%;
+  min-height: var(--ui-title-h);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  margin: 0;
+  cursor: pointer;
+  color: rgba(255,255,255,0.86);
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: var(--ui-font-sm);
+  border-radius: 10px;
+}
+
+.panel-title:hover{
+  background: rgba(255,255,255,0.06);
+}
+
+.panel-title:focus-visible{
+  outline: 2px solid rgba(255,255,255,0.35);
+  outline-offset: 2px;
+}
+
+/* When not using the centered header style, keep the title aligned to the left */
+.panel-top:not(.panel-top-center) .panel-title{
+  justify-content: flex-start;
+}
+
+/* Collapse behavior */
+.panel.is-collapsed{
+  bottom: auto;
+  /* Slightly taller so the header/title hit area always fits inside the bar */
+  height: calc(var(--ui-title-h) + (var(--ui-pad) * 2.0));
+}
+
+.panel.is-collapsed .panel-content{
+  gap: 0;
+}
+
+/* Hide everything except the title row */
+.panel.is-collapsed .panel-content > :not(.panel-top),
+.panel.is-collapsed .panel-top > :not(.panel-title){
+  display: none !important;
+}
+
+/* Make collapsed panel content non-interactive */
+.panel.is-collapsed{
+  pointer-events: auto;
+}
+
+.panel.is-collapsed .panel-content{
+  pointer-events: auto;
+}
+
+.panel.is-collapsed .panel-title{
+  width: 100%;
+  text-align: center;
+}
+
+.pill-icon{
+  width: calc(44px * var(--ui-scale));
+  height: calc(44px * var(--ui-scale));
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.28);
+  display:flex; align-items:center; justify-content:center;
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.8);
+  font-weight: 800;
+  font-size: calc(var(--ui-font) * 1.05);
+}
+
+.pill-btn{
+  height: var(--ui-btn-h);
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.35);
+  background: rgba(255,255,255,0.10);
+  color: var(--text);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 20px rgba(0,0,0,0.18);
+  cursor: default;
+  font-size: var(--ui-font-sm);
+}
+.pill-btn:active{ transform: translateY(1px); }
+
+.spacer{ flex: 1; }
+
+.label{
+  font-size: var(--ui-font-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 800;
+}
+
+.slider{
+  width: 100%;
+  accent-color: rgba(255,255,255,0.85);
+}
+.alt-readout{
+  display:flex;
+  justify-content:center;
+  font-weight: 800;
+  opacity: 0.85;
+  letter-spacing: 0.04em;
+  font-size: var(--ui-font-sm);
+}
+
+.right-content{
+  align-items: stretch;
+}
+.right-title{
+  text-align: center;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.78);
+  margin-top: 4px;
+  font-size: calc(var(--ui-font-sm) * 1.05);
+}
+.status-row{
+  display:flex;
+  align-items:center;
+  gap: 12px;
+  justify-content: center;
+}
+.status-chip{
+  width: calc(46px * var(--ui-scale));
+  height: calc(34px * var(--ui-scale));
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.25);
+  background: rgba(255,255,255,0.08);
+  display:flex; align-items:center; justify-content:center;
+}
+.status-icon{ opacity: 0.75; font-weight: 900; }
+
+.toggle-fake{
+  width: calc(120px * var(--ui-scale));
+  height: calc(34px * var(--ui-scale));
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.22);
+  background: rgba(0,0,0,0.12);
+  position: relative;
+}
+.toggle-fake::after{
+  content:"";
+  position:absolute;
+  width: 40px; height: 26px;
+  border-radius: 999px;
+  left: 6px; top: 3.5px;
+  background: rgba(255,255,255,0.16);
+  border: 1px solid rgba(255,255,255,0.22);
+}
+
+.status-text{
+  text-align:center;
+  font-weight: 900;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.68);
+  margin-top: 6px;
+  font-size: var(--ui-font-sm);
+}
+
+.center-cta{
+  position:absolute;
+  left: 50%;
+  bottom: calc(var(--ui-gap) * 2.2);
+  transform: translateX(-50%);
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  gap: calc(var(--ui-gap) * 0.5);
+  color: var(--text);
+  text-shadow: 0 18px 40px var(--shadow);
+  z-index: 10;
+}
+.play{
+  width: clamp(72px, 8vh, 96px);
+  height: clamp(72px, 8vh, 96px);
+  border-radius: 999px;
+  border: 3px solid rgba(255,255,255,0.75);
+  background: rgba(255,255,255,0.05);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 20px 50px rgba(0,0,0,0.35);
+  cursor: default;
+  position: relative;
+}
+.play-tri{
+  position:absolute;
+  left: 52%;
+  top: 50%;
+  transform: translate(-40%, -50%);
+  width: 0; height: 0;
+  border-left: 18px solid rgba(255,255,255,0.82);
+  border-top: 12px solid transparent;
+  border-bottom: 12px solid transparent;
+}
+.cta-label{
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  font-size: var(--ui-font-xs);
+}
+
+/* Leaflet polish */
+.leaflet-control-zoom{ display:none; }
+.leaflet-control-attribution{ opacity: 0.45; }
+
+/* Keep Leaflet controls (especially the layers menu) above the glass panels */
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 1000;
+}
+
+.leaflet-control-layers {
+  z-index: 1100;
+}
+
+/* The expanded list (some browsers create their own stacking context) */
+.leaflet-control-layers-expanded {
+  z-index: 1200;
+}
+
+/* --- Full-screen layer picker (always on top) --- */
+#layerPickerHost {
+  position: fixed;
+  inset: 0;
+  z-index: 5000;
+  pointer-events: none;
+  display: none;
+}
+
+#layerPickerHost.is-open {
+  pointer-events: auto;
+  display: block;
+}
+
+#layerPickerHost .layer-picker-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.25);
+  /* No blur: keep map/UI sharp while picker is open */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+#layerPickerHost .layer-picker-panel {
+  position: absolute;
+  /* Default (will be overridden via JS to anchor to the button) */
+  top: 70px;
+  right: 18px;
+  width: 360px;
+  max-width: calc(100vw - 36px);
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(25, 32, 41, 0.82);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+/* A small "caret" so it reads like a dropdown attached to the button */
+#layerPickerHost .layer-picker-panel::before {
+  content: "";
+  position: absolute;
+  top: -10px;
+  right: var(--layer-caret-right, 26px);
+  width: 18px;
+  height: 18px;
+  background: rgba(25, 32, 41, 0.82);
+  border-left: 1px solid rgba(255, 255, 255, 0.18);
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+  transform: rotate(45deg);
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers {
+  position: static;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.88);
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-toggle {
+  display: none; /* we open/close via our backdrop/panel */
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-list {
+  padding: 14px 14px 14px;
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-base,
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-overlays {
+  margin-top: 6px;
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-base label,
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-overlays label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px;
+  border-radius: 10px;
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-base label:hover,
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-overlays label:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-base label,
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-overlays label {
+  color: rgba(255, 255, 255, 0.88);
+}
+
+#layerPickerHost .layer-picker-panel .leaflet-control-layers-separator {
+  border-top: 1px solid rgba(255, 255, 255, 0.16);
+}
