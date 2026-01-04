@@ -1038,7 +1038,7 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   const w = size * 1.4;
   const h = size * 1.7;
   const indent = size * 0.45;
-  const glowColor = "rgba(120, 220, 255, 0.95)";
+  const glowColor = "rgba(120, 220, 255, 1.0)";
 
   const drawGlow = (blur, alpha) => {
     ctx.fillStyle = glowColor;
@@ -1054,8 +1054,10 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
     ctx.fill();
   };
 
-  drawGlow(size * 2.8, 1.0);
-  drawGlow(size * 1.6, 0.85);
+  // Intense outer glow + denser inner fill
+  drawGlow(size * 3.2, 0.9);
+  drawGlow(size * 2.0, 1.0);
+  drawGlow(size * 1.0, 1.0);
   ctx.globalAlpha = 1;
   ctx.restore();
 }
