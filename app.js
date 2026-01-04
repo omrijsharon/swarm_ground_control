@@ -12,6 +12,18 @@ const SETTINGS = {
   BATTERY_RATE_WINDOW_SEC: cfg("BATTERY_RATE_WINDOW_SEC", 120),
   BATTERY_MIN_SAMPLES: cfg("BATTERY_MIN_SAMPLES", 4),
   LINK_STALE_THRESHOLD_SEC: cfg("LINK_STALE_THRESHOLD_SEC", 3),
+  SELECTION_SHAPE_W_SCALE: cfg("SELECTION_SHAPE_W_SCALE", 1.4),
+  SELECTION_SHAPE_H_SCALE: cfg("SELECTION_SHAPE_H_SCALE", 1.7),
+  SELECTION_SHAPE_INDENT_SCALE: cfg("SELECTION_SHAPE_INDENT_SCALE", 0.45),
+  SELECTION_GLOW_COLOR: cfg("SELECTION_GLOW_COLOR", "rgba(120, 220, 255, 1.0)"),
+  SELECTION_GLOW_OUTER_BLUR: cfg("SELECTION_GLOW_OUTER_BLUR", 4.0),
+  SELECTION_GLOW_MID_BLUR: cfg("SELECTION_GLOW_MID_BLUR", 3.0),
+  SELECTION_GLOW_INNER_BLUR: cfg("SELECTION_GLOW_INNER_BLUR", 1.6),
+  SELECTION_GLOW_OUTER_ALPHA: cfg("SELECTION_GLOW_OUTER_ALPHA", 0.9),
+  SELECTION_GLOW_MID_ALPHA: cfg("SELECTION_GLOW_MID_ALPHA", 1.0),
+  SELECTION_GLOW_INNER_ALPHA: cfg("SELECTION_GLOW_INNER_ALPHA", 1.0),
+  SELECTION_OUTLINE_WIDTH_FACTOR: cfg("SELECTION_OUTLINE_WIDTH_FACTOR", 0.35),
+  SELECTION_OUTLINE_ALPHA: cfg("SELECTION_OUTLINE_ALPHA", 0.95),
 };
 
 let map;
@@ -1035,10 +1047,10 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
 
   // Slightly larger than the drone icon shape
-  const w = size * 1.4;
-  const h = size * 1.7;
-  const indent = size * 0.45;
-  const glowColor = "rgba(120, 220, 255, 1.0)";
+  const w = size * SETTINGS.SELECTION_SHAPE_W_SCALE;
+  const h = size * SETTINGS.SELECTION_SHAPE_H_SCALE;
+  const indent = size * SETTINGS.SELECTION_SHAPE_INDENT_SCALE;
+  const glowColor = SETTINGS.SELECTION_GLOW_COLOR;
 
   const drawGlow = (blur, alpha, scale = 1) => {
     ctx.save();
@@ -1058,15 +1070,15 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   };
 
   // Intense layered glow for visibility
-  drawGlow(size * 4.0, 0.9, 1.25);
-  drawGlow(size * 3.0, 1.0, 1.1);
-  drawGlow(size * 1.6, 1.0, 1.0);
+  drawGlow(size * SETTINGS.SELECTION_GLOW_OUTER_BLUR, SETTINGS.SELECTION_GLOW_OUTER_ALPHA, 1.25);
+  drawGlow(size * SETTINGS.SELECTION_GLOW_MID_BLUR, SETTINGS.SELECTION_GLOW_MID_ALPHA, 1.1);
+  drawGlow(size * SETTINGS.SELECTION_GLOW_INNER_BLUR, SETTINGS.SELECTION_GLOW_INNER_ALPHA, 1.0);
 
   // Add a bright outline to punch through bright backgrounds
   ctx.shadowBlur = size * 1.4;
   ctx.shadowColor = glowColor;
-  ctx.globalAlpha = 0.9;
-  ctx.lineWidth = Math.max(2, size * 0.35);
+  ctx.globalAlpha = SETTINGS.SELECTION_OUTLINE_ALPHA;
+  ctx.lineWidth = Math.max(2, size * SETTINGS.SELECTION_OUTLINE_WIDTH_FACTOR);
   ctx.strokeStyle = "rgba(200, 245, 255, 0.95)";
   ctx.beginPath();
   ctx.moveTo(0, -h / 2);
