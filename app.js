@@ -17,7 +17,6 @@ const SETTINGS = {
 let map;
 let overlay, ctx;
 let drones = [];
-let links = [];
 let groundControl;
 
 const COMMAND_OPTIONS = [
@@ -821,7 +820,6 @@ function makeMockSwarm() {
   ];
 
   drones = [];
-  links = [];
   let id = 0;
 
   const spawnDrone = (lat, lng, type) => {
@@ -868,31 +866,7 @@ function makeMockSwarm() {
     }
   });
 
-  const core = drones.filter((d) => d.type === "core");
-  const colors = {
-    blue: "rgba(90, 170, 255, 0.75)",
-    cyan: "rgba(120, 255, 245, 0.70)",
-    green: "rgba(120, 255, 140, 0.70)",
-    orange: "rgba(255, 170, 90, 0.75)",
-    core: "rgba(255,255,255,0.25)",
-  };
-
-  // Deterministic link selection using seeded RNG
-  drones.forEach((d) => {
-    if (d.type === "core") return;
-    if (rng() < 0.35 && core.length) {
-      const target = core[Math.floor(rng() * core.length)];
-      links.push({ a: d, b: target, color: colors[d.type] });
-    }
-  });
-
-  for (let k = 0; k < 8; k++) {
-    const a = drones[Math.floor(rng() * drones.length)];
-    const b = core[Math.floor(rng() * core.length)];
-    if (a && b) {
-      links.push({ a, b, color: colors[a.type] || "rgba(255,255,255,0.2)" });
-    }
-  }
+  // No link generation; cluster arcs removed per request.
 }
 
 function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
@@ -969,36 +943,6 @@ function drawStaleLabel(x, y, ageSec) {
   ctx.restore();
 }
 
-function drawArc(a, b, color) {
-  // draw a curved link similar-ish to screenshot
-  const midx = (a.x + b.x) / 2;
-  const midy = (a.y + b.y) / 2;
-
-  // perpendicular offset for curvature
-  const dx = b.x - a.x;
-  const dy = b.y - a.y;
-  const len = Math.max(1, Math.hypot(dx, dy));
-  const nx = -dy / len;
-  const ny = dx / len;
-
-  const curve = Math.min(140, 40 + len * 0.12);
-  const cx = midx + nx * curve;
-  const cy = midy + ny * curve;
-
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 2.0;
-  ctx.beginPath();
-  ctx.moveTo(a.x, a.y);
-  ctx.quadraticCurveTo(cx, cy, b.x, b.y);
-  ctx.stroke();
-
-  // endpoint dot
-  ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(b.x, b.y, 3.2, 0, Math.PI * 2);
-  ctx.fill();
-}
-
 function draw() {
   if (!ctx || !map) return;
 
@@ -1021,16 +965,6 @@ function draw() {
   grad.addColorStop(1, "rgba(0,0,0,0.20)");
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
-
-  // links
-  links.forEach((l) => {
-    const aState = l.a && typeof l.a.getLatest === "function" ? l.a.getLatest() : null;
-    const bState = l.b && typeof l.b.getLatest === "function" ? l.b.getLatest() : null;
-    if (!aState || !bState) return;
-    const A = latLngToScreen(aState.lat, aState.lng);
-    const B = latLngToScreen(bState.lat, bState.lng);
-    drawArc(A, B, l.color);
-  });
 
   // drones (on top, with visible shadows)
   const zoom = map.getZoom();
