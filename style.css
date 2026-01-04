@@ -360,7 +360,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 .drone-tooltip{
   position: absolute;
   z-index: 2000;
-  pointer-events: none;
+  pointer-events: auto;
   min-width: 180px;
   max-width: 240px;
   border-radius: 12px;
