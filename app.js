@@ -335,6 +335,14 @@ function updateStatusList() {
 
     const row = document.createElement("div");
     row.className = "status-entry";
+    row.dataset.droneId = String(d.id);
+    if (pinnedDroneId === d.id) {
+      row.classList.add("is-active");
+      // ensure visible and centered-ish
+      requestAnimationFrame(() => {
+        row.scrollIntoView({ block: "center", behavior: "smooth" });
+      });
+    }
 
     const led = document.createElement("div");
     led.className = `status-led ${ledClass}`;
