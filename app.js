@@ -874,7 +874,7 @@ function updateTooltip() {
 
     const cmds = getLocalCommands(target, latest);
 
-    const radius = 110;
+    const radius = 70;
 
     const cmdButtons = cmds
 
