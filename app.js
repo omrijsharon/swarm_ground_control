@@ -38,6 +38,14 @@ let hoveredDroneId = null;
 let pinnedDroneId = null;
 let lastPointer = null;
 
+function isMobileLike() {
+  return (
+    (typeof window !== "undefined" && window.matchMedia && window.matchMedia("(max-width: 900px)").matches) ||
+    ("ontouchstart" in window) ||
+    (navigator && navigator.maxTouchPoints > 1)
+  );
+}
+
 function haversine2dMeters(lat1, lon1, lat2, lon2) {
   const toRad = (d) => (d * Math.PI) / 180;
   const R = 6371000; // Earth radius in meters
@@ -612,6 +620,70 @@ function initMapOnline() {
     },
   });
   map.addControl(new LayerBtn());
+
+  // Mobile-only fullscreen toggle (F11-equivalent). Appears next to Layers.
+  if (isMobileLike() && document.fullscreenEnabled) {
+    const FullscreenBtn = L.Control.extend({
+      options: { position: "topright" },
+      onAdd: function () {
+        const btn = L.DomUtil.create("button", "leaflet-bar");
+        btn.type = "button";
+        btn.title = "Fullscreen";
+        btn.setAttribute("aria-label", "Fullscreen");
+
+        btn.style.height = "44px";
+        btn.style.padding = "0 14px";
+        btn.style.cursor = "pointer";
+        btn.style.background = "rgba(25,32,41,0.75)";
+        btn.style.border = "1px solid rgba(255,255,255,0.25)";
+        btn.style.color = "rgba(255,255,255,0.92)";
+        btn.style.fontWeight = "900";
+        btn.style.fontSize = "13px";
+        btn.style.letterSpacing = "0.10em";
+        btn.style.textTransform = "uppercase";
+        btn.style.lineHeight = "42px";
+        btn.style.borderRadius = "10px";
+        btn.style.display = "inline-flex";
+        btn.style.alignItems = "center";
+        btn.style.gap = "10px";
+        btn.style.boxShadow = "0 10px 24px rgba(0,0,0,0.25)";
+
+        const label = document.createElement("span");
+        const icon = document.createElement("span");
+        icon.textContent = "⛶";
+        icon.style.fontSize = "15px";
+        icon.style.lineHeight = "1";
+        label.textContent = "Full";
+
+        btn.appendChild(icon);
+        btn.appendChild(label);
+
+        const target = document.documentElement;
+
+        const updateLabel = () => {
+          const active = !!document.fullscreenElement;
+          label.textContent = active ? "Exit" : "Full";
+          btn.title = active ? "Exit Fullscreen" : "Fullscreen";
+        };
+
+        L.DomEvent.disableClickPropagation(btn);
+        L.DomEvent.on(btn, "click", (e) => {
+          L.DomEvent.stop(e);
+          if (document.fullscreenElement) {
+            document.exitFullscreen?.();
+          } else {
+            target.requestFullscreen?.();
+          }
+        });
+
+        document.addEventListener("fullscreenchange", updateLabel);
+        updateLabel();
+
+        return btn;
+      },
+    });
+    map.addControl(new FullscreenBtn());
+  }
 
   // Re-anchor panel on resize/rotate if it's open
   window.addEventListener("resize", () => {
