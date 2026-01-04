@@ -1040,7 +1040,9 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   const indent = size * 0.45;
   const glowColor = "rgba(120, 220, 255, 1.0)";
 
-  const drawGlow = (blur, alpha) => {
+  const drawGlow = (blur, alpha, scale = 1) => {
+    ctx.save();
+    ctx.scale(scale, scale);
     ctx.fillStyle = glowColor;
     ctx.shadowColor = glowColor;
     ctx.shadowBlur = blur;
@@ -1052,12 +1054,28 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
     ctx.lineTo(-w / 2, h / 2);
     ctx.closePath();
     ctx.fill();
+    ctx.restore();
   };
 
   // Intense layered glow for visibility
-  drawGlow(size * 3.2, 1.0);
-  drawGlow(size * 2.0, 1.0);
-  drawGlow(size * 1.2, 0.85);
+  drawGlow(size * 4.0, 0.9, 1.25);
+  drawGlow(size * 3.0, 1.0, 1.1);
+  drawGlow(size * 1.6, 1.0, 1.0);
+
+  // Add a bright outline to punch through bright backgrounds
+  ctx.shadowBlur = size * 1.4;
+  ctx.shadowColor = glowColor;
+  ctx.globalAlpha = 0.9;
+  ctx.lineWidth = Math.max(2, size * 0.35);
+  ctx.strokeStyle = "rgba(200, 245, 255, 0.95)";
+  ctx.beginPath();
+  ctx.moveTo(0, -h / 2);
+  ctx.lineTo(w / 2, h / 2);
+  ctx.lineTo(0, h / 2 - indent);
+  ctx.lineTo(-w / 2, h / 2);
+  ctx.closePath();
+  ctx.stroke();
+
   ctx.globalAlpha = 1;
   ctx.restore();
 }
