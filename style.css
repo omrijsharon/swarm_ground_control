@@ -381,8 +381,8 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 }
 
 .battery-bar{
-  width: 6px;
-  height: 14px;
+  width: 5px;
+  height: 12px;
   border-radius: 2px;
   background: rgba(255,255,255,0.12);
   box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
