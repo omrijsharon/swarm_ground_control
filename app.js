@@ -388,7 +388,7 @@ function updateTooltip() {
   const ageText = ageSec === null ? "—" : `${ageSec.toFixed(1)}s ago`;
 
   el.innerHTML = `
-    <div class="row"><strong>Drone #${target.id + 1}</strong><span>${(latest.battery ?? 0).toFixed(1)}%</span></div>
+    <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
     <div class="row"><span>Updated</span><strong>${ageText}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
@@ -442,6 +442,21 @@ function formatMinutes(mins) {
   if (mins === null || mins === undefined || !isFinite(mins)) return "—";
   if (mins < 1) return `${mins.toFixed(1)}m`;
   return `${Math.round(mins)}m`;
+}
+
+function renderBatteryBars(batteryPct) {
+  const pct = Math.max(0, Math.min(100, batteryPct ?? 0));
+  const filled = Math.ceil(pct / 20); // 0-5
+  let bars = "";
+  for (let i = 1; i <= 5; i++) {
+    const t = i / 5; // 0..1
+    // Hue from red (0) to green (120)
+    const hue = Math.round(120 * t);
+    const color = `hsl(${hue}deg 85% 60%)`;
+    const isOn = i <= filled;
+    bars += `<span class="battery-bar${isOn ? " filled" : ""}" style="${isOn ? `color:${color}; background:${color};` : ""}"></span>`;
+  }
+  return `<span class="battery-bars" aria-label="Battery ${pct.toFixed(0)} percent">${bars}</span>`;
 }
 
 function setTimestampNow() {

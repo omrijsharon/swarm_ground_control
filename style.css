@@ -365,6 +365,28 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   color: rgba(255,255,255,0.94);
 }
 
+.battery-row{
+  align-items: center;
+}
+
+.battery-bars{
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.battery-bar{
+  width: 6px;
+  height: 14px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.12);
+  box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
+}
+
+.battery-bar.filled{
+  box-shadow: 0 0 8px currentColor;
+}
+
 .drone-tooltip .row{
   display: flex;
   justify-content: space-between;
