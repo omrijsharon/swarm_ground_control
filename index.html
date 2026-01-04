@@ -25,6 +25,7 @@
   ></script>
 
   <link rel="stylesheet" href="./style.css" />
+  <script src="./config.js" defer></script>
   <script src="./app.js" defer></script>
 </head>
 
@@ -58,6 +59,13 @@
 
         <div class="spacer"></div>
 
+        <div class="label">COMMANDS</div>
+        <div class="command-list" id="commandList">
+          <!-- populated via JS -->
+        </div>
+
+        <div class="spacer"></div>
+
         <div class="label">ALTITUDE</div>
         <input class="slider" type="range" min="0" max="300" value="150" />
         <div class="alt-readout"><span id="altVal">150</span>m</div>
@@ -71,17 +79,7 @@
         <div class="panel-top panel-top-center">
           <button class="panel-title" type="button" aria-expanded="true">Status</button>
         </div>
-
-        <div class="spacer"></div>
-
-        <div class="status-row">
-          <div class="status-chip">
-            <span class="status-icon">△</span>
-          </div>
-          <div class="toggle-fake"></div>
-        </div>
-
-        <div class="status-text">DATA UPLINK STABLE</div>
+        <div class="status-list" id="statusList"></div>
       </div>
     </aside>
 

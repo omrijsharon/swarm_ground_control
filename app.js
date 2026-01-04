@@ -1,9 +1,173 @@
 // UI-only mock. No serial, no backend. Just visuals.
 
+function cfg(key, fallback) {
+  if (typeof CONFIG !== "undefined" && CONFIG && CONFIG[key] !== undefined) {
+    return CONFIG[key];
+  }
+  return fallback;
+}
+
+const SETTINGS = {
+  HISTORY_LIMIT: cfg("HISTORY_LIMIT", 900),
+  BATTERY_RATE_WINDOW_SEC: cfg("BATTERY_RATE_WINDOW_SEC", 120),
+  BATTERY_MIN_SAMPLES: cfg("BATTERY_MIN_SAMPLES", 4),
+  LINK_STALE_THRESHOLD_SEC: cfg("LINK_STALE_THRESHOLD_SEC", 3),
+};
+
 let map;
 let overlay, ctx;
 let drones = [];
 let links = [];
+let groundControl;
+
+const COMMAND_OPTIONS = [
+  "Arm",
+  "Disarm",
+  "Takeoff",
+  "Land",
+  "Goto waypoint",
+  "Hold position",
+  "Follow drone",
+  "Search target",
+  "Attack target",
+  "Boid group",
+];
+
+let tooltipEl;
+let hoveredDroneId = null;
+let pinnedDroneId = null;
+let lastPointer = null;
+
+function haversine2dMeters(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const R = 6371000; // Earth radius in meters
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+class Drone {
+  constructor(id, options = {}) {
+    this.id = id;
+    this.type = options.type || "core";
+    this.historyLimit = options.historyLimit || SETTINGS.HISTORY_LIMIT;
+    this.history = [];
+    this.current = null;
+    this.lastReceivedAt = null; // wall-clock ms when last packet arrived
+  }
+
+  updateTelemetry(packet, receivedAt = Date.now()) {
+    const entry = {
+      uptimeSec: packet.uptimeSec ?? packet.t ?? 0,
+      lat: packet.lat,
+      lng: packet.lng,
+      alt: packet.alt ?? 0,
+      heading: packet.heading ?? 0,
+      battery: packet.battery ?? 0,
+      command: packet.command || null,
+    };
+
+    this.current = entry;
+    this.lastReceivedAt = receivedAt;
+
+    this.history.push(entry);
+    if (this.history.length > this.historyLimit) {
+      this.history.splice(0, this.history.length - this.historyLimit);
+    }
+  }
+
+  getLatest() {
+    return this.current;
+  }
+
+  getTrail() {
+    return this.history.map((h) => ({ lat: h.lat, lng: h.lng }));
+  }
+
+  getSecondsSinceLastUpdate(nowMs = Date.now()) {
+    if (!this.lastReceivedAt) return null;
+    return (nowMs - this.lastReceivedAt) / 1000;
+  }
+
+  isStale(nowMs = Date.now(), thresholdSec = SETTINGS.LINK_STALE_THRESHOLD_SEC) {
+    const age = this.getSecondsSinceLastUpdate(nowMs);
+    if (age === null) return false;
+    return age > thresholdSec;
+  }
+
+  getBatteryRatePerMinute(windowSec = SETTINGS.BATTERY_RATE_WINDOW_SEC) {
+    if (!this.current || this.history.length < SETTINGS.BATTERY_MIN_SAMPLES) return null;
+
+    const latest = this.current;
+    const threshold = latest.uptimeSec - windowSec;
+
+    // Find the earliest sample within the window (or the first after threshold).
+    let earliest = null;
+    for (let i = this.history.length - 1; i >= 0; i--) {
+      const h = this.history[i];
+      if (h.uptimeSec <= threshold) {
+        // Use the next one (the first inside the window) if it exists
+        earliest = this.history[Math.min(this.history.length - 1, i + 1)];
+        break;
+      }
+      earliest = h;
+    }
+
+    if (!earliest) return null;
+
+    const dt = latest.uptimeSec - earliest.uptimeSec;
+    if (dt <= 0) return null;
+
+    const deltaBattery = latest.battery - earliest.battery;
+    const ratePerSec = -deltaBattery / dt; // positive when discharging
+    const ratePerMin = ratePerSec * 60;
+
+    if (!isFinite(ratePerMin) || ratePerMin <= 0) return null;
+    return ratePerMin;
+  }
+
+  getEstimatedTimeRemainingMinutes(windowSec = SETTINGS.BATTERY_RATE_WINDOW_SEC) {
+    const ratePerMin = this.getBatteryRatePerMinute(windowSec);
+    if (ratePerMin === null || ratePerMin <= 0) return null;
+    if (!this.current || this.current.battery === undefined || this.current.battery === null) return null;
+    return this.current.battery / ratePerMin;
+  }
+
+  getGroundSpeedMps() {
+    if (this.history.length < 2) return null;
+    const b = this.history[this.history.length - 1];
+    // Find previous sample with a smaller uptime (guard against duplicate timestamps)
+    let idx = this.history.length - 2;
+    while (idx >= 0 && this.history[idx].uptimeSec === b.uptimeSec) idx--;
+    if (idx < 0) return null;
+    const a = this.history[idx];
+    const dt = b.uptimeSec - a.uptimeSec;
+    if (dt <= 0) return null;
+    const dist = haversine2dMeters(a.lat, a.lng, b.lat, b.lng);
+    return dist / dt;
+  }
+}
+
+class GroundControl {
+  constructor() {
+    this.assigned = new Map(); // droneId -> { command, issuedAt }
+    this.logs = [];
+  }
+
+  assignMission(droneId, command, issuedAt = Date.now()) {
+    const entry = { droneId, command, issuedAt };
+    this.assigned.set(droneId, entry);
+    this.logs.push(entry);
+  }
+
+  getAssigned(droneId) {
+    return this.assigned.get(droneId) || null;
+  }
+}
 
 // Smoothstep/sigmoid helpers for zoom interpolation
 function clamp01(t) {
@@ -70,6 +234,180 @@ function latLngToScreen(lat, lng) {
 
   const p = map.latLngToContainerPoint([lat, lng]);
   return { x: p.x, y: p.y };
+}
+
+function getDroneById(id) {
+  return drones.find((d) => d.id === id) || null;
+}
+
+function getHoverRadius() {
+  const zoom = map ? map.getZoom() : 10;
+  return Math.max(12, Math.min(22, zoom * 1.2));
+}
+
+function findNearestDrone(containerPoint, maxDist) {
+  let best = null;
+  let bestDist = maxDist;
+  drones.forEach((d) => {
+    const latest = d.getLatest && d.getLatest();
+    if (!latest) return;
+    const p = map.latLngToContainerPoint([latest.lat, latest.lng]);
+    const dist = Math.hypot(p.x - containerPoint.x, p.y - containerPoint.y);
+    if (dist < bestDist) {
+      best = d;
+      bestDist = dist;
+    }
+  });
+  return best;
+}
+
+function renderCommandList() {
+  const host = document.getElementById("commandList");
+  if (!host) return;
+  host.innerHTML = "";
+  COMMAND_OPTIONS.forEach((cmd) => {
+    const el = document.createElement("div");
+    el.className = "cmd-chip";
+    el.textContent = cmd;
+    host.appendChild(el);
+  });
+}
+
+function updateStatusList() {
+  const host = document.getElementById("statusList");
+  if (!host) return;
+  host.innerHTML = "";
+  const sorted = [...drones].sort((a, b) => a.id - b.id);
+  sorted.forEach((d) => {
+    const latest = d.getLatest && d.getLatest();
+    if (!latest) return;
+    const assigned = groundControl ? groundControl.getAssigned(d.id) : null;
+    const performing = latest.command || "Idle";
+    const match = assigned ? assigned.command === performing : true;
+    const ledClass = match ? "green" : "red";
+
+    const row = document.createElement("div");
+    row.className = "status-entry";
+
+    const led = document.createElement("div");
+    led.className = `status-led ${ledClass}`;
+    row.appendChild(led);
+
+    const textWrap = document.createElement("div");
+    const label = document.createElement("div");
+    label.className = "status-label";
+    label.textContent = `Drone #${d.id + 1}`;
+    const mission = document.createElement("div");
+    mission.className = "status-mission";
+    mission.textContent = match
+      ? `Mission: ${performing}`
+      : `Given: ${assigned ? assigned.command : "N/A"} | Doing: ${performing}`;
+    textWrap.appendChild(label);
+    textWrap.appendChild(mission);
+
+    row.appendChild(textWrap);
+    host.appendChild(row);
+  });
+}
+
+function ensureTooltipEl() {
+  if (tooltipEl) return tooltipEl;
+  const host = document.getElementById("app") || document.body;
+  const el = document.createElement("div");
+  el.className = "drone-tooltip";
+  el.style.display = "none";
+  host.appendChild(el);
+  tooltipEl = el;
+  return tooltipEl;
+}
+
+function updateTooltip() {
+  if (!map) return;
+  const el = ensureTooltipEl();
+  const target =
+    (pinnedDroneId !== null && getDroneById(pinnedDroneId)) ||
+    (hoveredDroneId !== null && getDroneById(hoveredDroneId)) ||
+    null;
+
+  if (!target) {
+    el.style.display = "none";
+    return;
+  }
+
+  const latest = target.getLatest && target.getLatest();
+  if (!latest) {
+    el.style.display = "none";
+    return;
+  }
+
+  const pt = map.latLngToContainerPoint([latest.lat, latest.lng]);
+  el.style.left = `${pt.x + 14}px`;
+  el.style.top = `${pt.y - 10}px`;
+  el.style.display = "block";
+
+  const assigned = groundControl ? groundControl.getAssigned(target.id) : null;
+  const performing = latest.command || "Idle";
+  const match = assigned ? assigned.command === performing : true;
+  const missionLine = match
+    ? `<div class="mission-line"><span class="mission-led green"></span><span>Mission: ${performing}</span></div>`
+    : `<div class="mission-line"><span class="mission-led red"></span><span>Given: ${assigned ? assigned.command : "N/A"} | Doing: ${performing}</span></div>`;
+
+  const eta = target.getEstimatedTimeRemainingMinutes();
+  const etaText = eta === null ? "—" : formatMinutes(eta);
+  const uptimeText = formatDuration(latest.uptimeSec);
+
+  el.innerHTML = `
+    <div class="row"><strong>Drone #${target.id + 1}</strong><span>${(latest.battery ?? 0).toFixed(1)}%</span></div>
+    <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
+    <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
+    <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
+    ${missionLine}
+  `;
+}
+
+function setupHoverHandlers() {
+  if (!map) return;
+
+  map.on("mousemove", (e) => {
+    lastPointer = e.containerPoint;
+    if (pinnedDroneId !== null) {
+      updateTooltip();
+      return;
+    }
+    const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
+    hoveredDroneId = nearest ? nearest.id : null;
+    updateTooltip();
+  });
+
+  map.on("click", (e) => {
+    const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
+    pinnedDroneId = nearest ? nearest.id : null;
+    hoveredDroneId = pinnedDroneId !== null ? pinnedDroneId : hoveredDroneId;
+    updateTooltip();
+  });
+
+  map.on("mouseout", () => {
+    if (pinnedDroneId === null) {
+      hoveredDroneId = null;
+      updateTooltip();
+    }
+  });
+}
+
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !isFinite(seconds)) return "—";
+  const s = Math.max(0, Math.floor(seconds));
+  const hrs = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  if (hrs > 0) return `${hrs}h ${mins.toString().padStart(2, "0")}m`;
+  return `${mins}m ${secs.toString().padStart(2, "0")}s`;
+}
+
+function formatMinutes(mins) {
+  if (mins === null || mins === undefined || !isFinite(mins)) return "—";
+  if (mins < 1) return `${mins.toFixed(1)}m`;
+  return `${Math.round(mins)}m`;
 }
 
 function setTimestampNow() {
@@ -391,8 +729,45 @@ function makeRng(seed) {
   };
 }
 
+function startMockTelemetryLoop(drone) {
+  const tick = () => {
+    const prev = drone.getLatest();
+    if (!prev) return;
+
+    // Base cadence ~1s, with occasional skips to simulate link gaps.
+    const baseDelay = 800 + Math.random() * 800;
+    const gap = Math.random() < 0.08 ? 2200 : 0;
+    const delayMs = baseDelay + gap;
+    const dtSec = delayMs / 1000;
+
+    const next = {
+      uptimeSec: prev.uptimeSec + dtSec,
+      lat: prev.lat + (Math.random() - 0.5) * 0.00018,
+      lng: prev.lng + (Math.random() - 0.5) * 0.00018,
+      alt: Math.max(0, prev.alt + (Math.random() - 0.5) * 3.5),
+      heading: (prev.heading + (Math.random() - 0.5) * 18 + 360) % 360,
+      battery: Math.max(0, prev.battery - (0.015 + Math.random() * 0.035) * dtSec),
+      command: prev.command,
+    };
+
+    drone.updateTelemetry(next);
+    setTimeout(tick, delayMs);
+  };
+
+  // Stagger start to avoid perfect sync across drones.
+  setTimeout(tick, 300 + Math.random() * 700);
+}
+
+function randomCommand(rng) {
+  const cmd = COMMAND_OPTIONS[Math.floor(rng() * COMMAND_OPTIONS.length)];
+  if (cmd === "Follow drone") return `Follow drone #${Math.floor(rng() * 50)}`;
+  if (cmd === "Boid group") return `Boid group #${1 + Math.floor(rng() * 4)}`;
+  if (cmd === "Goto waypoint") return `Goto waypoint (spd ${Math.round(5 + rng() * 10)} m/s)`;
+  return cmd;
+}
+
 function makeMockSwarm() {
-  // Always regenerate from scratch once at startup, but deterministically.
+  // Always regenerate from scratch once at startup, but deterministically for initial placement.
   const rng = makeRng(0xC0FFEE);
   const randBetweenSeeded = (a, b) => a + rng() * (b - a);
 
@@ -407,30 +782,54 @@ function makeMockSwarm() {
   ];
 
   drones = [];
+  links = [];
   let id = 0;
 
-  for (let i = 0; i < 22; i++) {
-    drones.push({
-      id: id++,
-      lat: center.lat + randBetweenSeeded(-0.03, 0.03),
-      lng: center.lng + randBetweenSeeded(-0.04, 0.04),
-      type: "core",
+  const spawnDrone = (lat, lng, type) => {
+    const d = new Drone(id++, { type });
+    const givenCmd = randomCommand(rng);
+    let performingCmd = givenCmd;
+    if (rng() < 0.4) {
+      // Deliberately diverge sometimes to show red status
+      let altCmd = randomCommand(rng);
+      if (COMMAND_OPTIONS.length > 1) {
+        let tries = 0;
+        while (altCmd === givenCmd && tries < 5) {
+          altCmd = randomCommand(rng);
+          tries++;
+        }
+      }
+      performingCmd = altCmd;
+    }
+
+    d.updateTelemetry({
+      uptimeSec: randBetweenSeeded(120, 360),
+      lat,
+      lng,
+      alt: randBetweenSeeded(60, 180),
+      heading: rng() * 360,
+      battery: 60 + rng() * 40,
+      command: performingCmd,
     });
+    drones.push(d);
+    if (groundControl) groundControl.assignMission(d.id, givenCmd);
+    startMockTelemetryLoop(d);
+    return d;
+  };
+
+  for (let i = 0; i < 22; i++) {
+    spawnDrone(center.lat + randBetweenSeeded(-0.03, 0.03), center.lng + randBetweenSeeded(-0.04, 0.04), "core");
   }
 
   clusters.forEach((c, idx) => {
     for (let i = 0; i < c.n; i++) {
-      drones.push({
-        id: id++,
-        lat: c.lat + randBetweenSeeded(-0.03, 0.03),
-        lng: c.lng + randBetweenSeeded(-0.04, 0.04),
-        type: ["blue", "cyan", "green", "orange"][idx % 4],
-      });
+      const lat = c.lat + randBetweenSeeded(-0.03, 0.03);
+      const lng = c.lng + randBetweenSeeded(-0.04, 0.04);
+      spawnDrone(lat, lng, ["blue", "cyan", "green", "orange"][idx % 4]);
     }
   });
 
   const core = drones.filter((d) => d.type === "core");
-  links = [];
   const colors = {
     blue: "rgba(90, 170, 255, 0.75)",
     cyan: "rgba(120, 255, 245, 0.70)",
@@ -439,10 +838,10 @@ function makeMockSwarm() {
     core: "rgba(255,255,255,0.25)",
   };
 
-  // Deterministic link selection
+  // Deterministic link selection using seeded RNG
   drones.forEach((d) => {
     if (d.type === "core") return;
-    if (rng() < 0.35) {
+    if (rng() < 0.35 && core.length) {
       const target = core[Math.floor(rng() * core.length)];
       links.push({ a: d, b: target, color: colors[d.type] });
     }
@@ -451,14 +850,20 @@ function makeMockSwarm() {
   for (let k = 0; k < 8; k++) {
     const a = drones[Math.floor(rng() * drones.length)];
     const b = core[Math.floor(rng() * core.length)];
-    links.push({ a, b, color: colors[a.type] || "rgba(255,255,255,0.2)" });
+    if (a && b) {
+      links.push({ a, b, color: colors[a.type] || "rgba(255,255,255,0.2)" });
+    }
   }
 }
 
-function drawDroneIcon(x, y, size = 10) {
-  // Concave triangle (chevron/arrow shape pointing up) with a cheap, high-contrast outline
+function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
+  // Concave triangle (chevron/arrow) with a cheap, high-contrast outline.
+  const isStale = options.isStale || false;
+
   ctx.save();
   ctx.translate(x, y);
+  ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
+  if (isStale) ctx.globalAlpha = 0.45;
 
   const w = size * 1.2;
   const h = size * 1.4;
@@ -473,7 +878,6 @@ function drawDroneIcon(x, y, size = 10) {
     ctx.closePath();
   };
 
-  // --- Cheap halo: 4 offset strokes + one main stroke (no blur/filter/shadow) ---
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
 
@@ -482,7 +886,6 @@ function drawDroneIcon(x, y, size = 10) {
   ctx.strokeStyle = "rgba(0,0,0,0.85)";
   ctx.lineWidth = outlineW;
 
-  // Draw 4 offset strokes to simulate a thicker outer halo cheaply
   const offs = Math.max(1.0, outlineW * 0.45);
   const offsets = [
     [offs, 0],
@@ -498,12 +901,10 @@ function drawDroneIcon(x, y, size = 10) {
     ctx.restore();
   }
 
-  // Main black stroke aligned to the actual path for crispness
   path();
   ctx.stroke();
 
-  // --- Marker fill + subtle inner edge ---
-  ctx.fillStyle = "rgba(255,255,255,0.92)";
+  ctx.fillStyle = isStale ? "rgba(255, 180, 180, 0.82)" : "rgba(255,255,255,0.92)";
   path();
   ctx.fill();
 
@@ -512,6 +913,20 @@ function drawDroneIcon(x, y, size = 10) {
   path();
   ctx.stroke();
 
+  ctx.restore();
+}
+
+function drawStaleLabel(x, y, ageSec) {
+  const text = `+${ageSec.toFixed(1)}s`;
+  ctx.save();
+  ctx.font = "10px 'Inter', system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "bottom";
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = "rgba(0,0,0,0.65)";
+  ctx.fillStyle = "rgba(255, 120, 120, 0.95)";
+  ctx.strokeText(text, x, y);
+  ctx.fillText(text, x, y);
   ctx.restore();
 }
 
@@ -570,8 +985,11 @@ function draw() {
 
   // links
   links.forEach((l) => {
-    const A = latLngToScreen(l.a.lat, l.a.lng);
-    const B = latLngToScreen(l.b.lat, l.b.lng);
+    const aState = l.a && typeof l.a.getLatest === "function" ? l.a.getLatest() : null;
+    const bState = l.b && typeof l.b.getLatest === "function" ? l.b.getLatest() : null;
+    if (!aState || !bState) return;
+    const A = latLngToScreen(aState.lat, aState.lng);
+    const B = latLngToScreen(bState.lat, bState.lng);
     drawArc(A, B, l.color);
   });
 
@@ -579,10 +997,24 @@ function draw() {
   const zoom = map.getZoom();
   const droneSize = Math.max(5, Math.min(11, zoom * 0.75));
 
+  const now = Date.now();
   drones.forEach((d) => {
-    const p = latLngToScreen(d.lat, d.lng);
-    drawDroneIcon(p.x, p.y, droneSize);
+    const latest = d && typeof d.getLatest === "function" ? d.getLatest() : null;
+    if (!latest) return;
+
+    const p = latLngToScreen(latest.lat, latest.lng);
+    const isStale = typeof d.isStale === "function" ? d.isStale(now) : false;
+    drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, { isStale });
+
+    if (isStale) {
+      const age = typeof d.getSecondsSinceLastUpdate === "function" ? d.getSecondsSinceLastUpdate(now) : null;
+      if (age !== null) {
+        drawStaleLabel(p.x, p.y - droneSize * 1.2, age);
+      }
+    }
   });
+
+  updateTooltip();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
@@ -603,9 +1035,15 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  groundControl = new GroundControl();
+  renderCommandList();
+
   initMapOnline();
   makeMockSwarm();
   setupOverlay();
+  setupHoverHandlers();
+  updateStatusList();
+  setInterval(updateStatusList, 1000);
 
   // Draw once Leaflet has applied initial view & tiles; prevents initial misalignment.
   map.whenReady(() => {
