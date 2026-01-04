@@ -29,6 +29,7 @@ const SETTINGS = {
 let map;
 let overlay, ctx;
 let drones = [];
+let groundStations = [];
 let groundControl;
 
 const COMMAND_OPTIONS = [
@@ -179,6 +180,25 @@ class Drone {
     if (dt <= 0) return null;
     const dist = haversine2dMeters(a.lat, a.lng, b.lat, b.lng);
     return dist / dt;
+  }
+}
+
+class GroundStation {
+  constructor(id, lat, lng, alt = 0) {
+    this.id = id;
+    this.lat = lat;
+    this.lng = lng;
+    this.alt = alt;
+  }
+
+  updatePosition({ lat, lng, alt }) {
+    if (lat !== undefined && lat !== null) this.lat = lat;
+    if (lng !== undefined && lng !== null) this.lng = lng;
+    if (alt !== undefined && alt !== null) this.alt = alt;
+  }
+
+  getLatLng() {
+    return { lat: this.lat, lng: this.lng, alt: this.alt };
   }
 }
 
@@ -433,7 +453,7 @@ function updateTooltip() {
     : `<div class="mission-line"><span class="mission-led red"></span><span>Given: ${assigned ? assigned.command : "N/A"} | Doing: ${performing}</span></div>`;
 
   const eta = target.getEstimatedTimeRemainingMinutes();
-  const etaText = eta === null ? "—" : formatMinutes(eta);
+  const etaText = eta === null ? "N/A" : formatMinutes(eta);
   const uptimeText = formatDuration(latest.uptimeSec);
 
   if (tooltipMode === "commands") {
@@ -503,7 +523,7 @@ function setupHoverHandlers() {
 }
 
 function formatDuration(seconds) {
-  if (seconds === null || seconds === undefined || !isFinite(seconds)) return "—";
+  if (seconds === null || seconds === undefined || !isFinite(seconds)) return "N/A";
   const s = Math.max(0, Math.floor(seconds));
   const hrs = Math.floor(s / 3600);
   const mins = Math.floor((s % 3600) / 60);
@@ -513,7 +533,7 @@ function formatDuration(seconds) {
 }
 
 function formatMinutes(mins) {
-  if (mins === null || mins === undefined || !isFinite(mins)) return "—";
+  if (mins === null || mins === undefined || !isFinite(mins)) return "N/A";
   if (mins < 1) return `${mins.toFixed(1)}m`;
   return `${Math.round(mins)}m`;
 }
@@ -530,14 +550,16 @@ function getLocalCommands(drone, latest) {
   const inAir = isInAir(state);
   const performing = (state.command || "").toLowerCase();
 
-  if (state.armed) cmds.push("Disarm");
-  else cmds.push("Arm");
-
-  if (!inAir && state.armed) {
-    cmds.push("Takeoff");
+  if (state.armed) {
+    cmds.push("Disarm");
+    if (!inAir) {
+      cmds.push("Takeoff");
+    } else {
+      cmds.push("Land");
+      if (performing !== "hold position") cmds.push("Hold position");
+    }
   } else {
-    cmds.push("Land");
-    if (performing !== "hold position") cmds.push("Hold position");
+    cmds.push("Arm");
   }
 
   return cmds;
@@ -1069,6 +1091,53 @@ function makeMockSwarm() {
   // No link generation; cluster arcs removed per request.
 }
 
+function initGroundStations() {
+  // Single Tel Aviv anchor (e.g., HQ/helipad). Can be extended later.
+  groundStations = [
+    new GroundStation(0, 32.0853, 34.7818, 20), // Tel Aviv center-ish
+  ];
+}
+
+function drawGroundStationIcon(x, y, size = 18) {
+  ctx.save();
+  ctx.translate(x, y);
+
+  const radius = size * 0.6;
+
+  // Outer ring
+  ctx.lineWidth = Math.max(2, size * 0.12);
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.beginPath();
+  ctx.arc(0, 0, radius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+
+  // Inner glow ring
+  ctx.lineWidth = Math.max(1.4, size * 0.08);
+  ctx.strokeStyle = "rgba(120, 220, 255, 0.85)";
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * 0.72, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // "H" glyph
+  const hHeight = radius * 1.1;
+  const hHalfWidth = radius * 0.45;
+  ctx.lineWidth = Math.max(2, size * 0.14);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = "rgba(120, 220, 255, 0.95)";
+  ctx.beginPath();
+  ctx.moveTo(-hHalfWidth, -hHeight / 2);
+  ctx.lineTo(-hHalfWidth, hHeight / 2);
+  ctx.moveTo(hHalfWidth, -hHeight / 2);
+  ctx.lineTo(hHalfWidth, hHeight / 2);
+  ctx.moveTo(-hHalfWidth, 0);
+  ctx.lineTo(hHalfWidth, 0);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
 function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   // Concave triangle (chevron/arrow) with a cheap, high-contrast outline.
   const isStale = options.isStale || false;
@@ -1217,8 +1286,16 @@ function draw() {
   ctx.fillStyle = grad;
   ctx.fillRect(0, 0, w, h);
 
-  // drones (on top, with visible shadows)
   const zoom = map.getZoom();
+
+  // Ground stations (anchors)
+  const gsSize = Math.max(14, Math.min(26, zoom * 1.45));
+  groundStations.forEach((gs) => {
+    const p = latLngToScreen(gs.lat, gs.lng);
+    drawGroundStationIcon(p.x, p.y, gsSize);
+  });
+
+  // drones (on top, with visible shadows)
   const droneSize = Math.max(5, Math.min(11, zoom * 0.75));
 
   const now = Date.now();
@@ -1270,6 +1347,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   initMapOnline();
   makeMockSwarm();
+  initGroundStations();
   setupOverlay();
   setupHoverHandlers();
   updateStatusList();
