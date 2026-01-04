@@ -260,9 +260,17 @@ function getDroneById(id) {
   return drones.find((d) => d.id === id) || null;
 }
 
+function scrollStatusIntoView(droneId) {
+  const row = document.querySelector(`[data-drone-id="${droneId}"]`);
+  if (!row) return;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
 function setPinnedDrone(id) {
   pinnedDroneId = id;
   hoveredDroneId = id;
+  updateStatusList();
+  scrollStatusIntoView(id);
   updateTooltip();
   draw();
 }
@@ -338,10 +346,6 @@ function updateStatusList() {
     row.dataset.droneId = String(d.id);
     if (pinnedDroneId === d.id) {
       row.classList.add("is-active");
-      // ensure visible and centered-ish
-      requestAnimationFrame(() => {
-        row.scrollIntoView({ block: "center", behavior: "smooth" });
-      });
     }
 
     const led = document.createElement("div");
