@@ -392,6 +392,27 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   box-shadow: 0 0 8px currentColor;
 }
 
+.rssi-row{
+  align-items: flex-end;
+}
+
+.rssi-bars{
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.rssi-bar{
+  width: 5px;
+  border-radius: 2px 2px 1px 1px;
+  background: rgba(255,255,255,0.12);
+  box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
+}
+
+.rssi-bar.filled{
+  box-shadow: 0 0 8px currentColor;
+}
+
 .drone-tooltip .row{
   display: flex;
   justify-content: space-between;

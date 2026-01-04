@@ -75,6 +75,7 @@ class Drone {
       alt: packet.alt ?? 0,
       heading: packet.heading ?? 0,
       battery: packet.battery ?? 0,
+      rssi: packet.rssi ?? null,
       command: packet.command || null,
     };
 
@@ -254,6 +255,15 @@ function setPinnedDrone(id) {
   draw();
 }
 
+function rssiLevelFromDbm(rssi) {
+  if (rssi === null || rssi === undefined || !isFinite(rssi)) return 0;
+  if (rssi < -120) return 0;
+  if (rssi < -110) return 1;
+  if (rssi < -100) return 2;
+  if (rssi < -88) return 3;
+  return 4;
+}
+
 function focusDroneById(id) {
   const d = getDroneById(id);
   if (!d || !map) return;
@@ -389,12 +399,10 @@ function updateTooltip() {
   const eta = target.getEstimatedTimeRemainingMinutes();
   const etaText = eta === null ? "—" : formatMinutes(eta);
   const uptimeText = formatDuration(latest.uptimeSec);
-  const ageSec = target.getSecondsSinceLastUpdate ? target.getSecondsSinceLastUpdate() : null;
-  const ageText = ageSec === null ? "—" : `${ageSec.toFixed(1)}s ago`;
 
   el.innerHTML = `
     <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
-    <div class="row"><span>Updated</span><strong>${ageText}</strong></div>
+    <div class="row rssi-row"><span>RSSI</span><strong>${renderRssiBars(latest.rssi)}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
@@ -465,6 +473,25 @@ function renderBatteryBars(batteryPct) {
     }"></span>`;
   }
   return `<span class="battery-bars" aria-label="Battery ${pct.toFixed(0)} percent">${bars}</span>`;
+}
+
+function renderRssiBars(rssiDbm) {
+  const level = rssiLevelFromDbm(rssiDbm);
+  const heights = [6, 9, 12, 15];
+  // Color per level (1-4): red -> orange -> yellow-green -> green
+  const hueMap = { 1: 0, 2: 30, 3: 80, 4: 120 };
+  const litColor = level > 0 ? `hsl(${hueMap[level]}deg 85% 60%)` : null;
+
+  let bars = "";
+  for (let i = 1; i <= 4; i++) {
+    const isOn = i <= level;
+    const h = heights[i - 1];
+    bars += `<span class="rssi-bar${isOn ? " filled" : ""}" style="height:${h}px;${
+      isOn && litColor ? `color:${litColor}; background:${litColor};` : ""
+    }"></span>`;
+  }
+  const labelVal = rssiDbm !== undefined && rssiDbm !== null ? `${rssiDbm.toFixed(0)} dBm` : "N/A";
+  return `<span class="rssi-bars" aria-label="RSSI ${labelVal}">${bars}</span>`;
 }
 
 function setTimestampNow() {
@@ -835,6 +862,7 @@ function startMockTelemetryLoop(drone) {
       alt: Math.max(0, prev.alt + (Math.random() - 0.5) * 3.5),
       heading: (prev.heading + (Math.random() - 0.5) * 18 + 360) % 360,
       battery: Math.max(0, prev.battery - (0.015 + Math.random() * 0.035) * dtSec),
+      rssi: Math.max(-125, Math.min(-80, prev.rssi + (Math.random() - 0.5) * 3)),
       command: prev.command,
     };
 
@@ -896,6 +924,7 @@ function makeMockSwarm() {
       alt: randBetweenSeeded(60, 180),
       heading: rng() * 360,
       battery: 60 + rng() * 40,
+      rssi: -120 + rng() * 40, // ~[-120, -80] dBm
       command: performingCmd,
     });
     drones.push(d);
