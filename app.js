@@ -472,7 +472,12 @@ function renderBatteryBars(batteryPct) {
       isOn && litColor ? `color:${litColor}; background:${litColor};` : ""
     }"></span>`;
   }
-  return `<span class="battery-bars" aria-label="Battery ${pct.toFixed(0)} percent">${bars}</span>`;
+  return `
+    <span class="battery-shell" aria-label="Battery ${pct.toFixed(0)} percent">
+      <span class="battery-bars">${bars}</span>
+      <span class="battery-cap"></span>
+    </span>
+  `;
 }
 
 function renderRssiBars(rssiDbm) {
