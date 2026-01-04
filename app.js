@@ -247,6 +247,19 @@ function getDroneById(id) {
   return drones.find((d) => d.id === id) || null;
 }
 
+function focusDroneById(id) {
+  const d = getDroneById(id);
+  if (!d || !map) return;
+  const latest = d.getLatest && d.getLatest();
+  if (!latest) return;
+
+  pinnedDroneId = d.id;
+  hoveredDroneId = d.id;
+  const targetZoom = Math.max(map.getZoom(), 14);
+  map.flyTo([latest.lat, latest.lng], targetZoom, { duration: 0.6 });
+  updateTooltip();
+}
+
 function getHoverRadius() {
   const zoom = map ? map.getZoom() : 10;
   return Math.max(12, Math.min(22, zoom * 1.2));
@@ -313,6 +326,10 @@ function updateStatusList() {
     textWrap.appendChild(mission);
 
     row.appendChild(textWrap);
+    row.style.cursor = "pointer";
+    row.addEventListener("click", () => {
+      focusDroneById(d.id);
+    });
     host.appendChild(row);
   });
 }
