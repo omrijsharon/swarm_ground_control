@@ -447,14 +447,17 @@ function formatMinutes(mins) {
 function renderBatteryBars(batteryPct) {
   const pct = Math.max(0, Math.min(100, batteryPct ?? 0));
   const filled = Math.ceil(pct / 20); // 0-5
+  // Single color for all lit bars based on how many are filled.
+  // 1 bar: red -> 5 bars: green
+  const hue = Math.round(120 * Math.max(0, Math.min(1, (filled - 1) / 4 || 0)));
+  const litColor = filled > 0 ? `hsl(${hue}deg 85% 60%)` : null;
+
   let bars = "";
   for (let i = 1; i <= 5; i++) {
-    const t = i / 5; // 0..1
-    // Hue from red (0) to green (120)
-    const hue = Math.round(120 * t);
-    const color = `hsl(${hue}deg 85% 60%)`;
     const isOn = i <= filled;
-    bars += `<span class="battery-bar${isOn ? " filled" : ""}" style="${isOn ? `color:${color}; background:${color};` : ""}"></span>`;
+    bars += `<span class="battery-bar${isOn ? " filled" : ""}" style="${
+      isOn && litColor ? `color:${litColor}; background:${litColor};` : ""
+    }"></span>`;
   }
   return `<span class="battery-bars" aria-label="Battery ${pct.toFixed(0)} percent">${bars}</span>`;
 }
