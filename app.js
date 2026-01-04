@@ -48,6 +48,7 @@ let tooltipEl;
 let hoveredDroneId = null;
 let pinnedDroneId = null;
 let lastPointer = null;
+let tooltipMode = "info"; // "info" | "commands"
 
 function isMobileLike() {
   return (
@@ -89,6 +90,7 @@ class Drone {
       battery: packet.battery ?? 0,
       rssi: packet.rssi ?? null,
       command: packet.command || null,
+      armed: packet.armed ?? (this.current && this.current.armed) ?? false,
     };
 
     this.current = entry;
@@ -269,6 +271,7 @@ function scrollStatusIntoView(droneId) {
 function setPinnedDrone(id) {
   pinnedDroneId = id;
   hoveredDroneId = id;
+  tooltipMode = "info";
   updateStatusList();
   scrollStatusIntoView(id);
   updateTooltip();
@@ -399,6 +402,7 @@ function updateTooltip() {
 
   if (!target) {
     el.style.display = "none";
+    tooltipMode = "info";
     return;
   }
 
@@ -421,8 +425,36 @@ function updateTooltip() {
     : `<div class="mission-line"><span class="mission-led red"></span><span>Given: ${assigned ? assigned.command : "N/A"} | Doing: ${performing}</span></div>`;
 
   const eta = target.getEstimatedTimeRemainingMinutes();
-  const etaText = eta === null ? "—" : formatMinutes(eta);
+  const etaText = eta === null ? "�" : formatMinutes(eta);
   const uptimeText = formatDuration(latest.uptimeSec);
+
+  if (tooltipMode === "commands") {
+    const cmds = getLocalCommands(target, latest);
+    const cmdButtons = cmds
+      .map((c) => `<button class="cmd-chip cmd-action" type="button" data-cmd="${c}">${c}</button>`)
+      .join("");
+    el.innerHTML = `
+      <div class="row battery-row"><strong>Drone #${target.id + 1}</strong><span class="tooltip-hint">Commands</span></div>
+      <div class="command-list cmd-action-list">${cmdButtons}</div>
+      <div class="row"><button class="cmd-chip" type="button" data-action="back">Back</button></div>
+    `;
+    el.querySelectorAll(".cmd-action").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const cmd = btn.dataset.cmd;
+        if (cmd) issueLocalCommand(target, cmd);
+      });
+    });
+    const back = el.querySelector('[data-action="back"]');
+    if (back) {
+      back.addEventListener("click", (e) => {
+        e.stopPropagation();
+        tooltipMode = "info";
+        updateTooltip();
+      });
+    }
+    return;
+  }
 
   el.innerHTML = `
     <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
@@ -432,6 +464,12 @@ function updateTooltip() {
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
     ${missionLine}
   `;
+
+  el.onclick = (e) => {
+    e.stopPropagation();
+    tooltipMode = "commands";
+    updateTooltip();
+  };
 }
 
 function setupHoverHandlers() {
@@ -479,6 +517,57 @@ function formatMinutes(mins) {
   if (mins === null || mins === undefined || !isFinite(mins)) return "—";
   if (mins < 1) return `${mins.toFixed(1)}m`;
   return `${Math.round(mins)}m`;
+}
+
+function isInAir(latest) {
+  if (!latest) return false;
+  return (latest.alt ?? 0) > 2;
+}
+
+function getLocalCommands(drone, latest) {
+  const state = latest || (drone && drone.getLatest && drone.getLatest());
+  if (!state) return [];
+  const cmds = [];
+  const inAir = isInAir(state);
+  const performing = (state.command || "").toLowerCase();
+
+  if (state.armed) cmds.push("Disarm");
+  else cmds.push("Arm");
+
+  if (!inAir) {
+    cmds.push("Takeoff");
+  } else {
+    cmds.push("Land");
+    if (performing !== "hold position") cmds.push("Hold position");
+  }
+
+  return cmds;
+}
+
+function issueLocalCommand(drone, cmd) {
+  const latest = drone && drone.getLatest && drone.getLatest();
+  if (!latest) return;
+  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
+
+  if (cmd === "Arm") next.armed = true;
+  if (cmd === "Disarm") {
+    next.armed = false;
+    next.alt = 0;
+  }
+  if (cmd === "Takeoff") {
+    next.armed = true;
+    if (!isInAir(next)) next.alt = Math.max(next.alt, 5);
+  }
+  if (cmd === "Land") {
+    next.alt = Math.max(0, next.alt - 5);
+  }
+
+  drone.updateTelemetry(next);
+  if (groundControl) groundControl.assignMission(drone.id, cmd);
+  tooltipMode = "info";
+  updateStatusList();
+  updateTooltip();
+  draw();
 }
 
 function renderBatteryBars(batteryPct) {
@@ -895,6 +984,7 @@ function startMockTelemetryLoop(drone) {
       battery: Math.max(0, prev.battery - (0.015 + Math.random() * 0.035) * dtSec),
       rssi: Math.max(-125, Math.min(-80, prev.rssi + (Math.random() - 0.5) * 3)),
       command: prev.command,
+      armed: prev.armed,
     };
 
     drone.updateTelemetry(next);
@@ -957,6 +1047,7 @@ function makeMockSwarm() {
       battery: 60 + rng() * 40,
       rssi: -120 + rng() * 40, // ~[-120, -80] dBm
       command: performingCmd,
+      armed: true,
     });
     drones.push(d);
     if (groundControl) groundControl.assignMission(d.id, givenCmd);
@@ -1190,3 +1281,4 @@ window.addEventListener("DOMContentLoaded", () => {
     draw();
   });
 });
+
