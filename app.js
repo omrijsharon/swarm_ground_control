@@ -331,6 +331,11 @@ function updateStatusList() {
     textWrap.appendChild(mission);
 
     row.appendChild(textWrap);
+    const battery = document.createElement("div");
+    battery.className = "status-battery";
+    battery.innerHTML = renderBatteryBars(latest.battery);
+    row.appendChild(battery);
+
     row.style.cursor = "pointer";
     row.addEventListener("click", () => {
       focusDroneById(d.id);
