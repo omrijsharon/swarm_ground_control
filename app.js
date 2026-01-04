@@ -247,17 +247,22 @@ function getDroneById(id) {
   return drones.find((d) => d.id === id) || null;
 }
 
+function setPinnedDrone(id) {
+  pinnedDroneId = id;
+  hoveredDroneId = id;
+  updateTooltip();
+  draw();
+}
+
 function focusDroneById(id) {
   const d = getDroneById(id);
   if (!d || !map) return;
   const latest = d.getLatest && d.getLatest();
   if (!latest) return;
 
-  pinnedDroneId = d.id;
-  hoveredDroneId = d.id;
+  setPinnedDrone(d.id);
   const targetZoom = Math.max(map.getZoom(), 14);
   map.flyTo([latest.lat, latest.lng], targetZoom, { duration: 0.6 });
-  updateTooltip();
 }
 
 function getHoverRadius() {
@@ -405,9 +410,11 @@ function setupHoverHandlers() {
 
   map.on("click", (e) => {
     const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
-    pinnedDroneId = nearest ? nearest.id : null;
-    hoveredDroneId = pinnedDroneId !== null ? pinnedDroneId : hoveredDroneId;
-    updateTooltip();
+    if (nearest) {
+      setPinnedDrone(nearest.id);
+    } else {
+      setPinnedDrone(null);
+    }
   });
 
   map.on("mouseout", () => {
@@ -607,11 +614,11 @@ function initMapOnline() {
       layerBtn.appendChild(layerLabel);
       layerBtn.dataset.role = "layerPickerButton";
 
-      const openAnchored = () => {
-        setOpen(true);
-        const panel = host.querySelector(".layer-picker-panel");
-        if (!panel) return;
-        const r = layerBtn.getBoundingClientRect();
+  const openAnchored = () => {
+    setOpen(true);
+    const panel = host.querySelector(".layer-picker-panel");
+    if (!panel) return;
+    const r = layerBtn.getBoundingClientRect();
         const gap = 10;
         const desiredTop = Math.round(r.bottom + gap);
         const desiredRight = Math.round(window.innerWidth - r.right);
@@ -1013,8 +1020,7 @@ function draw() {
 
     const p = latLngToScreen(latest.lat, latest.lng);
     const isStale = typeof d.isStale === "function" ? d.isStale(now) : false;
-    const isHighlighted =
-      d.id === pinnedDroneId || (pinnedDroneId === null && hoveredDroneId === d.id);
+    const isHighlighted = pinnedDroneId !== null && d.id === pinnedDroneId;
 
     if (isHighlighted) {
       drawSelectionHighlight(p.x, p.y, droneSize);
