@@ -1038,18 +1038,23 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   const w = size * 1.4;
   const h = size * 1.7;
   const indent = size * 0.45;
-  const glowColor = "rgba(120, 220, 255, 0.55)";
+  const glowColor = "rgba(120, 220, 255, 0.75)";
 
-  ctx.fillStyle = glowColor;
-  ctx.shadowColor = glowColor;
-  ctx.shadowBlur = size * 1.2;
-  ctx.beginPath();
-  ctx.moveTo(0, -h / 2);
-  ctx.lineTo(w / 2, h / 2);
-  ctx.lineTo(0, h / 2 - indent);
-  ctx.lineTo(-w / 2, h / 2);
-  ctx.closePath();
-  ctx.fill();
+  const drawGlow = (blur, alphaScale) => {
+    ctx.fillStyle = glowColor.replace("0.75", (0.75 * alphaScale).toFixed(2));
+    ctx.shadowColor = glowColor;
+    ctx.shadowBlur = blur;
+    ctx.beginPath();
+    ctx.moveTo(0, -h / 2);
+    ctx.lineTo(w / 2, h / 2);
+    ctx.lineTo(0, h / 2 - indent);
+    ctx.lineTo(-w / 2, h / 2);
+    ctx.closePath();
+    ctx.fill();
+  };
+
+  drawGlow(size * 2.2, 1.0);
+  drawGlow(size * 1.1, 0.7);
   ctx.restore();
 }
 
