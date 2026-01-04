@@ -1029,15 +1029,26 @@ function drawStaleLabel(x, y, ageSec) {
   ctx.restore();
 }
 
-function drawSelectionHighlight(x, y, size = 10) {
+function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   ctx.save();
-  const r = size * 1.8;
+  ctx.translate(x, y);
+  ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
+
+  // Slightly larger than the drone icon shape
+  const w = size * 1.4;
+  const h = size * 1.7;
+  const indent = size * 0.45;
   const glowColor = "rgba(120, 220, 255, 0.55)";
+
   ctx.fillStyle = glowColor;
   ctx.shadowColor = glowColor;
-  ctx.shadowBlur = r * 0.9;
+  ctx.shadowBlur = size * 1.2;
   ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.moveTo(0, -h / 2);
+  ctx.lineTo(w / 2, h / 2);
+  ctx.lineTo(0, h / 2 - indent);
+  ctx.lineTo(-w / 2, h / 2);
+  ctx.closePath();
   ctx.fill();
   ctx.restore();
 }
@@ -1079,7 +1090,7 @@ function draw() {
     const isHighlighted = pinnedDroneId !== null && d.id === pinnedDroneId;
 
     if (isHighlighted) {
-      drawSelectionHighlight(p.x, p.y, droneSize);
+      drawSelectionHighlight(p.x, p.y, droneSize, latest.heading || 0);
     }
 
     drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, { isStale });
