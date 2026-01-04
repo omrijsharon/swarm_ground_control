@@ -306,6 +306,9 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   flex: 1;
   overflow-y: auto;
   padding-right: 4px;
+
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.25) transparent;
 }
 
 .status-entry{
@@ -381,7 +384,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 }
 
 .battery-bar{
-  width: 3px;
+  width: 2px;
   height: 7px;
   border-radius: 2px;
   background: rgba(255,255,255,0.12);
@@ -390,6 +393,25 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 
 .battery-bar.filled{
   box-shadow: 0 0 7px currentColor;
+}
+
+.status-list::-webkit-scrollbar{
+  width: 8px;
+}
+
+.status-list::-webkit-scrollbar-track{
+  background: transparent;
+}
+
+.status-list::-webkit-scrollbar-thumb{
+  background: linear-gradient(180deg, rgba(255,255,255,0.25), rgba(255,255,255,0.15));
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.35);
+}
+
+.status-list::-webkit-scrollbar-thumb:hover{
+  background: linear-gradient(180deg, rgba(255,255,255,0.35), rgba(255,255,255,0.22));
 }
 
 .battery-wrap{
@@ -423,11 +445,11 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 .rssi-bars{
   display: inline-flex;
   align-items: flex-end;
-  gap: 3px;
+  gap: 2px;
 }
 
 .rssi-bar{
-  width: 5px;
+  width: 3px;
   border-radius: 2px 2px 1px 1px;
   background: rgba(255,255,255,0.12);
   box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
