@@ -473,8 +473,10 @@ function renderBatteryBars(batteryPct) {
     }"></span>`;
   }
   return `
-    <span class="battery-shell" aria-label="Battery ${pct.toFixed(0)} percent">
-      <span class="battery-bars">${bars}</span>
+    <span class="battery-wrap" aria-label="Battery ${pct.toFixed(0)} percent">
+      <span class="battery-shell">
+        <span class="battery-bars">${bars}</span>
+      </span>
       <span class="battery-cap"></span>
     </span>
   `;

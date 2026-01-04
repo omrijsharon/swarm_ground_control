@@ -381,8 +381,8 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 }
 
 .battery-bar{
-  width: 5px;
-  height: 12px;
+  width: 4px;
+  height: 9px;
   border-radius: 2px;
   background: rgba(255,255,255,0.12);
   box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
@@ -392,19 +392,25 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   box-shadow: 0 0 8px currentColor;
 }
 
+.battery-wrap{
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
 .battery-shell{
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 4px 6px 4px 6px;
+  gap: 3px;
+  padding: 4px 6px;
   border: 1.5px solid rgba(255,255,255,0.35);
   border-radius: 4px;
   background: rgba(255,255,255,0.06);
 }
 
 .battery-cap{
-  width: 4px;
-  height: 12px;
+  width: 5px;
+  height: 14px;
   border: 1.5px solid rgba(255,255,255,0.35);
   border-left: 0;
   border-radius: 1px 3px 3px 1px;
