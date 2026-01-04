@@ -1038,12 +1038,13 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   const w = size * 1.4;
   const h = size * 1.7;
   const indent = size * 0.45;
-  const glowColor = "rgba(120, 220, 255, 0.75)";
+  const glowColor = "rgba(120, 220, 255, 0.95)";
 
-  const drawGlow = (blur, alphaScale) => {
-    ctx.fillStyle = glowColor.replace("0.75", (0.75 * alphaScale).toFixed(2));
+  const drawGlow = (blur, alpha) => {
+    ctx.fillStyle = glowColor;
     ctx.shadowColor = glowColor;
     ctx.shadowBlur = blur;
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.moveTo(0, -h / 2);
     ctx.lineTo(w / 2, h / 2);
@@ -1053,8 +1054,9 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
     ctx.fill();
   };
 
-  drawGlow(size * 2.2, 1.0);
-  drawGlow(size * 1.1, 0.7);
+  drawGlow(size * 2.8, 1.0);
+  drawGlow(size * 1.6, 0.85);
+  ctx.globalAlpha = 1;
   ctx.restore();
 }
 
@@ -1144,4 +1146,3 @@ window.addEventListener("DOMContentLoaded", () => {
     draw();
   });
 });
-
