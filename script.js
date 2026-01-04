@@ -79,6 +79,7 @@ class Drone {
     this.history = [];
     this.current = null;
     this.lastReceivedAt = null; // wall-clock ms when last packet arrived
+    this.cooldownUntil = 0;
   }
 
   updateTelemetry(packet, receivedAt = Date.now()) {
@@ -92,6 +93,7 @@ class Drone {
       rssi: packet.rssi ?? null,
       command: packet.command || null,
       armed: packet.armed ?? (this.current && this.current.armed) ?? false,
+      rescuePhase: packet.rescuePhase ?? packet.rescue_phase ?? (this.current && this.current.rescuePhase) ?? null,
     };
 
     this.current = entry;
@@ -180,6 +182,14 @@ class Drone {
     if (dt <= 0) return null;
     const dist = haversine2dMeters(a.lat, a.lng, b.lat, b.lng);
     return dist / dt;
+  }
+
+  setCooldown(ms, now = Date.now()) {
+    this.cooldownUntil = Math.max(this.cooldownUntil, now + ms);
+  }
+
+  getCooldownRemaining(now = Date.now()) {
+    return Math.max(0, this.cooldownUntil - now);
   }
 }
 
@@ -455,8 +465,19 @@ function updateTooltip() {
   const eta = target.getEstimatedTimeRemainingMinutes();
   const etaText = eta === null ? "N/A" : formatMinutes(eta);
   const uptimeText = formatDuration(latest.uptimeSec);
+  const cooldownMs = target && typeof target.getCooldownRemaining === "function" ? target.getCooldownRemaining() : 0;
+  const cooldownPct = Math.min(100, Math.max(0, ((3000 - cooldownMs) / 3000) * 100));
 
   if (tooltipMode === "commands") {
+    if (cooldownMs > 0) {
+      const remainSec = (cooldownMs / 1000).toFixed(1);
+      el.innerHTML = `
+        <div class="row battery-row"><strong>Drone #${target.id + 1}</strong><span class="tooltip-hint">Commands</span></div>
+        <div class="row cooldown-row"><span>Re-arm</span><div class="cooldown-bar"><div class="cooldown-fill" style="width:${cooldownPct}%;"></div></div><span>${remainSec}s</span></div>
+      `;
+      return;
+    }
+
     const cmds = getLocalCommands(target, latest);
     const cmdButtons = cmds
       .map((c) => `<button class="cmd-chip cmd-action" type="button" data-cmd="${c}">${c}</button>`)
@@ -484,6 +505,7 @@ function updateTooltip() {
       </span>
     </div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
+    ${cooldownMs > 0 ? `<div class="row cooldown-row"><span>Re-arm</span><div class="cooldown-bar"><div class="cooldown-fill" style="width:${cooldownPct}%;"></div></div></div>` : ""}
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
     ${missionLine}
@@ -545,12 +567,20 @@ function formatMinutes(mins) {
 
 function isInAir(latest) {
   if (!latest) return false;
+  // Prefer explicit rescue/landing state if present.
+  if (latest.rescuePhase) {
+    if (latest.rescuePhase === "RESCUE_COMPLETE") return false;
+    // Landing/abort phases are treated as "in air" for command gating.
+    return true;
+  }
   return (latest.alt ?? 0) > 2;
 }
 
 function getLocalCommands(drone, latest) {
   const state = latest || (drone && drone.getLatest && drone.getLatest());
   if (!state) return [];
+  const cooldownMs = drone && typeof drone.getCooldownRemaining === "function" ? drone.getCooldownRemaining() : 0;
+  if (cooldownMs > 0) return [];
   const cmds = [];
   const inAir = isInAir(state);
   const performing = (state.command || "").toLowerCase();
@@ -577,8 +607,14 @@ function issueLocalCommand(drone, cmd) {
 
   if (cmd === "Arm") next.armed = true;
   if (cmd === "Disarm") {
+    // Confirm mid-air disarm
+    if (isInAir(latest)) {
+      const ok = window.confirm("Are you sure you want to disarm in mid-air?");
+      if (!ok) return;
+    }
     next.armed = false;
     next.alt = 0;
+    drone.setCooldown(3000);
   }
   if (cmd === "Takeoff") {
     next.armed = true;
@@ -603,6 +639,9 @@ function renderBatteryBars(batteryPct) {
   // 1 bar: red -> 5 bars: green
   const hue = Math.round(120 * Math.max(0, Math.min(1, (filled - 1) / 4 || 0)));
   const litColor = filled > 0 ? `hsl(${hue}deg 85% 60%)` : null;
+  // Blink: 1 Hz at 20%, linearly up to 5 Hz at 5% (200ms period min)
+  const blinkDuration =
+    pct < 20 ? 200 + ((Math.max(0, Math.min(20, pct)) - 5) / 15) * 800 : null;
 
   let bars = "";
   for (let i = 1; i <= 5; i++) {
@@ -612,7 +651,9 @@ function renderBatteryBars(batteryPct) {
     }"></span>`;
   }
   return `
-    <span class="battery-wrap" aria-label="Battery ${pct.toFixed(0)} percent">
+    <span class="battery-wrap${pct < 20 ? " low" : ""}" aria-label="Battery ${pct.toFixed(0)} percent"${
+      blinkDuration ? ` style="--blink-duration:${Math.max(200, Math.min(1000, blinkDuration))}ms;"` : ""
+    }>
       <span class="battery-shell">
         <span class="battery-bars">${bars}</span>
       </span>
@@ -1359,7 +1400,10 @@ window.addEventListener("DOMContentLoaded", () => {
   setupOverlay();
   setupHoverHandlers();
   updateStatusList();
-  setInterval(updateStatusList, 1000);
+  setInterval(() => {
+    updateStatusList();
+    updateTooltip();
+  }, 1000);
 
   // Draw once Leaflet has applied initial view & tiles; prevents initial misalignment.
   map.whenReady(() => {
