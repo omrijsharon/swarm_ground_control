@@ -960,6 +960,25 @@ function drawStaleLabel(x, y, ageSec) {
   ctx.restore();
 }
 
+function drawSelectionHighlight(x, y, size = 10) {
+  ctx.save();
+  const r = size * 1.8;
+  const gradient = ctx.createRadialGradient(x, y, r * 0.25, x, y, r);
+  gradient.addColorStop(0, "rgba(90, 200, 255, 0.35)");
+  gradient.addColorStop(1, "rgba(90, 200, 255, 0.05)");
+  ctx.fillStyle = gradient;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.lineWidth = Math.max(1.8, size * 0.18);
+  ctx.strokeStyle = "rgba(120, 220, 255, 0.75)";
+  ctx.beginPath();
+  ctx.arc(x, y, r * 0.78, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.restore();
+}
+
 function draw() {
   if (!ctx || !map) return;
 
@@ -994,6 +1013,13 @@ function draw() {
 
     const p = latLngToScreen(latest.lat, latest.lng);
     const isStale = typeof d.isStale === "function" ? d.isStale(now) : false;
+    const isHighlighted =
+      d.id === pinnedDroneId || (pinnedDroneId === null && hoveredDroneId === d.id);
+
+    if (isHighlighted) {
+      drawSelectionHighlight(p.x, p.y, droneSize);
+    }
+
     drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, { isStale });
 
     if (isStale) {
