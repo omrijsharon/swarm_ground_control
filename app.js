@@ -426,7 +426,7 @@ function updateTooltip() {
 
   el.innerHTML = `
     <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
-    <div class="row rssi-row"><span>RSSI</span><strong>${renderRssiBars(latest.rssi)}</strong></div>
+    <div class="row rssi-row"><span>Link</span><strong>${renderRssiBars(latest.rssi)}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
