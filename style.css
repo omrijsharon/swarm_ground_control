@@ -377,43 +377,43 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 .battery-bars{
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
 }
 
 .battery-bar{
-  width: 4px;
-  height: 9px;
+  width: 3px;
+  height: 7px;
   border-radius: 2px;
   background: rgba(255,255,255,0.12);
-  box-shadow: 0 0 6px rgba(0,0,0,0.4) inset;
+  box-shadow: 0 0 5px rgba(0,0,0,0.35) inset;
 }
 
 .battery-bar.filled{
-  box-shadow: 0 0 8px currentColor;
+  box-shadow: 0 0 7px currentColor;
 }
 
 .battery-wrap{
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
 }
 
 .battery-shell{
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  padding: 4px 6px;
-  border: 1.5px solid rgba(255,255,255,0.35);
-  border-radius: 4px;
+  gap: 2px;
+  padding: 2px 4px;
+  border: 1px solid rgba(255,255,255,0.35);
+  border-radius: 3px;
   background: rgba(255,255,255,0.06);
 }
 
 .battery-cap{
-  width: 5px;
-  height: 14px;
-  border: 1.5px solid rgba(255,255,255,0.35);
+  width: 3px;
+  height: 10px;
+  border: 1px solid rgba(255,255,255,0.35);
   border-left: 0;
-  border-radius: 1px 3px 3px 1px;
+  border-radius: 1px 2px 2px 1px;
 }
 
 .rssi-row{
