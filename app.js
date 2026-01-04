@@ -430,13 +430,19 @@ function updateTooltip() {
 
   if (tooltipMode === "commands") {
     const cmds = getLocalCommands(target, latest);
+    const radius = 70;
     const cmdButtons = cmds
-      .map((c) => `<button class="cmd-chip cmd-action" type="button" data-cmd="${c}">${c}</button>`)
+      .map((c, i) => {
+        const angle = (Math.PI * 2 * i) / cmds.length;
+        const x = Math.cos(angle) * radius;
+        const y = Math.sin(angle) * radius;
+        return `<button class="cmd-node cmd-action" type="button" data-cmd="${c}" style="--x:${x}px; --y:${y}px;">${c}</button>`;
+      })
       .join("");
+
+    el.classList.add("is-command");
     el.innerHTML = `
-      <div class="row battery-row"><strong>Drone #${target.id + 1}</strong><span class="tooltip-hint">Commands</span></div>
-      <div class="command-list cmd-action-list">${cmdButtons}</div>
-      <div class="row"><button class="cmd-chip" type="button" data-action="back">Back</button></div>
+      <div class="cmd-radial">${cmdButtons}</div>
     `;
     el.querySelectorAll(".cmd-action").forEach((btn) => {
       btn.addEventListener("click", (e) => {
@@ -445,17 +451,10 @@ function updateTooltip() {
         if (cmd) issueLocalCommand(target, cmd);
       });
     });
-    const back = el.querySelector('[data-action="back"]');
-    if (back) {
-      back.addEventListener("click", (e) => {
-        e.stopPropagation();
-        tooltipMode = "info";
-        updateTooltip();
-      });
-    }
     return;
   }
 
+  el.classList.remove("is-command");
   el.innerHTML = `
     <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
     <div class="row rssi-row"><span>Link</span><strong>${renderRssiBars(latest.rssi)}</strong></div>
@@ -468,6 +467,7 @@ function updateTooltip() {
   el.onclick = (e) => {
     e.stopPropagation();
     tooltipMode = "commands";
+    map.panTo([latest.lat, latest.lng], map.getZoom(), { animate: true });
     updateTooltip();
   };
 }
@@ -1281,4 +1281,5 @@ window.addEventListener("DOMContentLoaded", () => {
     draw();
   });
 });
+
 

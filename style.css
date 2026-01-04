@@ -379,6 +379,47 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   color: rgba(255,255,255,0.94);
 }
 
+.drone-tooltip.is-command{
+  border: none;
+  background: transparent;
+  box-shadow: none;
+  min-width: 0;
+  max-width: none;
+}
+
+.cmd-radial{
+  position: relative;
+  width: 1px;
+  height: 1px;
+}
+
+.cmd-node{
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(var(--x), var(--y));
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.35);
+  background: rgba(25,32,41,0.85);
+  color: rgba(255,255,255,0.9);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--ui-font-xs);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.35), 0 0 10px rgba(120,220,255,0.45);
+  cursor: pointer;
+}
+
+.cmd-node:hover{
+  border-color: rgba(120,220,255,0.8);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.45), 0 0 12px rgba(120,220,255,0.75);
+}
+
 .battery-row{
   align-items: center;
 }
