@@ -1032,19 +1032,13 @@ function drawStaleLabel(x, y, ageSec) {
 function drawSelectionHighlight(x, y, size = 10) {
   ctx.save();
   const r = size * 1.8;
-  const gradient = ctx.createRadialGradient(x, y, r * 0.25, x, y, r);
-  gradient.addColorStop(0, "rgba(90, 200, 255, 0.35)");
-  gradient.addColorStop(1, "rgba(90, 200, 255, 0.05)");
-  ctx.fillStyle = gradient;
+  const glowColor = "rgba(120, 220, 255, 0.55)";
+  ctx.fillStyle = glowColor;
+  ctx.shadowColor = glowColor;
+  ctx.shadowBlur = r * 0.9;
   ctx.beginPath();
   ctx.arc(x, y, r, 0, Math.PI * 2);
   ctx.fill();
-
-  ctx.lineWidth = Math.max(1.8, size * 0.18);
-  ctx.strokeStyle = "rgba(120, 220, 255, 0.75)";
-  ctx.beginPath();
-  ctx.arc(x, y, r * 0.78, 0, Math.PI * 2);
-  ctx.stroke();
   ctx.restore();
 }
 
