@@ -543,94 +543,21 @@ function initMapOnline() {
     });
   }
 
-  // Add a small floating button inside Leaflet's standard control area (top-right)
-  // that opens the modal layer picker.
-  const LayerBtn = L.Control.extend({
+  // Compact control bar (top-right): fullscreen (mobile) + layers side-by-side.
+  const ControlBar = L.Control.extend({
     options: { position: "topright" },
     onAdd: function () {
-      const btn = L.DomUtil.create("button", "leaflet-bar");
-      btn.type = "button";
-      btn.title = "Layers";
-      btn.setAttribute("aria-label", "Layers");
+      const wrap = L.DomUtil.create("div", "leaflet-bar");
+      wrap.style.display = "inline-flex";
+      wrap.style.alignItems = "center";
+      wrap.style.gap = "8px";
+      wrap.style.background = "transparent";
+      wrap.style.border = "none";
+      wrap.style.boxShadow = "none";
 
-      // Bigger button with label
-      btn.style.height = "44px";
-      btn.style.padding = "0 14px";
-      btn.style.cursor = "pointer";
-      btn.style.background = "rgba(25,32,41,0.75)";
-      btn.style.border = "1px solid rgba(255,255,255,0.25)";
-      btn.style.color = "rgba(255,255,255,0.92)";
-      btn.style.fontWeight = "900";
-      btn.style.fontSize = "13px";
-      btn.style.letterSpacing = "0.10em";
-      btn.style.textTransform = "uppercase";
-      btn.style.lineHeight = "42px";
-      btn.style.borderRadius = "10px";
-      btn.style.display = "inline-flex";
-      btn.style.alignItems = "center";
-      btn.style.gap = "10px";
-      btn.style.boxShadow = "0 10px 24px rgba(0,0,0,0.25)";
-
-      const icon = document.createElement("span");
-      icon.textContent = "≡";
-      icon.style.fontSize = "20px";
-      icon.style.lineHeight = "1";
-      icon.style.transform = "translateY(-1px)";
-
-      const label = document.createElement("span");
-      label.textContent = "Layers";
-
-      btn.textContent = "";
-      btn.appendChild(icon);
-      btn.appendChild(label);
-
-      L.DomEvent.disableClickPropagation(btn);
-
-      const openAnchored = () => {
-        setOpen(true);
-
-        // Anchor the panel under the button so it looks like a designed dropdown.
-        const panel = host.querySelector(".layer-picker-panel");
-        if (!panel) return;
-
-        const r = btn.getBoundingClientRect();
-        const gap = 10;
-
-        // Position panel below the button; clamp within viewport.
-        const desiredTop = Math.round(r.bottom + gap);
-        const desiredRight = Math.round(window.innerWidth - r.right);
-
-        panel.style.top = `${Math.max(12, desiredTop)}px`;
-        panel.style.right = `${Math.max(12, desiredRight)}px`;
-
-        // Place caret roughly aligned to the button center
-        const caretRight = Math.max(18, Math.round((r.width / 2) + 18));
-        panel.style.setProperty("--layer-caret-right", `${caretRight}px`);
-      };
-
-      L.DomEvent.on(btn, "click", (e) => {
-        L.DomEvent.stop(e);
-        openAnchored();
-      });
-
-      // Keep a reference for later (e.g., window resize while open)
-      btn.dataset.role = "layerPickerButton";
-
-      return btn;
-    },
-  });
-  map.addControl(new LayerBtn());
-
-  // Mobile-only fullscreen toggle (F11-equivalent). Appears next to Layers.
-  if (isMobileLike() && document.fullscreenEnabled) {
-    const FullscreenBtn = L.Control.extend({
-      options: { position: "topright" },
-      onAdd: function () {
-        const btn = L.DomUtil.create("button", "leaflet-bar");
+      const makeBtnBase = () => {
+        const btn = document.createElement("button");
         btn.type = "button";
-        btn.title = "Fullscreen";
-        btn.setAttribute("aria-label", "Fullscreen");
-
         btn.style.height = "44px";
         btn.style.padding = "0 14px";
         btn.style.cursor = "pointer";
@@ -647,27 +574,64 @@ function initMapOnline() {
         btn.style.alignItems = "center";
         btn.style.gap = "10px";
         btn.style.boxShadow = "0 10px 24px rgba(0,0,0,0.25)";
+        L.DomEvent.disableClickPropagation(btn);
+        return btn;
+      };
 
-        const label = document.createElement("span");
-        const icon = document.createElement("span");
-        icon.textContent = "⛶";
-        icon.style.fontSize = "15px";
-        icon.style.lineHeight = "1";
-        label.textContent = "Full";
+      const layerBtn = makeBtnBase();
+      layerBtn.title = "Layers";
+      layerBtn.setAttribute("aria-label", "Layers");
+      const layerIcon = document.createElement("span");
+      layerIcon.textContent = "|||";
+      layerIcon.style.fontSize = "16px";
+      layerIcon.style.lineHeight = "1";
+      const layerLabel = document.createElement("span");
+      layerLabel.textContent = "Layers";
+      layerBtn.appendChild(layerIcon);
+      layerBtn.appendChild(layerLabel);
+      layerBtn.dataset.role = "layerPickerButton";
 
-        btn.appendChild(icon);
-        btn.appendChild(label);
+      const openAnchored = () => {
+        setOpen(true);
+        const panel = host.querySelector(".layer-picker-panel");
+        if (!panel) return;
+        const r = layerBtn.getBoundingClientRect();
+        const gap = 10;
+        const desiredTop = Math.round(r.bottom + gap);
+        const desiredRight = Math.round(window.innerWidth - r.right);
+        panel.style.top = `${Math.max(12, desiredTop)}px`;
+        panel.style.right = `${Math.max(12, desiredRight)}px`;
+        const caretRight = Math.max(18, Math.round(r.width / 2 + 18));
+        panel.style.setProperty("--layer-caret-right", `${caretRight}px`);
+      };
+
+      L.DomEvent.on(layerBtn, "click", (e) => {
+        L.DomEvent.stop(e);
+        openAnchored();
+      });
+
+      // Optional fullscreen button (mobile/touch). Inserted to the left.
+      if (isMobileLike() && document.fullscreenEnabled) {
+        const fsBtn = makeBtnBase();
+        fsBtn.title = "Fullscreen";
+        fsBtn.setAttribute("aria-label", "Fullscreen");
+        const fsIcon = document.createElement("span");
+        fsIcon.textContent = "[ ]";
+        fsIcon.style.fontSize = "13px";
+        fsIcon.style.lineHeight = "1";
+        const fsLabel = document.createElement("span");
+        fsLabel.textContent = "Full";
+        fsBtn.appendChild(fsIcon);
+        fsBtn.appendChild(fsLabel);
 
         const target = document.documentElement;
-
         const updateLabel = () => {
           const active = !!document.fullscreenElement;
-          label.textContent = active ? "Exit" : "Full";
-          btn.title = active ? "Exit Fullscreen" : "Fullscreen";
+          fsLabel.textContent = active ? "Exit" : "Full";
+          fsBtn.title = active ? "Exit Fullscreen" : "Fullscreen";
         };
 
-        L.DomEvent.disableClickPropagation(btn);
-        L.DomEvent.on(btn, "click", (e) => {
+        L.DomEvent.on(fsBtn, "click", (e) => {
           L.DomEvent.stop(e);
           if (document.fullscreenElement) {
             document.exitFullscreen?.();
@@ -679,11 +643,14 @@ function initMapOnline() {
         document.addEventListener("fullscreenchange", updateLabel);
         updateLabel();
 
-        return btn;
-      },
-    });
-    map.addControl(new FullscreenBtn());
-  }
+        wrap.appendChild(fsBtn); // left of Layers
+      }
+
+      wrap.appendChild(layerBtn);
+      return wrap;
+    },
+  });
+  map.addControl(new ControlBar());
 
   // Re-anchor panel on resize/rotate if it's open
   window.addEventListener("resize", () => {
@@ -1122,3 +1089,4 @@ window.addEventListener("DOMContentLoaded", () => {
     draw();
   });
 });
+
