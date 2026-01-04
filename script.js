@@ -476,8 +476,13 @@ function updateTooltip() {
   }
 
   el.innerHTML = `
-    <div class="row battery-row"><strong>Drone #${target.id + 1}</strong>${renderBatteryBars(latest.battery)}</div>
-    <div class="row rssi-row"><span>Link</span><strong>${renderRssiBars(latest.rssi)}</strong></div>
+    <div class="row battery-row">
+      <strong>Drone #${target.id + 1}</strong>
+      <span class="inline-indicators" style="display:inline-flex;align-items:center;gap:10px;">
+        ${renderRssiBars(latest.rssi)}
+        ${renderBatteryBars(latest.battery)}
+      </span>
+    </div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
@@ -1102,7 +1107,8 @@ function drawGroundStationIcon(x, y, size = 18) {
   ctx.save();
   ctx.translate(x, y);
 
-  const radius = size * 0.6;
+  // Larger perimeter ring; keep H compact.
+  const radius = size * 0.95;
 
   // Outer ring
   ctx.lineWidth = Math.max(2, size * 0.12);
@@ -1121,9 +1127,9 @@ function drawGroundStationIcon(x, y, size = 18) {
   ctx.stroke();
 
   // "H" glyph
-  const hHeight = radius * 1.1;
-  const hHalfWidth = radius * 0.45;
-  ctx.lineWidth = Math.max(2, size * 0.14);
+  const hHeight = radius * 0.75;
+  const hHalfWidth = radius * 0.3;
+  ctx.lineWidth = Math.max(1.6, size * 0.1);
   ctx.lineCap = "round";
   ctx.strokeStyle = "rgba(120, 220, 255, 0.95)";
   ctx.beginPath();
@@ -1216,6 +1222,8 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
 
   // Slightly larger than the drone icon shape
   const w = size * SETTINGS.SELECTION_SHAPE_W_SCALE;
