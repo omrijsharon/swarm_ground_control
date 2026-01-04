@@ -384,9 +384,12 @@ function updateTooltip() {
   const eta = target.getEstimatedTimeRemainingMinutes();
   const etaText = eta === null ? "—" : formatMinutes(eta);
   const uptimeText = formatDuration(latest.uptimeSec);
+  const ageSec = target.getSecondsSinceLastUpdate ? target.getSecondsSinceLastUpdate() : null;
+  const ageText = ageSec === null ? "—" : `${ageSec.toFixed(1)}s ago`;
 
   el.innerHTML = `
     <div class="row"><strong>Drone #${target.id + 1}</strong><span>${(latest.battery ?? 0).toFixed(1)}%</span></div>
+    <div class="row"><span>Updated</span><strong>${ageText}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Math.round(latest.alt)} m</strong></div>
     <div class="row"><span>Uptime</span><strong>${uptimeText}</strong></div>
     <div class="row"><span>Air time left</span><strong>${etaText}</strong></div>
