@@ -1054,10 +1054,10 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
     ctx.fill();
   };
 
-  // Intense outer glow + denser inner fill
-  drawGlow(size * 3.2, 0.9);
+  // Intense layered glow for visibility
+  drawGlow(size * 3.2, 1.0);
   drawGlow(size * 2.0, 1.0);
-  drawGlow(size * 1.0, 1.0);
+  drawGlow(size * 1.2, 0.85);
   ctx.globalAlpha = 1;
   ctx.restore();
 }
