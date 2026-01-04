@@ -559,19 +559,13 @@ function setPinnedDrone(id) {
 
 function followPinnedDrone(nowMs = Date.now()) {
   if (pinnedDroneId === null || !map) return;
+  if (nowMs - lastFollowMs < 250) return;
   const d = getDroneById(pinnedDroneId);
   const latest = d && d.getLatest && d.getLatest();
   if (!latest) return;
-  if (tooltipMode === "commands") {
-    map.panTo([latest.lat, latest.lng], { animate: false });
-    lastFollowMs = nowMs;
-    return;
-  }
-  if (nowMs - lastFollowMs < 250) return;
   map.panTo([latest.lat, latest.lng], { animate: true, duration: 0.3 });
   lastFollowMs = nowMs;
 }
-
 
 
 
@@ -904,7 +898,7 @@ function updateTooltip() {
 
     el.innerHTML = `
 
-      <div class="cmd-radial">${cmdButtons}</div>
+      <div class="cmd-radial"><div class="cmd-center">Commands</div>${cmdButtons}</div>
 
     `;
 
@@ -2425,7 +2419,6 @@ function draw() {
 
 
   ctx.clearRect(0, 0, w, h);
-  followPinnedDrone();
 
 
 
