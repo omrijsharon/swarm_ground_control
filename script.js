@@ -30,6 +30,7 @@ let map;
 let overlay, ctx;
 let drones = [];
 let groundStations = [];
+let waypointTargets = new Map(); // droneId -> { lat, lng, speedKmh }
 let groundControl;
 
 const COMMAND_OPTIONS = [
@@ -50,6 +51,16 @@ let hoveredDroneId = null;
 let pinnedDroneId = null;
 let lastPointer = null;
 let tooltipMode = "info"; // "info" | "commands"
+let waypointMenuEl = null;
+let pendingWaypoint = null;
+let waypointCloseSuppressUntil = 0;
+let tooltipSuppressUntil = 0;
+let waypointDroneId = null;
+let followMenuEl = null;
+let pendingFollow = null;
+let longPressTimer = null;
+let longPressSuppressUntil = 0;
+let followTargets = new Map(); // followerId -> targetId
 
 function isMobileLike() {
   return (
@@ -83,6 +94,7 @@ class Drone {
   }
 
   updateTelemetry(packet, receivedAt = Date.now()) {
+    const prevCommand = this.current && this.current.command;
     const entry = {
       uptimeSec: packet.uptimeSec ?? packet.t ?? 0,
       lat: packet.lat,
@@ -102,6 +114,15 @@ class Drone {
     this.history.push(entry);
     if (this.history.length > this.historyLimit) {
       this.history.splice(0, this.history.length - this.historyLimit);
+    }
+
+    // Clear any pending waypoint visuals if mission changed away from Goto.
+    if (prevCommand && prevCommand !== entry.command && waypointTargets.has(this.id)) {
+      waypointTargets.delete(this.id);
+    }
+    // Clear follow link if mission changed away from follow.
+    if (prevCommand && prevCommand !== entry.command && followTargets.has(this.id)) {
+      followTargets.delete(this.id);
     }
   }
 
@@ -310,6 +331,11 @@ function setPinnedDrone(id) {
   pinnedDroneId = id;
   hoveredDroneId = id;
   tooltipMode = "info";
+  // Only close waypoint menu if selecting a different drone; keep it if it's for the same drone.
+  if (waypointDroneId === null || waypointDroneId !== id) {
+    closeWaypointMenu();
+  }
+  closeFollowMenu();
   updateStatusList();
   scrollStatusIntoView(id);
   updateTooltip();
@@ -351,6 +377,34 @@ function findNearestDrone(containerPoint, maxDist) {
     const dist = Math.hypot(p.x - containerPoint.x, p.y - containerPoint.y);
     if (dist < bestDist) {
       best = d;
+      bestDist = dist;
+    }
+  });
+  return best;
+}
+
+function findNearestGroundStation(containerPoint, maxDist) {
+  let best = null;
+  let bestDist = maxDist;
+  groundStations.forEach((g) => {
+    const p = map.latLngToContainerPoint([g.lat, g.lng]);
+    const dist = Math.hypot(p.x - containerPoint.x, p.y - containerPoint.y);
+    if (dist < bestDist) {
+      best = g;
+      bestDist = dist;
+    }
+  });
+  return best;
+}
+
+function findNearestWaypoint(containerPoint, maxDist = 14) {
+  let best = null;
+  let bestDist = maxDist;
+  waypointTargets.forEach((wp, droneId) => {
+    const p = map.latLngToContainerPoint([wp.lat, wp.lng]);
+    const dist = Math.hypot(p.x - containerPoint.x, p.y - containerPoint.y);
+    if (dist < bestDist) {
+      best = { droneId, wp, point: p };
       bestDist = dist;
     }
   });
@@ -413,7 +467,11 @@ function updateStatusList() {
 
     row.style.cursor = "pointer";
     row.addEventListener("click", () => {
-      focusDroneById(d.id);
+      if (pinnedDroneId === d.id) {
+        setPinnedDrone(null);
+      } else {
+        focusDroneById(d.id);
+      }
     });
     host.appendChild(row);
   });
@@ -432,6 +490,11 @@ function ensureTooltipEl() {
 
 function updateTooltip() {
   if (!map) return;
+  // If a relative menu (e.g., Goto WP) is open, keep the drone tooltip hidden.
+  if (waypointMenuEl || followMenuEl || performance.now() < tooltipSuppressUntil) {
+    if (tooltipEl) tooltipEl.style.display = "none";
+    return;
+  }
   const el = ensureTooltipEl();
   const target =
     (pinnedDroneId !== null && getDroneById(pinnedDroneId)) ||
@@ -532,14 +595,7 @@ function setupHoverHandlers() {
     updateTooltip();
   });
 
-  map.on("click", (e) => {
-    const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
-    if (nearest) {
-      setPinnedDrone(nearest.id);
-    } else {
-      setPinnedDrone(null);
-    }
-  });
+  map.on("click", handleMapClick);
 
   map.on("mouseout", () => {
     if (pinnedDroneId === null) {
@@ -547,6 +603,78 @@ function setupHoverHandlers() {
       updateTooltip();
     }
   });
+
+  map.on("contextmenu", (e) => {
+    e.originalEvent?.preventDefault?.();
+    attemptFollowMenuFromPoint(e.containerPoint);
+  });
+
+  // Long-press (mobile) to open follow menu
+  const container = map.getContainer();
+  const startLongPress = (ev) => {
+    if (longPressTimer) clearTimeout(longPressTimer);
+    const point = map.mouseEventToContainerPoint(ev);
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      attemptFollowMenuFromPoint(point);
+      longPressSuppressUntil = performance.now() + 500;
+    }, 220);
+  };
+  const clearLongPress = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  };
+  container.addEventListener("pointerdown", startLongPress, true);
+  container.addEventListener("pointerup", clearLongPress, true);
+  container.addEventListener("pointercancel", clearLongPress, true);
+  container.addEventListener("pointerleave", clearLongPress, true);
+}
+
+function handleMapClick(e) {
+  if (performance.now() < longPressSuppressUntil) return;
+  const hitWp = findNearestWaypoint(e.containerPoint, 16);
+  const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
+  const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius());
+
+  // Close follow menu on any plain map click.
+  if (followMenuEl) closeFollowMenu();
+
+  if (hitWp) {
+    const targetId = pinnedDroneId !== null ? pinnedDroneId : hitWp.droneId;
+    if (waypointMenuEl) closeWaypointMenu(false, true);
+    if (targetId !== null && targetId !== undefined) {
+      setPinnedDrone(targetId);
+    }
+    openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, targetId, hitWp.droneId);
+    return;
+  }
+
+  if (nearest) {
+    closeWaypointMenu();
+    setPinnedDrone(nearest.id);
+    return;
+  }
+
+  if (nearGs) {
+    closeWaypointMenu();
+    return;
+  }
+
+  if (pinnedDroneId !== null) {
+    const targetId = pinnedDroneId;
+    // If a waypoint menu is already open, close it and do NOT reopen.
+    if (waypointMenuEl) {
+      closeWaypointMenu(true);
+      return;
+    }
+    openWaypointMenu(e.latlng, e.containerPoint, targetId);
+    return;
+  }
+
+  setPinnedDrone(null);
+  closeWaypointMenu();
 }
 
 function formatDuration(seconds) {
@@ -624,12 +752,271 @@ function issueLocalCommand(drone, cmd) {
     next.alt = Math.max(0, next.alt - 5);
   }
 
+  // Changing mission clears any stored waypoint visuals for this drone.
+  waypointTargets.delete(drone.id);
+  followTargets.delete(drone.id);
+
   drone.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
   tooltipMode = "info";
   updateStatusList();
   updateTooltip();
   draw();
+}
+
+function issueGotoWaypoint(drone, wp) {
+  if (!drone) {
+    const fallbackId = waypointDroneId;
+    if (fallbackId !== null && fallbackId !== undefined) {
+      drone = getDroneById(fallbackId);
+    }
+  }
+  if (!drone || !wp) return;
+  const latest = drone.getLatest && drone.getLatest();
+  if (!latest) return;
+  const speed = Math.max(10, Math.min(100, Math.round(wp.speedKmh || 60)));
+  const cmd = `Goto waypoint (spd ${speed} km/h)`;
+  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
+  drone.updateTelemetry(next);
+  waypointTargets.set(drone.id, { lat: wp.lat, lng: wp.lng, speedKmh: speed });
+  if (groundControl) groundControl.assignMission(drone.id, cmd);
+  closeWaypointMenu();
+  tooltipMode = "info";
+  updateStatusList();
+  updateTooltip();
+  draw();
+}
+
+function closeWaypointMenu(suppressNextOpen = false, keepSelection = false) {
+  const hadMenu = !!waypointMenuEl;
+  if (waypointMenuEl && waypointMenuEl.parentNode) {
+    waypointMenuEl.parentNode.removeChild(waypointMenuEl);
+  }
+  waypointMenuEl = null;
+  pendingWaypoint = null;
+  waypointDroneId = null;
+  document.removeEventListener("pointerdown", handleWaypointOutsideClick, true);
+  // Clear hover so tooltip doesn't resurrect automatically after suppression expires.
+  hoveredDroneId = null;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  // Deselect only when we actually closed an open waypoint menu and caller wants it.
+  if (hadMenu && !keepSelection) {
+    pinnedDroneId = null;
+  }
+  if (suppressNextOpen) {
+    const now = performance.now();
+    waypointCloseSuppressUntil = now + 550; // avoid immediate reopen on same click
+    tooltipSuppressUntil = now + 550; // also block tooltip reopen for a short window
+  }
+}
+
+function closeFollowMenu() {
+  if (followMenuEl && followMenuEl.parentNode) {
+    followMenuEl.parentNode.removeChild(followMenuEl);
+  }
+  followMenuEl = null;
+  pendingFollow = null;
+  tooltipSuppressUntil = performance.now() + 400;
+}
+
+function issueFollowCommand(follower, targetId) {
+  if (!follower || targetId === null || targetId === undefined) return;
+  const latest = follower.getLatest && follower.getLatest();
+  if (!latest) return;
+  const cmd = `Follow drone #${targetId + 1}`;
+  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
+  follower.updateTelemetry(next);
+  if (groundControl) groundControl.assignMission(follower.id, cmd);
+  followTargets.set(follower.id, targetId);
+  closeFollowMenu();
+  // Suppress tooltip and deselect after issuing follow.
+  tooltipSuppressUntil = performance.now() + 2000;
+  hoveredDroneId = null;
+  tooltipMode = "info";
+  pinnedDroneId = null;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  updateStatusList();
+  updateTooltip();
+  draw();
+}
+
+function openFollowMenu(targetDroneId, containerPoint) {
+  const followerId = pinnedDroneId;
+  if (followerId === null || followerId === undefined) return;
+  if (followerId === targetDroneId) return;
+  const follower = getDroneById(followerId);
+  const target = getDroneById(targetDroneId);
+  if (!follower || !target) return;
+
+  tooltipSuppressUntil = performance.now() + 550;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  closeWaypointMenu(false, true);
+
+  pendingFollow = { followerId, targetId: targetDroneId };
+  if (followMenuEl && followMenuEl.parentNode) {
+    followMenuEl.parentNode.removeChild(followMenuEl);
+  }
+  followMenuEl = document.createElement("div");
+  followMenuEl.className = "relative-menu";
+  followMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Follow drone #${targetDroneId + 1}</h4>
+    </div>
+    <button class="cmd-chip cmd-action" type="button" data-action="follow">Follow</button>
+  `;
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  followMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  followMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  followMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+  const host = document.getElementById("app") || document.body;
+  host.appendChild(followMenuEl);
+
+  const btn = followMenuEl.querySelector("[data-action='follow']");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      issueFollowCommand(follower, targetDroneId);
+    });
+  }
+}
+
+function attemptFollowMenuFromPoint(containerPoint) {
+  if (pinnedDroneId === null || pinnedDroneId === undefined) return;
+  const near = findNearestDrone(containerPoint, getHoverRadius());
+  if (!near || near.id === pinnedDroneId) return;
+  openFollowMenu(near.id, containerPoint);
+}
+
+function handleWaypointOutsideClick(e) {
+  if (!waypointMenuEl) return;
+  if (waypointMenuEl.contains(e.target)) return;
+  closeWaypointMenu(true);
+}
+
+function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null) {
+  const drone =
+    droneId !== null && droneId !== undefined
+      ? getDroneById(droneId)
+      : pinnedDroneId !== null
+        ? getDroneById(pinnedDroneId)
+        : waypointDroneId !== null
+          ? getDroneById(waypointDroneId)
+          : null;
+  if (!drone) return;
+  if (performance.now() < waypointCloseSuppressUntil) return;
+
+  // Hide tooltip/local command menu when opening waypoint menu.
+  tooltipMode = "info";
+  tooltipSuppressUntil = performance.now() + 550;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  closeFollowMenu();
+
+  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, ownerId: ownerId ?? null };
+  const latest = drone.getLatest && drone.getLatest();
+  const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, latlng.lat, latlng.lng) / 1000 : null;
+  const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
+  const ownerWp = ownerId !== null ? waypointTargets.get(ownerId) : null;
+  const showSync = !!ownerWp;
+
+  const formatEta = (km, speed) => {
+    if (!isFinite(km) || !isFinite(speed) || speed <= 0) return "";
+    const totalSec = (km / speed) * 3600;
+    const m = Math.floor(totalSec / 60);
+    const s = Math.max(0, Math.round(totalSec - m * 60));
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  };
+  const etaLabel = distKm !== null && isFinite(distKm) ? formatEta(distKm, pendingWaypoint.speedKmh) : "";
+  const host = document.getElementById("app") || document.body;
+  if (waypointMenuEl && waypointMenuEl.parentNode !== host) {
+    waypointMenuEl.parentNode.removeChild(waypointMenuEl);
+    waypointMenuEl = null;
+  }
+
+  // Always recreate to ensure fresh positioning when clicking elsewhere.
+  if (waypointMenuEl && waypointMenuEl.parentNode) {
+    waypointMenuEl.parentNode.removeChild(waypointMenuEl);
+  }
+  waypointMenuEl = document.createElement("div");
+  waypointMenuEl.className = "relative-menu";
+  host.appendChild(waypointMenuEl);
+  waypointMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+  waypointDroneId = drone.id;
+  pinnedDroneId = drone.id; // keep drone selected while menu is open
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  waypointMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  waypointMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const updateLabel = (val) => {
+    const lbl = waypointMenuEl.querySelector("[data-speed-label]");
+    if (lbl) lbl.textContent = `${val} km/h`;
+    const etaSpan = waypointMenuEl.querySelector(".menu-eta");
+    if (etaSpan && distKm !== null && isFinite(distKm)) {
+      if (val > 0) {
+        const totalSec = (distKm / val) * 3600;
+        const m = Math.floor(totalSec / 60);
+        const s = Math.max(0, Math.round(totalSec - m * 60));
+        etaSpan.textContent = `${m}m ${s.toString().padStart(2, "0")}s`;
+      }
+    }
+  };
+
+  waypointMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>${distLabel}</h4>
+      ${showSync ? `<button class="sync-btn" type="button" data-sync title="Match ETA">⇆</button>` : ""}
+      <span class="menu-eta">${etaLabel}</span>
+    </div>
+    <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
+    <div class="speed-row">
+      <input type="range" min="10" max="100" value="${pendingWaypoint.speedKmh}" step="1" data-speed-slider>
+      <span data-speed-label>${pendingWaypoint.speedKmh} km/h</span>
+    </div>
+  `;
+
+  const slider = waypointMenuEl.querySelector("[data-speed-slider]");
+  if (slider) {
+    slider.addEventListener("input", (e) => {
+      const v = Number(e.target.value) || 60;
+      pendingWaypoint.speedKmh = v;
+      updateLabel(v);
+    });
+  }
+
+  const btn = waypointMenuEl.querySelector("[data-action='goto-wp']");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      issueGotoWaypoint(drone, pendingWaypoint);
+    });
+  }
+
+  const syncBtn = waypointMenuEl.querySelector("[data-sync]");
+  if (syncBtn && ownerWp && drone) {
+    syncBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const ownerDrone = getDroneById(ownerId);
+      const ownerLatest = ownerDrone && ownerDrone.getLatest && ownerDrone.getLatest();
+      if (!ownerLatest || !ownerWp.speedKmh) return;
+      const ownerDistKm = haversine2dMeters(ownerLatest.lat, ownerLatest.lng, ownerWp.lat, ownerWp.lng) / 1000;
+      if (!isFinite(ownerDistKm) || ownerDistKm <= 0) return;
+      const etaHours = ownerDistKm / ownerWp.speedKmh;
+      if (!isFinite(etaHours) || etaHours <= 0) return;
+      if (!distKm || !isFinite(distKm)) return;
+      let targetSpeed = distKm / etaHours;
+      targetSpeed = Math.max(10, Math.min(100, targetSpeed));
+      pendingWaypoint.speedKmh = Math.round(targetSpeed);
+      const sliderEl = waypointMenuEl.querySelector("[data-speed-slider]");
+      if (sliderEl) sliderEl.value = targetSpeed;
+      updateLabel(pendingWaypoint.speedKmh);
+    });
+  }
+
+  document.addEventListener("pointerdown", handleWaypointOutsideClick, true);
 }
 
 function renderBatteryBars(batteryPct) {
@@ -1052,6 +1439,7 @@ function startMockTelemetryLoop(drone) {
       rssi: Math.max(-125, Math.min(-80, prev.rssi + (Math.random() - 0.5) * 3)),
       command: prev.command,
       armed: prev.armed,
+      rescuePhase: prev.rescuePhase,
     };
 
     drone.updateTelemetry(next);
@@ -1312,6 +1700,27 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   ctx.restore();
 }
 
+function drawWaypointPin(x, y) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(0, -18);
+  ctx.stroke();
+
+  const r = 6;
+  ctx.fillStyle = "rgba(255,80,80,0.95)";
+  ctx.beginPath();
+  ctx.arc(0, -18, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  ctx.lineWidth = 1.4;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function draw() {
   if (!ctx || !map) return;
 
@@ -1342,6 +1751,75 @@ function draw() {
   groundStations.forEach((gs) => {
     const p = latLngToScreen(gs.lat, gs.lng);
     drawGroundStationIcon(p.x, p.y, gsSize);
+  });
+
+  // Follow links (dashed line from follower to target)
+  followTargets.forEach((targetId, followerId) => {
+    const follower = getDroneById(followerId);
+    const target = getDroneById(targetId);
+    const fLatest = follower && follower.getLatest && follower.getLatest();
+    const tLatest = target && target.getLatest && target.getLatest();
+    if (!fLatest || !tLatest) return;
+    const from = latLngToScreen(fLatest.lat, fLatest.lng);
+    const to = latLngToScreen(tLatest.lat, tLatest.lng);
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 2) return;
+    ctx.save();
+    ctx.setLineDash([8, 6]);
+    ctx.lineWidth = 1.8;
+    ctx.strokeStyle = "rgba(120,220,255,0.85)";
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+
+    // Arrow head pointing toward the followed drone, placed near the target.
+    const ux = dx / len;
+    const uy = dy / len;
+    const arrowLen = Math.max(9, Math.min(14, (map.getZoom ? map.getZoom() : 10) * 1.0));
+    const backOff = Math.max(10, arrowLen * 0.8);
+    const tipX = to.x - ux * 4; // slight inset so it sits near target
+    const tipY = to.y - uy * 4;
+    const baseX = tipX - ux * backOff;
+    const baseY = tipY - uy * backOff;
+    const perpX = -uy;
+    const perpY = ux;
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + perpX * (arrowLen * 0.4), baseY + perpY * (arrowLen * 0.4));
+    ctx.lineTo(baseX - perpX * (arrowLen * 0.4), baseY - perpY * (arrowLen * 0.4));
+    ctx.closePath();
+    ctx.fillStyle = "rgba(120,220,255,0.9)";
+    ctx.strokeStyle = "rgba(0,0,0,0.5)";
+    ctx.lineWidth = 1.2;
+    ctx.fill();
+    ctx.stroke();
+    ctx.restore();
+  });
+
+  // Waypoints (relative commands)
+  waypointTargets.forEach((wp, droneId) => {
+    const d = getDroneById(droneId);
+    const latest = d && d.getLatest && d.getLatest();
+    if (!latest) return;
+    const from = latLngToScreen(latest.lat, latest.lng);
+    const to = latLngToScreen(wp.lat, wp.lng);
+
+    // Dashed line
+    ctx.save();
+    ctx.setLineDash([6, 6]);
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.restore();
+
+    // Pin (lollipop)
+    drawWaypointPin(to.x, to.y);
   });
 
   // drones (on top, with visible shadows)

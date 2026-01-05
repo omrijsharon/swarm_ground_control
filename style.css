@@ -504,6 +504,64 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   gap: 10px;
 }
 
+.relative-menu{
+  position: absolute;
+  z-index: 3000;
+  min-width: 180px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(18, 24, 32, 0.96);
+  border: 1px solid rgba(255,255,255,0.12);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.35);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.relative-menu h4{
+  margin: 0;
+  font-size: var(--ui-font-sm);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.86);
+}
+
+.relative-menu .menu-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.relative-menu .sync-btn{
+  border: 1px solid rgba(255,255,255,0.25);
+  background: rgba(120,220,255,0.12);
+  color: rgba(255,255,255,0.9);
+  border-radius: 8px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.relative-menu .menu-eta{
+  font-size: var(--ui-font-xs);
+  color: rgba(255,255,255,0.75);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+}
+
+.relative-menu .speed-row{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.relative-menu input[type="range"]{
+  flex: 1;
+}
+
 .drone-tooltip .mission-line{
   display: flex;
   align-items: center;
