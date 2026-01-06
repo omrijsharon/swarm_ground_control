@@ -231,6 +231,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 
 .cmd-action-list.column{
   flex-direction: column;
+  flex-wrap: nowrap;
 }
 
 .cmd-chip{
@@ -328,7 +329,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 .status-entry.is-active{
   border-color: rgba(120,220,255,0.55);
   background: rgba(120,220,255,0.10);
-  box-shadow: 0 8px 24px rgba(120,220,255,0.25);
+  box-shadow: 0 8px 24px rgba(120,220,255,0.25), inset 0 0 0 1px rgba(120,220,255,0.55);
 }
 
 .status-led{
@@ -359,6 +360,30 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   margin-left: auto;
   display: flex;
   align-items: center;
+}
+
+.status-team-header{
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 10px;
+  background: rgba(255,255,255,0.06);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.82);
+  cursor: pointer;
+}
+
+.status-team-header.is-active{
+  border-color: rgba(120,220,255,0.55);
+  box-shadow: 0 8px 24px rgba(120,220,255,0.25), inset 0 0 0 1px rgba(120,220,255,0.55);
+}
+
+.status-team-body{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 6px;
 }
 
 .drone-tooltip{
@@ -552,14 +577,78 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   white-space: nowrap;
 }
 
+.relative-menu .segmented{
+  display: inline-flex;
+  gap: 0;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  overflow: hidden;
+  background: rgba(255,255,255,0.05);
+}
+
+.relative-menu .seg-btn{
+  flex: 1;
+  border: none;
+  background: transparent;
+  color: rgba(255,255,255,0.8);
+  padding: 8px 12px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.relative-menu .seg-btn.is-active{
+  background: rgba(120,220,255,0.18);
+  color: rgba(255,255,255,0.95);
+}
+
 .relative-menu .speed-row{
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
+.relative-menu .cmd-chip.is-active{
+  border-color: rgba(120,220,255,0.55);
+  background: rgba(120,220,255,0.12);
+  box-shadow: 0 0 0 1px rgba(120,220,255,0.22);
+}
+
 .relative-menu input[type="range"]{
   flex: 1;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(120,220,255,0.35), rgba(120,220,255,0.15));
+  box-shadow: inset 0 0 8px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.35);
+}
+
+.relative-menu input[type="range"]::-webkit-slider-thumb{
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(120,220,255,0.95);
+  border: 1px solid rgba(255,255,255,0.9);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 4px rgba(120,220,255,0.22);
+  cursor: pointer;
+}
+
+.relative-menu input[type="range"]::-moz-range-thumb{
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(120,220,255,0.95);
+  border: 1px solid rgba(255,255,255,0.9);
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 0 4px rgba(120,220,255,0.22);
+  cursor: pointer;
+}
+
+.relative-menu input[type="range"]::-moz-range-track{
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(120,220,255,0.35), rgba(120,220,255,0.15));
+  box-shadow: inset 0 0 8px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.35);
 }
 
 .drone-tooltip .mission-line{
