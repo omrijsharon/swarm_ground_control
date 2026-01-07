@@ -247,6 +247,85 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   cursor: default;
 }
 
+.sequence-list{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.sequence-item{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.9);
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-size: var(--ui-font-xs);
+}
+
+.sequence-item.is-active{
+  border-color: rgba(120,220,255,0.55);
+  background: rgba(120,220,255,0.10);
+  box-shadow: 0 10px 26px rgba(120,220,255,0.18), inset 0 0 0 1px rgba(120,220,255,0.28);
+}
+
+.sequence-item .seq-meta{
+  color: rgba(255,255,255,0.65);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  font-size: 11px;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.sequence-empty{
+  color: rgba(255,255,255,0.65);
+  font-size: var(--ui-font-xs);
+  line-height: 1.4;
+}
+
+.sequence-add{
+  margin-top: 10px;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.22);
+  background: rgba(120,220,255,0.10);
+  color: transparent; /* render via ::before for pixel-perfect centering */
+  font-weight: 900;
+  font-size: 20px;
+  line-height: 1;
+  align-self: center;
+  cursor: pointer;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.35), 0 0 0 4px rgba(120,220,255,0.10);
+  position: relative;
+  --plus-offset-y: -1px;
+}
+
+.sequence-add::before{
+  content: "+";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, calc(-50% + var(--plus-offset-y)));
+  color: rgba(255,255,255,0.92);
+  font-weight: 900;
+  font-size: 20px;
+  line-height: 1;
+}
+
+.sequence-add:hover{
+  background: rgba(120,220,255,0.16);
+  border-color: rgba(120,220,255,0.45);
+}
+
 .right-content{
   align-items: stretch;
 }
@@ -612,6 +691,10 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   border-color: rgba(120,220,255,0.55);
   background: rgba(120,220,255,0.12);
   box-shadow: 0 0 0 1px rgba(120,220,255,0.22);
+}
+
+.status-member-menu{
+  min-width: 170px;
 }
 
 .relative-menu input[type="range"]{

@@ -57,12 +57,16 @@ let waypointCloseSuppressUntil = 0;
 let tooltipSuppressUntil = 0;
 let waypointDroneId = null;
 let waypointTeamId = null;
+let statusMemberMenuEl = null;
+let pendingStatusMember = null;
 let followMenuEl = null;
 let pendingFollow = null;
 let longPressTimer = null;
 let longPressSuppressUntil = 0;
 let suppressMapClickUntil = 0;
 let isMapDragging = false;
+let suppressStatusClickUntil = 0;
+let sequenceMenuEl = null;
 let followTargets = new Map(); // followerId -> targetId
 let homeTargets = new Map(); // droneId -> stationId
 let teams = [];
@@ -120,6 +124,8 @@ function clearSelection(hideTooltip = true) {
   pinnedDroneId = null;
   hoveredDroneId = null;
   if (hideTooltip && tooltipEl) tooltipEl.style.display = "none";
+  closeSequenceMenu();
+  updateCommandSequencePanel();
   forceRedraw();
 }
 let homeMenuEl = null;
@@ -303,6 +309,7 @@ class GroundStation {
 class GroundControl {
   constructor() {
     this.assigned = new Map(); // droneId -> { command, issuedAt }
+    this.planned = new Map(); // key -> { commands: string[], updatedAt }
     this.logs = [];
   }
 
@@ -314,6 +321,33 @@ class GroundControl {
 
   getAssigned(droneId) {
     return this.assigned.get(droneId) || null;
+  }
+
+  _keyForDrone(droneId) {
+    return `drone:${droneId}`;
+  }
+
+  _keyForTeam(teamId) {
+    return `team:${teamId}`;
+  }
+
+  getPlanned(key) {
+    const entry = this.planned.get(key);
+    return entry ? entry.commands : [];
+  }
+
+  clearPlanned(key) {
+    this.planned.set(key, { commands: [], updatedAt: Date.now() });
+  }
+
+  appendPlanned(key, command) {
+    const prev = this.planned.get(key);
+    const next = prev ? [...prev.commands, command] : [command];
+    this.planned.set(key, { commands: next, updatedAt: Date.now() });
+  }
+
+  setPlanned(key, commands) {
+    this.planned.set(key, { commands: [...commands], updatedAt: Date.now() });
   }
 }
 
@@ -536,6 +570,7 @@ function setPinnedDrone(id) {
   pinnedDroneId = team ? null : id;
   hoveredDroneId = id;
   tooltipMode = "info";
+  closeSequenceMenu();
   // Only close waypoint menu if selecting a different drone; keep it if it's for the same drone.
   if (waypointDroneId === null || waypointDroneId !== id) {
     closeWaypointMenu();
@@ -545,6 +580,7 @@ function setPinnedDrone(id) {
   tooltipSuppressUntil = 0;
   updateStatusList();
   scrollStatusIntoView(id);
+  updateCommandSequencePanel();
   updateTooltip();
   if (team) {
     focusTeamView(team);
@@ -557,6 +593,7 @@ function setPinnedTeam(id, suppressTooltip = false) {
   pinnedDroneId = null;
   hoveredDroneId = null;
   tooltipMode = "info";
+  closeSequenceMenu();
   closeWaypointMenu();
   closeFollowMenu(false);
   closeHomeMenu(false);
@@ -567,6 +604,7 @@ function setPinnedTeam(id, suppressTooltip = false) {
     scrollTeamIntoView(id);
     lastCreatedTeamId = null;
   }
+  updateCommandSequencePanel();
   updateTooltip();
   forceRedraw();
   const team = getTeamById(id);
@@ -664,10 +702,158 @@ function renderCommandList() {
   });
 }
 
+function getSelectedEntity() {
+  if (pinnedTeamId !== null) {
+    const team = getTeamById(pinnedTeamId);
+    if (!team) return null;
+    const latest = getTeamSnapshot(team);
+    return latest ? { type: "team", id: team.id, latest } : null;
+  }
+  if (pinnedDroneId !== null) {
+    const drone = getDroneById(pinnedDroneId);
+    const latest = drone && drone.getLatest && drone.getLatest();
+    return drone && latest ? { type: "drone", id: drone.id, latest } : null;
+  }
+  return null;
+}
+
+function getSelectionKey(sel) {
+  if (!sel) return null;
+  return sel.type === "team" ? `team:${sel.id}` : `drone:${sel.id}`;
+}
+
+function closeSequenceMenu() {
+  if (sequenceMenuEl && sequenceMenuEl.parentNode) {
+    sequenceMenuEl.parentNode.removeChild(sequenceMenuEl);
+  }
+  sequenceMenuEl = null;
+  document.removeEventListener("pointerdown", handleSequenceMenuOutside, true);
+}
+
+function handleSequenceMenuOutside(e) {
+  if (!sequenceMenuEl) return;
+  if (sequenceMenuEl.contains(e.target)) return;
+  closeSequenceMenu();
+}
+
+function openSequenceMenu(anchorEl) {
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key || !groundControl) return;
+
+  closeSequenceMenu();
+  const host = document.getElementById("app") || document.body;
+  sequenceMenuEl = document.createElement("div");
+  sequenceMenuEl.className = "relative-menu";
+  const title = sel.type === "team" ? `Team #${sel.id + 1}` : `Drone #${sel.id + 1}`;
+
+  const options = COMMAND_OPTIONS.filter((c) => c && c !== "Idle");
+  const items = options
+    .map((c) => `<button class="cmd-chip cmd-action" type="button" data-seq="${c}">${c}</button>`)
+    .join("");
+
+  sequenceMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Add command</h4>
+      <span class="menu-eta">${title}</span>
+    </div>
+    <div class="command-list cmd-action-list column">${items}</div>
+  `;
+  sequenceMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  host.appendChild(sequenceMenuEl);
+
+  const hostRect = host.getBoundingClientRect();
+  const aRect = anchorEl.getBoundingClientRect();
+  const pad = 10;
+  const menuW = sequenceMenuEl.offsetWidth || 220;
+  const menuH = sequenceMenuEl.offsetHeight || 260;
+  let left = aRect.left - hostRect.left + aRect.width / 2 - menuW / 2;
+  let top = aRect.top - hostRect.top - menuH - pad;
+  if (top < pad) top = aRect.bottom - hostRect.top + pad;
+  left = Math.max(pad, Math.min(hostRect.width - menuW - pad, left));
+  top = Math.max(pad, Math.min(hostRect.height - menuH - pad, top));
+  sequenceMenuEl.style.left = `${left}px`;
+  sequenceMenuEl.style.top = `${top}px`;
+
+  sequenceMenuEl.querySelectorAll("[data-seq]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const cmd = btn.dataset.seq;
+      if (!cmd) return;
+      groundControl.appendPlanned(key, cmd);
+      closeSequenceMenu();
+      updateCommandSequencePanel();
+    });
+  });
+
+  document.addEventListener("pointerdown", handleSequenceMenuOutside, true);
+}
+
+function updateCommandSequencePanel() {
+  const list = document.getElementById("sequenceList");
+  const addBtn = document.getElementById("sequenceAddBtn");
+  if (!list || !addBtn) return;
+
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  list.innerHTML = "";
+
+  if (!sel || !key) {
+    addBtn.disabled = true;
+    addBtn.style.opacity = "0.45";
+    const empty = document.createElement("div");
+    empty.className = "sequence-empty";
+    empty.textContent = "Select a drone or team to view/edit its command sequence.";
+    list.appendChild(empty);
+    return;
+  }
+
+  addBtn.disabled = false;
+  addBtn.style.opacity = "1";
+
+  const current = (sel.latest && sel.latest.command) || "Idle";
+  const planned = groundControl ? groundControl.getPlanned(key) : [];
+  const queue = planned.filter((c) => c && c !== current);
+
+  const makeItem = (label, meta, active) => {
+    const row = document.createElement("div");
+    row.className = `sequence-item${active ? " is-active" : ""}`;
+    const left = document.createElement("div");
+    left.textContent = label;
+    const right = document.createElement("div");
+    right.className = "seq-meta";
+    right.textContent = meta;
+    row.appendChild(left);
+    row.appendChild(right);
+    return row;
+  };
+
+  list.appendChild(makeItem(current, "Now", true));
+  if (!queue.length) {
+    const empty = document.createElement("div");
+    empty.className = "sequence-empty";
+    empty.textContent = "No queued commands. Use + to append the next command.";
+    list.appendChild(empty);
+    return;
+  }
+
+  queue.forEach((cmd, idx) => {
+    list.appendChild(makeItem(cmd, idx === 0 ? "Next" : `#${idx + 2}`, false));
+  });
+}
+
 function updateStatusList() {
   const host = document.getElementById("statusList");
   if (!host) return;
   host.innerHTML = "";
+  // Keep the "Remove from Team" menu open across status refreshes (we re-render every 1s).
+  // Close only if the referenced drone/team is no longer valid.
+  if (pendingStatusMember && statusMemberMenuEl) {
+    const t = getTeamById(pendingStatusMember.teamId);
+    if (!t || !t.members.has(pendingStatusMember.droneId)) {
+      closeStatusMemberMenu();
+    }
+  }
   const teamMap = new Map();
   teams.filter((t) => t.members.size >= 2).forEach((t) => {
     const members = [...t.members]
@@ -718,7 +904,61 @@ function updateStatusList() {
     row.appendChild(battery);
 
     row.style.cursor = "pointer";
+
+    // Long-press on a status entry: focus and open commands (instead of info tooltip).
+    const STATUS_LONGPRESS_MS = 220;
+    const STATUS_DRAG_CANCEL_PX = 10;
+    let statusPressTimer = null;
+    let statusPressStart = null;
+
+    const clearStatusPress = () => {
+      if (statusPressTimer) {
+        clearTimeout(statusPressTimer);
+        statusPressTimer = null;
+      }
+      statusPressStart = null;
+    };
+
+    row.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (typeof ev.button === "number" && ev.button !== 0) return;
+        clearStatusPress();
+        statusPressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId ?? null };
+        statusPressTimer = setTimeout(() => {
+          statusPressTimer = null;
+          suppressStatusClickUntil = performance.now() + 650;
+          if (team) {
+            openStatusMemberMenu(d.id, team.id, label);
+          } else {
+            focusDroneById(d.id);
+            tooltipMode = "commands";
+            updateTooltip();
+          }
+        }, STATUS_LONGPRESS_MS);
+      },
+      true
+    );
+
+    row.addEventListener(
+      "pointermove",
+      (ev) => {
+        if (!statusPressTimer || !statusPressStart) return;
+        if (statusPressStart.pointerId !== null && ev.pointerId !== undefined && ev.pointerId !== statusPressStart.pointerId)
+          return;
+        const dx = (ev.clientX ?? 0) - statusPressStart.x;
+        const dy = (ev.clientY ?? 0) - statusPressStart.y;
+        if (Math.hypot(dx, dy) > STATUS_DRAG_CANCEL_PX) clearStatusPress();
+      },
+      true
+    );
+
+    row.addEventListener("pointerup", clearStatusPress, true);
+    row.addEventListener("pointercancel", clearStatusPress, true);
+    row.addEventListener("pointerleave", clearStatusPress, true);
+
     row.addEventListener("click", () => {
+      if (performance.now() < suppressStatusClickUntil) return;
       if (team) {
         if (pinnedTeamId === team.id) {
           clearSelection();
@@ -752,7 +992,51 @@ function updateStatusList() {
     body.className = "status-team-body";
     body.style.display = pinnedTeamId === teamId ? "flex" : "none";
 
+    // Long-press on a team header: select + open commands.
+    const STATUS_LONGPRESS_MS = 220;
+    const STATUS_DRAG_CANCEL_PX = 10;
+    let teamPressTimer = null;
+    let teamPressStart = null;
+    const clearTeamPress = () => {
+      if (teamPressTimer) {
+        clearTimeout(teamPressTimer);
+        teamPressTimer = null;
+      }
+      teamPressStart = null;
+    };
+    header.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (typeof ev.button === "number" && ev.button !== 0) return;
+        clearTeamPress();
+        teamPressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId ?? null };
+        teamPressTimer = setTimeout(() => {
+          teamPressTimer = null;
+          suppressStatusClickUntil = performance.now() + 650;
+          setPinnedTeam(teamId);
+          tooltipMode = "commands";
+          updateTooltip();
+        }, STATUS_LONGPRESS_MS);
+      },
+      true
+    );
+    header.addEventListener(
+      "pointermove",
+      (ev) => {
+        if (!teamPressTimer || !teamPressStart) return;
+        if (teamPressStart.pointerId !== null && ev.pointerId !== undefined && ev.pointerId !== teamPressStart.pointerId) return;
+        const dx = (ev.clientX ?? 0) - teamPressStart.x;
+        const dy = (ev.clientY ?? 0) - teamPressStart.y;
+        if (Math.hypot(dx, dy) > STATUS_DRAG_CANCEL_PX) clearTeamPress();
+      },
+      true
+    );
+    header.addEventListener("pointerup", clearTeamPress, true);
+    header.addEventListener("pointercancel", clearTeamPress, true);
+    header.addEventListener("pointerleave", clearTeamPress, true);
+
     header.addEventListener("click", () => {
+      if (performance.now() < suppressStatusClickUntil) return;
       if (pinnedTeamId === teamId) {
         clearSelection();
         updateStatusList();
@@ -769,6 +1053,12 @@ function updateStatusList() {
   });
 
   orphanDrones.forEach((d) => renderRow(d, host));
+
+  // If the per-member menu is open, re-anchor it to the rendered label element.
+  if (pendingStatusMember && statusMemberMenuEl && typeof statusMemberMenuEl._reposition === "function") {
+    const labelEl = document.querySelector(`[data-drone-id="${pendingStatusMember.droneId}"] .status-label`);
+    if (labelEl) statusMemberMenuEl._reposition(labelEl);
+  }
 }
 
 function ensureTooltipEl() {
@@ -1051,6 +1341,7 @@ function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
   if (performance.now() < longPressSuppressUntil) return;
+  closeSequenceMenu();
   const hitWp = findNearestWaypoint(e.containerPoint, 16);
   const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius());
@@ -1096,6 +1387,7 @@ function handleMapClick(e) {
 
   setPinnedDrone(null);
   closeWaypointMenu();
+  updateCommandSequencePanel();
 }
 
 function formatDuration(seconds) {
@@ -1184,8 +1476,10 @@ function issueLocalCommand(drone, cmd) {
 
   drone.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
+  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
   tooltipMode = "info";
   updateStatusList();
+  updateCommandSequencePanel();
   updateTooltip();
   draw();
 }
@@ -1196,6 +1490,7 @@ function issueTeamCommand(team, cmd) {
     const d = getDroneById(id);
     if (d) issueLocalCommand(d, cmd);
   });
+  if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
   setPinnedTeam(team.id);
 }
 
@@ -1209,6 +1504,7 @@ function issueGotoWaypointSingle(drone, wp) {
   drone.updateTelemetry(next);
   waypointTargets.set(drone.id, { lat: wp.lat, lng: wp.lng, speedKmh: speed });
   if (groundControl) groundControl.assignMission(drone.id, cmd);
+  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
 }
 
 function issueGotoWaypoint(drone, wp) {
@@ -1238,6 +1534,7 @@ function issueReturnHomeSingle(droneId, stationId, mode = "land") {
   const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
   drone.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
+  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
   homeTargets.set(drone.id, stationId);
 }
 
@@ -1248,6 +1545,7 @@ function issueReturnHome(payload) {
     const team = getTeamById(payload.teamId);
     if (team) {
       [...team.members].forEach((id) => issueReturnHomeSingle(id, payload.stationId, mode));
+      if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
     }
   } else if (payload.droneId !== undefined && payload.droneId !== null) {
     issueReturnHomeSingle(payload.droneId, payload.stationId, mode);
@@ -1260,6 +1558,7 @@ function issueReturnHome(payload) {
   tooltipSuppressUntil = performance.now() + 1200;
   if (tooltipEl) tooltipEl.style.display = "none";
   updateStatusList();
+  updateCommandSequencePanel();
   updateTooltip();
   draw();
 }
@@ -1273,6 +1572,7 @@ function closeWaypointMenu(suppressNextOpen = false, keepSelection = false) {
   pendingWaypoint = null;
   waypointDroneId = null;
   waypointTeamId = null;
+  closeSequenceMenu();
   document.removeEventListener("pointerdown", handleWaypointOutsideClick, true);
   // Clear hover so tooltip doesn't resurrect automatically after suppression expires.
   hoveredDroneId = null;
@@ -1281,6 +1581,7 @@ function closeWaypointMenu(suppressNextOpen = false, keepSelection = false) {
   if (hadMenu && !keepSelection) {
     pinnedDroneId = null;
     pinnedTeamId = null;
+    updateCommandSequencePanel();
   }
   if (suppressNextOpen) {
     const now = performance.now();
@@ -1309,6 +1610,89 @@ function closeHomeMenu(suppress = true) {
   if (suppress) {
     tooltipSuppressUntil = performance.now() + 400;
   }
+}
+
+function closeStatusMemberMenu() {
+  if (statusMemberMenuEl && statusMemberMenuEl.parentNode) {
+    statusMemberMenuEl.parentNode.removeChild(statusMemberMenuEl);
+  }
+  statusMemberMenuEl = null;
+  pendingStatusMember = null;
+  document.removeEventListener("pointerdown", handleStatusMemberOutsideClick, true);
+}
+
+function handleStatusMemberOutsideClick(e) {
+  if (!statusMemberMenuEl) return;
+  if (statusMemberMenuEl.contains(e.target)) return;
+  closeStatusMemberMenu();
+}
+
+function openStatusMemberMenu(droneId, teamId, anchorEl) {
+  const drone = getDroneById(droneId);
+  const team = getTeamById(teamId);
+  if (!drone || !team) return;
+
+  closeStatusMemberMenu();
+  pendingStatusMember = { droneId, teamId };
+
+  const host = document.getElementById("app") || document.body;
+  statusMemberMenuEl = document.createElement("div");
+  statusMemberMenuEl.className = "relative-menu status-member-menu";
+  statusMemberMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Drone #${droneId + 1}</h4>
+    </div>
+    <button class="cmd-chip cmd-action" type="button" data-action="leave-team">Remove from Team</button>
+  `;
+  statusMemberMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  host.appendChild(statusMemberMenuEl);
+
+  const position = (el) => {
+    if (!statusMemberMenuEl || !el) return;
+    const hostRect = host.getBoundingClientRect();
+    const aRect = el.getBoundingClientRect();
+
+    const pad = 10;
+    const menuW = statusMemberMenuEl.offsetWidth || 180;
+    const menuH = statusMemberMenuEl.offsetHeight || 90;
+
+    // Prefer positioning right next to the drone's name in the status row.
+    let left = aRect.right - hostRect.left + pad;
+    let top = aRect.top - hostRect.top + aRect.height / 2 - menuH / 2;
+
+    // If it doesn't fit to the right, flip to the left side of the label.
+    if (left + menuW + pad > hostRect.width) {
+      left = aRect.left - hostRect.left - menuW - pad;
+    }
+
+    const maxLeft = hostRect.width - menuW - pad;
+    const maxTop = hostRect.height - menuH - pad;
+    left = Math.max(pad, Math.min(maxLeft, left));
+    top = Math.max(pad, Math.min(maxTop, top));
+
+    statusMemberMenuEl.style.left = `${left}px`;
+    statusMemberMenuEl.style.top = `${top}px`;
+  };
+
+  position(anchorEl);
+  // Re-anchor during status re-render.
+  statusMemberMenuEl._reposition = position;
+
+  const btn = statusMemberMenuEl.querySelector("[data-action='leave-team']");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeStatusMemberMenu();
+      detachFromTeam(droneId);
+      tooltipSuppressUntil = performance.now() + 600;
+      if (tooltipEl) tooltipEl.style.display = "none";
+      updateStatusList();
+      updateTooltip();
+      forceRedraw();
+    });
+  }
+
+  document.addEventListener("pointerdown", handleStatusMemberOutsideClick, true);
 }
 
 function openHomePickerMenu(anchorPoint = null) {
@@ -1486,6 +1870,7 @@ function issueFollowCommand(follower, targetId) {
   const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
   follower.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(follower.id, cmd);
+  if (groundControl) groundControl.clearPlanned(`drone:${follower.id}`);
   followTargets.set(follower.id, targetId);
   closeFollowMenu();
   // Suppress tooltip and deselect after issuing follow.
@@ -1498,6 +1883,7 @@ function issueFollowCommand(follower, targetId) {
   closeHomeMenu(false);
   closeWaypointMenu(false, true);
   updateStatusList();
+  updateCommandSequencePanel();
   updateTooltip();
   draw();
 }
@@ -1585,6 +1971,22 @@ function handleContextMenu(e) {
 function attemptActionLongPress(containerPoint) {
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
+
+  // Long-press on a drone with no prior selection: select it and open Commands immediately.
+  if (near && pinnedDroneId === null && pinnedTeamId === null) {
+    setPinnedDrone(near.id);
+    tooltipMode = "commands";
+    updateTooltip();
+    return;
+  }
+
+  // Long-press on the already-selected single drone: jump straight to Commands.
+  if (near && pinnedDroneId !== null && pinnedTeamId === null && near.id === pinnedDroneId) {
+    tooltipMode = "commands";
+    updateTooltip();
+    return;
+  }
+
   if (nearGs && (pinnedDroneId !== null || pinnedTeamId !== null)) {
     const latlng = map.containerPointToLatLng(containerPoint);
     openHomeMenu(latlng, containerPoint, nearGs);
@@ -1738,11 +2140,13 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
             const d = getDroneById(id);
             if (d) issueGotoWaypointSingle(d, pendingWaypoint);
           });
+          if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
         }
         closeWaypointMenu();
         tooltipMode = "info";
         pinnedDroneId = null;
         pinnedTeamId = null;
+        updateCommandSequencePanel();
         updateStatusList();
         updateTooltip();
         draw();
@@ -2634,10 +3038,6 @@ window.addEventListener("DOMContentLoaded", () => {
   setTimestampNow();
   setInterval(setTimestampNow, 1000 * 15);
 
-  const slider = document.querySelector(".slider");
-  const altVal = document.getElementById("altVal");
-  slider.addEventListener("input", () => (altVal.textContent = slider.value));
-
   // Collapsible panels
   document.querySelectorAll("aside.panel[data-collapsible='1'] .panel-title").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -2649,7 +3049,15 @@ window.addEventListener("DOMContentLoaded", () => {
   });
 
   groundControl = new GroundControl();
-  renderCommandList();
+  updateCommandSequencePanel();
+
+  const addBtn = document.getElementById("sequenceAddBtn");
+  if (addBtn) {
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openSequenceMenu(addBtn);
+    });
+  }
 
   initMapOnline();
   makeMockSwarm();
@@ -2659,6 +3067,7 @@ window.addEventListener("DOMContentLoaded", () => {
   updateStatusList();
   setInterval(() => {
     updateStatusList();
+    updateCommandSequencePanel();
     updateTooltip();
   }, 1000);
 

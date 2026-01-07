@@ -50,25 +50,12 @@
       <div class="panel-blur"></div>
       <div class="panel-content">
         <div class="panel-top panel-top-center">
-          <button class="panel-title" type="button" aria-expanded="false">Commands</button>
+          <button class="panel-title" type="button" aria-expanded="false">Commands Sequence</button>
         </div>
 
-        <button class="pill-btn">LAUNCH SWARM</button>
-        <button class="pill-btn">RETURN ALL</button>
-        <button class="pill-btn">FORMATIONS</button>
-
-        <div class="spacer"></div>
-
-        <div class="label">COMMANDS</div>
-        <div class="command-list" id="commandList">
-          <!-- populated via JS -->
-        </div>
-
-        <div class="spacer"></div>
-
-        <div class="label">ALTITUDE</div>
-        <input class="slider" type="range" min="0" max="300" value="150" />
-        <div class="alt-readout"><span id="altVal">150</span>m</div>
+        <div class="label">SEQUENCE</div>
+        <div class="sequence-list" id="sequenceList"></div>
+        <button class="sequence-add" id="sequenceAddBtn" type="button" aria-label="Add command">+</button>
       </div>
     </aside>
 
@@ -77,7 +64,7 @@
       <div class="panel-blur"></div>
       <div class="panel-content right-content">
         <div class="panel-top panel-top-center">
-          <button class="panel-title" type="button" aria-expanded="true">Status</button>
+          <button class="panel-title" type="button" aria-expanded="true">Drones</button>
         </div>
         <div class="status-list" id="statusList"></div>
       </div>
