@@ -31,6 +31,7 @@ let overlay, ctx;
 let drones = [];
 let groundStations = [];
 let waypointTargets = new Map(); // droneId -> { lat, lng, speedKmh }
+let orbitTargets = new Map(); // droneId -> { anchor, radiusM, cyclesPerHour, altitudeM, direction, approachSpeedKmh? }
 let groundControl;
 
 const COMMAND_OPTIONS = [
@@ -51,6 +52,9 @@ let hoveredDroneId = null;
 let pinnedDroneId = null;
 let lastPointer = null;
 let tooltipMode = "info"; // "info" | "commands" | "assign-team"
+let tooltipPinnedPos = null; // { left, top } when user drags the tooltip
+let tooltipPinnedForKey = null;
+let menuDragSuppressUntil = 0;
 let waypointMenuEl = null;
 let pendingWaypoint = null;
 let waypointCloseSuppressUntil = 0;
@@ -61,12 +65,24 @@ let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
 let pendingFollow = null;
+let relationMenuEl = null;
+let pendingRelation = null;
+let orbitMenuEl = null;
+let pendingOrbit = null;
+let orbitCloseSuppressUntil = 0;
+let orbitDroneId = null;
+let orbitTeamId = null;
+let orbitPreview = null; // { key, orbit }
 let longPressTimer = null;
 let longPressSuppressUntil = 0;
 let suppressMapClickUntil = 0;
+let suppressNextMapClick = false;
 let isMapDragging = false;
 let suppressStatusClickUntil = 0;
 let sequenceMenuEl = null;
+let sequenceSelected = { key: null, index: 0 };
+let sequencePlayingByKey = new Map(); // key -> boolean
+let sequenceActiveIndexByKey = new Map(); // key -> number (user-defined list index)
 let followTargets = new Map(); // followerId -> targetId
 let homeTargets = new Map(); // droneId -> stationId
 let teams = [];
@@ -77,6 +93,105 @@ function forceRedraw() {
   draw();
   requestAnimationFrame(draw);
   setTimeout(draw, 0);
+}
+
+function clearTooltipPinnedIfSelectionChanges(nextDroneId, nextTeamId) {
+  const prevKey = pinnedTeamId !== null ? `team:${pinnedTeamId}` : pinnedDroneId !== null ? `drone:${pinnedDroneId}` : null;
+  const nextKey = nextTeamId !== null ? `team:${nextTeamId}` : nextDroneId !== null ? `drone:${nextDroneId}` : null;
+  if (prevKey !== nextKey) {
+    tooltipPinnedPos = null;
+    tooltipPinnedForKey = null;
+  }
+}
+
+function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
+  if (!el) return;
+  const host = document.getElementById("app") || document.body;
+
+  // Avoid double-binding
+  if (el._dragBound) return;
+  el._dragBound = true;
+
+  const clampWithinHost = (left, top) => {
+    const hostRect = host.getBoundingClientRect();
+    const menuW = el.offsetWidth || 220;
+    const menuH = el.offsetHeight || 120;
+    const pad = 8;
+    const maxLeft = hostRect.width - menuW - pad;
+    const maxTop = hostRect.height - menuH - pad;
+    return {
+      left: Math.max(pad, Math.min(maxLeft, left)),
+      top: Math.max(pad, Math.min(maxTop, top)),
+    };
+  };
+
+  const isInteractive = (t) => {
+    if (!t || !(t instanceof Element)) return false;
+    return !!t.closest("button, input, select, textarea, a, label");
+  };
+
+  el.style.touchAction = "none";
+
+  el.addEventListener(
+    "pointerdown",
+    (ev) => {
+      if (handleSelector) {
+        const okHandle = ev.target instanceof Element && ev.target.closest(handleSelector);
+        if (!okHandle) return;
+      }
+      if (isInteractive(ev.target)) return;
+      if (typeof ev.button === "number" && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+
+      // If this menu was previously auto-positioned (e.g. status-member menu), stop re-anchoring after the user drags it.
+      if (el._reposition) {
+        el._dragged = true;
+        el._reposition = null;
+      }
+
+      const hostRect = host.getBoundingClientRect();
+      const rect = el.getBoundingClientRect();
+      const startLeft = rect.left - hostRect.left;
+      const startTop = rect.top - hostRect.top;
+      const start = { x: ev.clientX, y: ev.clientY, left: startLeft, top: startTop };
+
+      try {
+        el.setPointerCapture(ev.pointerId);
+      } catch {
+        // ignore
+      }
+
+      const move = (e) => {
+        if (e.pointerId !== ev.pointerId) return;
+        e.preventDefault();
+        const dx = (e.clientX ?? 0) - start.x;
+        const dy = (e.clientY ?? 0) - start.y;
+        const next = clampWithinHost(start.left + dx, start.top + dy);
+        el.style.left = `${next.left}px`;
+        el.style.top = `${next.top}px`;
+        if (typeof onMove === "function") onMove(next.left, next.top);
+      };
+
+      const up = (e) => {
+        if (e.pointerId !== ev.pointerId) return;
+        try {
+          el.releasePointerCapture(ev.pointerId);
+        } catch {
+          // ignore
+        }
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("pointercancel", up, true);
+        menuDragSuppressUntil = performance.now() + 250;
+      };
+
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", up, true);
+    },
+    true
+  );
 }
 
 function focusTeamView(team) {
@@ -351,6 +466,12 @@ class GroundControl {
   }
 }
 
+function appendPlannedForKey(key, command) {
+  if (!groundControl || !key || !command) return;
+  groundControl.appendPlanned(key, command);
+  updateCommandSequencePanel();
+}
+
 // Smoothstep/sigmoid helpers for zoom interpolation
 function clamp01(t) {
   return Math.max(0, Math.min(1, t));
@@ -565,12 +686,17 @@ function scrollTeamIntoView(teamId) {
 }
 
 function setPinnedDrone(id) {
+  const nextTeam = getTeamForDrone(id);
+  const nextTeamId = nextTeam ? nextTeam.id : null;
+  const nextDroneId = nextTeam ? null : id;
+  clearTooltipPinnedIfSelectionChanges(nextDroneId, nextTeamId);
   const team = getTeamForDrone(id);
   pinnedTeamId = team ? team.id : null;
   pinnedDroneId = team ? null : id;
   hoveredDroneId = id;
   tooltipMode = "info";
   closeSequenceMenu();
+  closeOrbitMenu(false, true);
   // Only close waypoint menu if selecting a different drone; keep it if it's for the same drone.
   if (waypointDroneId === null || waypointDroneId !== id) {
     closeWaypointMenu();
@@ -589,11 +715,13 @@ function setPinnedDrone(id) {
 }
 
 function setPinnedTeam(id, suppressTooltip = false) {
+  clearTooltipPinnedIfSelectionChanges(null, id);
   pinnedTeamId = id;
   pinnedDroneId = null;
   hoveredDroneId = null;
   tooltipMode = "info";
   closeSequenceMenu();
+  closeOrbitMenu(false, true);
   closeWaypointMenu();
   closeFollowMenu(false);
   closeHomeMenu(false);
@@ -690,6 +818,134 @@ function findNearestWaypoint(containerPoint, maxDist = 14) {
   return best;
 }
 
+function metersToPixelsAtLatLng(lat, lng, meters) {
+  if (!map) return 0;
+  const latNum = Number(lat);
+  const lngNum = Number(lng);
+  const m = Number(meters);
+  if (!isFinite(latNum) || !isFinite(lngNum) || !isFinite(m) || m <= 0) return 0;
+  const metersPerDegLng = 111320 * Math.cos((latNum * Math.PI) / 180);
+  if (!isFinite(metersPerDegLng) || metersPerDegLng === 0) return 0;
+  const dLng = m / metersPerDegLng;
+  const a = map.latLngToContainerPoint([latNum, lngNum]);
+  const b = map.latLngToContainerPoint([latNum, lngNum + dLng]);
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function resolveOrbitCenter(anchor) {
+  if (!anchor) return null;
+  if (anchor.type === "wp") return { lat: anchor.lat, lng: anchor.lng };
+  if (anchor.type === "home") {
+    const gs = groundStations.find((g) => g.id === anchor.stationId);
+    if (gs) return { lat: gs.lat, lng: gs.lng };
+  }
+  if (anchor.type === "drone") {
+    const d = getDroneById(anchor.targetId);
+    const l = d && d.getLatest && d.getLatest();
+    if (l) return { lat: l.lat, lng: l.lng };
+  }
+  return null;
+}
+
+function drawOrbitVisualization(centerLatLng, radiusM, direction, fromLatLng = null) {
+  if (!ctx || !map || !centerLatLng) return;
+  const cxcy = latLngToScreen(centerLatLng.lat, centerLatLng.lng);
+  const rPx = metersToPixelsAtLatLng(centerLatLng.lat, centerLatLng.lng, radiusM);
+  if (!isFinite(rPx) || rPx < 6) return;
+
+  const stroke = SETTINGS.SELECTION_GLOW_COLOR || "rgba(120,220,255,1.0)";
+
+  // Approach line (from current selected entity to the orbit circle)
+  if (fromLatLng && isFinite(fromLatLng.lat) && isFinite(fromLatLng.lng)) {
+    const fromP = latLngToScreen(fromLatLng.lat, fromLatLng.lng);
+    const dx = fromP.x - cxcy.x;
+    const dy = fromP.y - cxcy.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 2) {
+      const ux = dx / len;
+      const uy = dy / len;
+      const targetX = cxcy.x + ux * rPx;
+      const targetY = cxcy.y + uy * rPx;
+      const segLen = Math.hypot(targetX - fromP.x, targetY - fromP.y);
+      if (segLen > 6) {
+        ctx.save();
+        ctx.setLineDash([6, 6]);
+        ctx.lineWidth = 1.6;
+        ctx.strokeStyle = "rgba(255,255,255,0.65)";
+        ctx.beginPath();
+        ctx.moveTo(fromP.x, fromP.y);
+        ctx.lineTo(targetX, targetY);
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+
+  // Center mark
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.arc(cxcy.x, cxcy.y, 4.5, 0, Math.PI * 2);
+  ctx.fillStyle = stroke;
+  ctx.shadowColor = stroke;
+  ctx.shadowBlur = 10;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.stroke();
+  ctx.restore();
+
+  // Radius circle
+  ctx.save();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2.0;
+  ctx.strokeStyle = "rgba(120,220,255,0.55)";
+  ctx.beginPath();
+  ctx.arc(cxcy.x, cxcy.y, rPx, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // Direction arc + arrowhead
+  const span = Math.PI / 2.8;
+  const base = -Math.PI / 2; // start near top
+  const start = base - span / 2;
+  const end = base + span / 2;
+  const ccw = direction === "CCW";
+
+  ctx.setLineDash([8, 6]);
+  ctx.lineWidth = 2.2;
+  ctx.strokeStyle = "rgba(120,220,255,0.85)";
+  ctx.beginPath();
+  ctx.arc(cxcy.x, cxcy.y, rPx, start, end, ccw);
+  ctx.stroke();
+
+  const arrowAngle = ccw ? start : end;
+  const tipX = cxcy.x + rPx * Math.cos(arrowAngle);
+  const tipY = cxcy.y + rPx * Math.sin(arrowAngle);
+  const tangent = ccw ? arrowAngle - Math.PI / 2 : arrowAngle + Math.PI / 2;
+  const ux = Math.cos(tangent);
+  const uy = Math.sin(tangent);
+  const arrowLen = 10;
+  const back = 8;
+  const baseX = tipX - ux * back;
+  const baseY = tipY - uy * back;
+  const perpX = -uy;
+  const perpY = ux;
+
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(baseX + perpX * (arrowLen * 0.35), baseY + perpY * (arrowLen * 0.35));
+  ctx.lineTo(baseX - perpX * (arrowLen * 0.35), baseY - perpY * (arrowLen * 0.35));
+  ctx.closePath();
+  ctx.fillStyle = stroke;
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 1.1;
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
 function renderCommandList() {
   const host = document.getElementById("commandList");
   if (!host) return;
@@ -720,6 +976,154 @@ function getSelectedEntity() {
 function getSelectionKey(sel) {
   if (!sel) return null;
   return sel.type === "team" ? `team:${sel.id}` : `drone:${sel.id}`;
+}
+
+function setSequenceSelection(key, index) {
+  sequenceSelected = { key, index: Math.max(0, index | 0) };
+}
+
+function getSequenceActiveIndex(key) {
+  const v = sequenceActiveIndexByKey.get(key);
+  return Number.isFinite(v) ? v : 0;
+}
+
+function setSequenceActiveIndex(key, index) {
+  if (!key) return;
+  sequenceActiveIndexByKey.set(key, Math.max(0, index | 0));
+  updateCommandSequencePanel();
+}
+
+function isSequencePlaying(key) {
+  return !!(key && sequencePlayingByKey.get(key));
+}
+
+function setSequencePlaying(key, playing) {
+  if (!key) return;
+  sequencePlayingByKey.set(key, !!playing);
+  updateCommandSequencePanel();
+}
+
+function updateSequenceTransport(key) {
+  const playBtn = document.getElementById("seqPlayBtn");
+  if (!playBtn) return;
+  const canControl = !!key;
+  playBtn.disabled = !canControl;
+  playBtn.style.opacity = canControl ? "1" : "0.45";
+  const playing = canControl && isSequencePlaying(key);
+  playBtn.dataset.state = playing ? "pause" : "play";
+  playBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
+}
+
+function getClosestHomeForSelection(sel) {
+  if (!sel || !groundStations || groundStations.length === 0) return null;
+  const latest = sel.latest;
+  if (!latest) return null;
+  let bestId = null;
+  let bestDist = Infinity;
+  groundStations.forEach((gs) => {
+    const dist = haversine2dMeters(latest.lat, latest.lng, gs.lat, gs.lng);
+    if (isFinite(dist) && dist < bestDist) {
+      bestDist = dist;
+      bestId = gs.id;
+    }
+  });
+  return bestId;
+}
+
+function executeSelectedSequenceCommand() {
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key) return;
+
+  const planned = groundControl ? groundControl.getPlanned(key) : [];
+  if (!planned.length) return;
+
+  const idx = sequenceSelected.key === key ? sequenceSelected.index : getSequenceActiveIndex(key);
+  const bounded = Math.max(0, Math.min(planned.length - 1, idx | 0));
+  const cmd = planned[bounded];
+  if (!cmd || cmd === "Idle") return;
+
+  // Commands that require additional context (target/waypoint) are not runnable from sequence yet.
+  if (
+    cmd === "Goto waypoint" ||
+    cmd.startsWith("Goto waypoint") ||
+    cmd === "Follow drone" ||
+    cmd.startsWith("Follow drone") ||
+    cmd === "Search target" ||
+    cmd === "Attack target" ||
+    cmd === "Boid group"
+  ) {
+    window.alert(`"${cmd}" needs additional context and can't be executed from the sequence yet.`);
+    return;
+  }
+
+  // Mark the played item (order does not change; only the marker moves).
+  setSequenceActiveIndex(key, bounded);
+  setSequencePlaying(key, true);
+
+  // Map command label to behavior.
+    const runLocal = (c) => {
+      if (sel.type === "team") {
+        const team = getTeamById(sel.id);
+        if (team) issueTeamCommand(team, c, { fromSequence: true });
+      } else {
+        const d = getDroneById(sel.id);
+        if (d) issueLocalCommand(d, c, { fromSequence: true });
+      }
+    };
+
+  if (["Arm", "Disarm", "Takeoff", "Land", "Hold position"].includes(cmd)) {
+    runLocal(cmd);
+    return;
+  }
+
+  if (cmd === "Return to Home" || cmd.startsWith("Return home")) {
+    const homeId = getClosestHomeForSelection(sel);
+    if (homeId === null) return;
+    if (sel.type === "team") issueReturnHome({ teamId: sel.id, stationId: homeId, mode: "land" }, { fromSequence: true });
+    else issueReturnHome({ droneId: sel.id, stationId: homeId, mode: "land" }, { fromSequence: true });
+    return;
+  }
+}
+
+function issueHoldPositionNoSequenceChangeSingle(droneId) {
+  const drone = getDroneById(droneId);
+  if (!drone) return;
+  const latest = drone.getLatest && drone.getLatest();
+  if (!latest) return;
+  // Keep altitude; just switch command.
+  const next = { ...latest, command: "Hold position", uptimeSec: latest.uptimeSec + 0.01 };
+  drone.updateTelemetry(next);
+  if (groundControl) groundControl.assignMission(drone.id, "Hold position");
+}
+
+function pauseSelectedEntity() {
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel) return;
+  if (key) setSequencePlaying(key, false);
+  const inAir = isInAir(sel.latest);
+  if (!inAir) return;
+  if (sel.type === "team") {
+    const team = getTeamById(sel.id);
+    if (team) {
+      [...team.members].forEach((id) => issueHoldPositionNoSequenceChangeSingle(id));
+      // Keep planned sequence as-is on pause.
+      tooltipMode = "info";
+      updateStatusList();
+      updateCommandSequencePanel();
+      updateTooltip();
+      draw();
+    }
+  } else {
+    issueHoldPositionNoSequenceChangeSingle(sel.id);
+    // Keep planned sequence as-is on pause.
+    tooltipMode = "info";
+    updateStatusList();
+    updateCommandSequencePanel();
+    updateTooltip();
+    draw();
+  }
 }
 
 function closeSequenceMenu() {
@@ -761,6 +1165,7 @@ function openSequenceMenu(anchorEl) {
   `;
   sequenceMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
   host.appendChild(sequenceMenuEl);
+  enableMenuDrag(sequenceMenuEl);
 
   const hostRect = host.getBoundingClientRect();
   const aRect = anchorEl.getBoundingClientRect();
@@ -792,7 +1197,8 @@ function openSequenceMenu(anchorEl) {
 function updateCommandSequencePanel() {
   const list = document.getElementById("sequenceList");
   const addBtn = document.getElementById("sequenceAddBtn");
-  if (!list || !addBtn) return;
+  const playBtn = document.getElementById("seqPlayBtn");
+  if (!list || !addBtn || !playBtn) return;
 
   const sel = getSelectedEntity();
   const key = getSelectionKey(sel);
@@ -801,6 +1207,7 @@ function updateCommandSequencePanel() {
   if (!sel || !key) {
     addBtn.disabled = true;
     addBtn.style.opacity = "0.45";
+    updateSequenceTransport(null);
     const empty = document.createElement("div");
     empty.className = "sequence-empty";
     empty.textContent = "Select a drone or team to view/edit its command sequence.";
@@ -811,34 +1218,85 @@ function updateCommandSequencePanel() {
   addBtn.disabled = false;
   addBtn.style.opacity = "1";
 
-  const current = (sel.latest && sel.latest.command) || "Idle";
   const planned = groundControl ? groundControl.getPlanned(key) : [];
-  const queue = planned.filter((c) => c && c !== current);
+  updateSequenceTransport(planned.length ? key : null);
 
-  const makeItem = (label, meta, active) => {
+  const currentCmdRaw = (sel.latest && sel.latest.command) || "Idle";
+  const currentRow = document.createElement("div");
+  currentRow.className = "sequence-item sequence-current";
+  currentRow.style.cursor = "default";
+  const currentLeft = document.createElement("div");
+  currentLeft.textContent = `Current: ${currentCmdRaw}`;
+  const currentRight = document.createElement("div");
+  currentRight.className = "seq-meta";
+  currentRow.appendChild(currentLeft);
+  currentRow.appendChild(currentRight);
+  list.appendChild(currentRow);
+
+  const activeIndex = Math.max(0, Math.min(planned.length ? planned.length - 1 : 0, getSequenceActiveIndex(key)));
+  const playing = isSequencePlaying(key);
+
+  const makeItem = (label, active) => {
     const row = document.createElement("div");
     row.className = `sequence-item${active ? " is-active" : ""}`;
     const left = document.createElement("div");
     left.textContent = label;
     const right = document.createElement("div");
     right.className = "seq-meta";
-    right.textContent = meta;
     row.appendChild(left);
     row.appendChild(right);
     return row;
   };
 
-  list.appendChild(makeItem(current, "Now", true));
-  if (!queue.length) {
+  if (!planned.length) {
     const empty = document.createElement("div");
     empty.className = "sequence-empty";
-    empty.textContent = "No queued commands. Use + to append the next command.";
+    empty.textContent = "No commands yet. Use + to append the first command.";
     list.appendChild(empty);
     return;
   }
 
-  queue.forEach((cmd, idx) => {
-    list.appendChild(makeItem(cmd, idx === 0 ? "Next" : `#${idx + 2}`, false));
+  // Keep selection per entity; default to active command when switching entities.
+  if (sequenceSelected.key !== key) {
+    setSequenceSelection(key, activeIndex);
+  }
+
+  planned.forEach((cmd, idx) => {
+    const isActive = idx === activeIndex;
+    const row = makeItem(cmd, isActive);
+    row.dataset.seqIndex = String(idx);
+    row.dataset.seqCmd = cmd;
+    row.classList.toggle("is-selected", sequenceSelected.index === idx);
+    row.style.cursor = "pointer";
+
+    const right = row.querySelector(".seq-meta");
+    if (right) {
+      if (isActive) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = `seq-mini ${playing ? "pause" : "play"}`;
+        btn.setAttribute("aria-label", playing ? "Pause" : "Play");
+        btn.addEventListener("click", (e) => {
+          e.stopPropagation();
+          if (isSequencePlaying(key)) {
+            pauseSelectedEntity();
+          } else {
+            setSequenceSelection(key, idx);
+            executeSelectedSequenceCommand();
+          }
+        });
+        right.appendChild(btn);
+      } else {
+        right.textContent = `#${idx + 1}`;
+      }
+    }
+
+    row.addEventListener("click", () => {
+      setSequenceSelection(key, idx);
+      updateCommandSequencePanel();
+    });
+
+    list.appendChild(row);
   });
 }
 
@@ -1069,13 +1527,23 @@ function ensureTooltipEl() {
   el.style.display = "none";
   host.appendChild(el);
   tooltipEl = el;
+  enableMenuDrag(tooltipEl, {
+    onMove: (left, top) => {
+      const sel = getSelectedEntity();
+      const key = getSelectionKey(sel);
+      if (key && (pinnedDroneId !== null || pinnedTeamId !== null)) {
+        tooltipPinnedPos = { left, top };
+        tooltipPinnedForKey = key;
+      }
+    },
+  });
   return tooltipEl;
 }
 
 function updateTooltip() {
   if (!map) return;
   // If a relative menu (e.g., Goto WP) is open, keep the drone tooltip hidden.
-  if (waypointMenuEl || followMenuEl || homeMenuEl || performance.now() < tooltipSuppressUntil) {
+  if (waypointMenuEl || followMenuEl || homeMenuEl || relationMenuEl || orbitMenuEl || performance.now() < tooltipSuppressUntil) {
     if (tooltipEl) tooltipEl.style.display = "none";
     return;
   }
@@ -1103,9 +1571,20 @@ function updateTooltip() {
     return;
   }
 
-  const pt = map.latLngToContainerPoint([latest.lat, latest.lng]);
-  el.style.left = `${pt.x + 14}px`;
-  el.style.top = `${pt.y - 10}px`;
+  const selKey = getSelectionKey(getSelectedEntity());
+  const canPin = (pinnedDroneId !== null || pinnedTeamId !== null) && selKey;
+  if (canPin && tooltipPinnedPos && tooltipPinnedForKey === selKey) {
+    el.style.left = `${tooltipPinnedPos.left}px`;
+    el.style.top = `${tooltipPinnedPos.top}px`;
+  } else {
+    const pt = map.latLngToContainerPoint([latest.lat, latest.lng]);
+    el.style.left = `${pt.x + 14}px`;
+    el.style.top = `${pt.y - 10}px`;
+    if (!canPin) {
+      tooltipPinnedPos = null;
+      tooltipPinnedForKey = null;
+    }
+  }
   el.style.display = "block";
 
   const isTeam = !!target.team;
@@ -1233,6 +1712,7 @@ function updateTooltip() {
 
   el.onclick = (e) => {
     e.stopPropagation();
+    if (performance.now() < menuDragSuppressUntil) return;
     tooltipMode = "commands";
     updateTooltip();
   };
@@ -1305,6 +1785,7 @@ function setupHoverHandlers() {
       longPressPointerId = null;
       longPressStartClient = null;
       attemptActionLongPress(point);
+      suppressNextMapClick = true;
       longPressSuppressUntil = performance.now() + 500;
     }, 220);
   };
@@ -1340,8 +1821,19 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  // A completed long-press should not also trigger a click action when the finger/mouse is released.
+  if (suppressNextMapClick) {
+    suppressNextMapClick = false;
+    return;
+  }
   if (performance.now() < longPressSuppressUntil) return;
+  // If an orbit menu is open, a plain click should only close it (no re-open elsewhere).
+  if (orbitMenuEl) {
+    closeOrbitMenu(true);
+    return;
+  }
   closeSequenceMenu();
+  closeRelationMenu(false);
   const hitWp = findNearestWaypoint(e.containerPoint, 16);
   const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius());
@@ -1365,13 +1857,6 @@ function handleMapClick(e) {
   }
 
   if (nearest) {
-    if (pinnedDroneId !== null && pinnedDroneId !== nearest.id) {
-      // With a selected drone, single-click another drone to open Follow menu.
-      closeWaypointMenu(false, true);
-      closeHomeMenu(false);
-      openFollowMenu(nearest.id, e.containerPoint);
-      return;
-    }
     closeWaypointMenu();
     setPinnedDrone(nearest.id);
     return;
@@ -1446,7 +1931,7 @@ function getLocalCommands(droneOrTeam, latest) {
   return cmds;
 }
 
-function issueLocalCommand(drone, cmd) {
+function issueLocalCommand(drone, cmd, options = {}) {
   const latest = drone && drone.getLatest && drone.getLatest();
   if (!latest) return;
   const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
@@ -1473,38 +1958,53 @@ function issueLocalCommand(drone, cmd) {
   // Changing mission clears any stored waypoint visuals for this drone.
   waypointTargets.delete(drone.id);
   followTargets.delete(drone.id);
+  homeTargets.delete(drone.id);
+  orbitTargets.delete(drone.id);
 
   drone.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
-  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
+  if (!options.fromSequence) {
+    const key = options.selectionKey || `drone:${drone.id}`;
+    appendPlannedForKey(key, cmd);
+  }
   tooltipMode = "info";
   updateStatusList();
-  updateCommandSequencePanel();
   updateTooltip();
   draw();
 }
 
-function issueTeamCommand(team, cmd) {
+function issueTeamCommand(team, cmd, options = {}) {
   if (!team) return;
+  // Apply to each member but record in the team's sequence once.
   [...team.members].forEach((id) => {
     const d = getDroneById(id);
-    if (d) issueLocalCommand(d, cmd);
+    if (d) issueLocalCommand(d, cmd, { ...options, fromSequence: true, selectionKey: `drone:${d.id}` });
   });
-  if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
+  if (!options.fromSequence) {
+    const key = options.selectionKey || `team:${team.id}`;
+    appendPlannedForKey(key, cmd);
+  }
   setPinnedTeam(team.id);
 }
 
-function issueGotoWaypointSingle(drone, wp) {
+function issueGotoWaypointSingle(drone, wp, options = {}) {
   if (!drone || !wp) return;
   const latest = drone.getLatest && drone.getLatest();
   if (!latest) return;
   const speed = Math.max(10, Math.min(100, Math.round(wp.speedKmh || 60)));
-  const cmd = `Goto waypoint (spd ${speed} km/h)`;
-  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
+  const alt = Math.max(5, Math.min(100, Math.round(wp.altM ?? 30)));
+  const cmd = `Goto waypoint (spd ${speed} km/h, alt ${alt} m)`;
+  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01, alt };
   drone.updateTelemetry(next);
-  waypointTargets.set(drone.id, { lat: wp.lat, lng: wp.lng, speedKmh: speed });
+  waypointTargets.set(drone.id, { lat: wp.lat, lng: wp.lng, speedKmh: speed, altM: alt });
+  followTargets.delete(drone.id);
+  homeTargets.delete(drone.id);
+  orbitTargets.delete(drone.id);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
-  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
+  if (!options.fromSequence) {
+    const key = options.selectionKey || `drone:${drone.id}`;
+    appendPlannedForKey(key, cmd);
+  }
 }
 
 function issueGotoWaypoint(drone, wp) {
@@ -1525,7 +2025,7 @@ function issueGotoWaypoint(drone, wp) {
   draw();
 }
 
-function issueReturnHomeSingle(droneId, stationId, mode = "land") {
+function issueReturnHomeSingle(droneId, stationId, mode = "land", options = {}) {
   const drone = getDroneById(droneId);
   if (!drone) return;
   const latest = drone.getLatest && drone.getLatest();
@@ -1534,21 +2034,33 @@ function issueReturnHomeSingle(droneId, stationId, mode = "land") {
   const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
   drone.updateTelemetry(next);
   if (groundControl) groundControl.assignMission(drone.id, cmd);
-  if (groundControl) groundControl.clearPlanned(`drone:${drone.id}`);
+  if (!options.fromSequence) {
+    const key = options.selectionKey || `drone:${drone.id}`;
+    const label = `Return home #${stationId + 1} (${mode})`;
+    appendPlannedForKey(key, label);
+  }
   homeTargets.set(drone.id, stationId);
+  waypointTargets.delete(drone.id);
+  followTargets.delete(drone.id);
+  orbitTargets.delete(drone.id);
 }
 
-function issueReturnHome(payload) {
+function issueReturnHome(payload, options = {}) {
   if (!payload) return;
   const mode = payload.mode === "hover" ? "hover" : "land";
   if (payload.teamId !== undefined && payload.teamId !== null) {
     const team = getTeamById(payload.teamId);
     if (team) {
-      [...team.members].forEach((id) => issueReturnHomeSingle(id, payload.stationId, mode));
-      if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
+      [...team.members].forEach((id) =>
+        issueReturnHomeSingle(id, payload.stationId, mode, { ...options, fromSequence: true, selectionKey: `drone:${id}` })
+      );
+      if (!options.fromSequence) {
+        const key = options.selectionKey || `team:${team.id}`;
+        appendPlannedForKey(key, `Return home #${payload.stationId + 1} (${mode})`);
+      }
     }
   } else if (payload.droneId !== undefined && payload.droneId !== null) {
-    issueReturnHomeSingle(payload.droneId, payload.stationId, mode);
+    issueReturnHomeSingle(payload.droneId, payload.stationId, mode, options);
   }
   closeHomeMenu();
   tooltipMode = "info";
@@ -1590,12 +2102,325 @@ function closeWaypointMenu(suppressNextOpen = false, keepSelection = false) {
   }
 }
 
+function closeOrbitMenu(suppressNextOpen = false, keepSelection = false) {
+  const hadMenu = !!orbitMenuEl;
+  if (orbitMenuEl && orbitMenuEl.parentNode) {
+    orbitMenuEl.parentNode.removeChild(orbitMenuEl);
+  }
+  orbitMenuEl = null;
+  pendingOrbit = null;
+  orbitPreview = null;
+  orbitDroneId = null;
+  orbitTeamId = null;
+  closeSequenceMenu();
+  document.removeEventListener("pointerdown", handleOrbitOutsideClick, true);
+  hoveredDroneId = null;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  if (hadMenu && !keepSelection) {
+    pinnedDroneId = null;
+    pinnedTeamId = null;
+    updateCommandSequencePanel();
+  }
+  if (suppressNextOpen) {
+    const now = performance.now();
+    orbitCloseSuppressUntil = now + 550;
+    tooltipSuppressUntil = now + 550;
+  }
+}
+
 function closeFollowMenu(suppress = true) {
   if (followMenuEl && followMenuEl.parentNode) {
     followMenuEl.parentNode.removeChild(followMenuEl);
   }
   followMenuEl = null;
   pendingFollow = null;
+  if (suppress) {
+    tooltipSuppressUntil = performance.now() + 400;
+  }
+}
+
+function handleOrbitOutsideClick(e) {
+  if (!orbitMenuEl) return;
+  if (orbitMenuEl.contains(e.target)) return;
+  closeOrbitMenu(true);
+}
+
+function openOrbitMenu(anchor, containerPoint) {
+  if (!map) return;
+  if (!anchor || !containerPoint) return;
+
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key) return;
+  if (performance.now() < orbitCloseSuppressUntil) return;
+
+  tooltipMode = "info";
+  tooltipSuppressUntil = performance.now() + 550;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  closeWaypointMenu(false, true);
+  closeFollowMenu(false);
+  closeHomeMenu(false);
+  closeRelationMenu(false);
+
+  const selectedTeam = sel.type === "team" ? getTeamById(sel.id) : null;
+  const drone = sel.type === "drone" ? getDroneById(sel.id) : null;
+  if (!selectedTeam && !drone) return;
+
+  orbitTeamId = selectedTeam ? selectedTeam.id : null;
+  orbitDroneId = selectedTeam ? null : drone.id;
+  if (orbitTeamId !== null) {
+    pinnedTeamId = orbitTeamId;
+    pinnedDroneId = null;
+  } else {
+    pinnedDroneId = orbitDroneId;
+    pinnedTeamId = null;
+  }
+
+  const resolveCenterLatLng = () => {
+    if (anchor.type === "wp") return { lat: anchor.lat, lng: anchor.lng };
+    if (anchor.type === "home") {
+      const gs = groundStations.find((g) => g.id === anchor.stationId);
+      if (gs) return { lat: gs.lat, lng: gs.lng };
+    }
+    if (anchor.type === "drone") {
+      const d = getDroneById(anchor.targetId);
+      const l = d && d.getLatest && d.getLatest();
+      if (l) return { lat: l.lat, lng: l.lng };
+    }
+    return null;
+  };
+
+  const center = resolveCenterLatLng();
+  if (!center) return;
+
+  const altNow = Number(sel.latest && sel.latest.alt);
+  pendingOrbit = {
+    ...(orbitTeamId !== null ? { teamId: orbitTeamId } : { droneId: orbitDroneId }),
+    anchor,
+    approachSpeedKmh: 60,
+    radiusM: 500,
+    cyclesPerHour: 12,
+    altitudeM: isFinite(altNow) ? Math.max(0, Math.round(altNow)) : 30,
+    direction: "CW",
+  };
+  orbitPreview = { key, orbit: pendingOrbit };
+
+  const distKm = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng) / 1000;
+  const distLabel = isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Orbit";
+  const formatEta = (km, speed) => {
+    if (!isFinite(km) || !isFinite(speed) || speed <= 0) return "";
+    const totalSec = (km / speed) * 3600;
+    const m = Math.floor(totalSec / 60);
+    const s = Math.max(0, Math.round(totalSec - m * 60));
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  };
+  const etaLabel = formatEta(distKm, pendingOrbit.approachSpeedKmh);
+
+  const host = document.getElementById("app") || document.body;
+  if (orbitMenuEl && orbitMenuEl.parentNode) {
+    orbitMenuEl.parentNode.removeChild(orbitMenuEl);
+  }
+  orbitMenuEl = document.createElement("div");
+  orbitMenuEl.className = "relative-menu";
+  orbitMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  host.appendChild(orbitMenuEl);
+  enableMenuDrag(orbitMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  orbitMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  orbitMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const aroundLabel =
+    anchor.type === "home"
+      ? `Home #${anchor.stationId + 1}`
+      : anchor.type === "drone"
+        ? `Drone #${anchor.targetId + 1}`
+        : "Waypoint";
+
+  const showApproachSpeed = anchor.type === "wp" || anchor.type === "home";
+
+  orbitMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>${distLabel}</h4>
+      <span class="menu-eta">${etaLabel}</span>
+    </div>
+    <div class="label" style="margin-top:2px;">Orbit around</div>
+    <div style="font-weight:800; letter-spacing:0.06em; opacity:0.9;">${aroundLabel}</div>
+    ${showApproachSpeed ? `
+      <div class="label" style="margin-top:10px;">Approach speed</div>
+      <div class="speed-row">
+        <input type="range" min="10" max="100" value="${pendingOrbit.approachSpeedKmh}" step="1" data-orbit-approach>
+        <span data-orbit-approach-label>${pendingOrbit.approachSpeedKmh} km/h</span>
+      </div>
+    ` : ""}
+    <div class="label" style="margin-top:10px;">Radius</div>
+    <div class="speed-row">
+      <input type="range" min="10" max="1000" value="${pendingOrbit.radiusM}" step="10" data-orbit-radius>
+      <span data-orbit-radius-label>${pendingOrbit.radiusM} m</span>
+    </div>
+    <div class="label" style="margin-top:10px;">Cycles / hour</div>
+    <div class="speed-row">
+      <input type="range" min="1" max="60" value="${pendingOrbit.cyclesPerHour}" step="1" data-orbit-cycles>
+      <span data-orbit-cycles-label>${pendingOrbit.cyclesPerHour} cyc/h</span>
+    </div>
+    <div class="label" style="margin-top:10px;">Altitude</div>
+    <div class="speed-row">
+      <input type="range" min="0" max="200" value="${pendingOrbit.altitudeM}" step="1" data-orbit-alt>
+      <span data-orbit-alt-label>${pendingOrbit.altitudeM} m</span>
+    </div>
+    <div class="label" style="margin-top:10px;">Direction</div>
+    <div class="segmented">
+      <button type="button" class="seg-btn is-active" data-orbit-dir="CW">CW</button>
+      <button type="button" class="seg-btn" data-orbit-dir="CCW">CCW</button>
+    </div>
+    <button class="cmd-chip cmd-action" type="button" data-action="orbit-add" style="margin-top:10px;">Add Orbit</button>
+  `;
+
+  const setLbl = (selQ, text) => {
+    const el = orbitMenuEl.querySelector(selQ);
+    if (el) el.textContent = text;
+  };
+
+  const updateEta = () => {
+    const eta = orbitMenuEl.querySelector(".menu-eta");
+    if (!eta) return;
+    const center2 = resolveCenterLatLng();
+    if (!center2) return;
+    const latest = getSelectedEntity()?.latest;
+    if (!latest) return;
+    const km = haversine2dMeters(latest.lat, latest.lng, center2.lat, center2.lng) / 1000;
+    eta.textContent = showApproachSpeed ? formatEta(km, pendingOrbit.approachSpeedKmh) : "";
+  };
+
+  const approach = orbitMenuEl.querySelector("[data-orbit-approach]");
+  if (approach) {
+    approach.addEventListener("input", (e) => {
+      const v = Math.max(10, Math.min(100, Number(e.target.value) || 60));
+      pendingOrbit.approachSpeedKmh = Math.round(v);
+      setLbl("[data-orbit-approach-label]", `${pendingOrbit.approachSpeedKmh} km/h`);
+      updateEta();
+      orbitPreview = { key, orbit: pendingOrbit };
+      draw();
+    });
+  }
+
+  const radius = orbitMenuEl.querySelector("[data-orbit-radius]");
+  if (radius) {
+    radius.addEventListener("input", (e) => {
+      const v = Math.max(10, Math.min(1000, Number(e.target.value) || 80));
+      pendingOrbit.radiusM = Math.round(v / 10) * 10;
+      setLbl("[data-orbit-radius-label]", `${pendingOrbit.radiusM} m`);
+      orbitPreview = { key, orbit: pendingOrbit };
+      draw();
+    });
+  }
+
+  const cycles = orbitMenuEl.querySelector("[data-orbit-cycles]");
+  if (cycles) {
+    cycles.addEventListener("input", (e) => {
+      const v = Math.max(1, Math.min(60, Number(e.target.value) || 12));
+      pendingOrbit.cyclesPerHour = Math.round(v);
+      setLbl("[data-orbit-cycles-label]", `${pendingOrbit.cyclesPerHour} cyc/h`);
+      orbitPreview = { key, orbit: pendingOrbit };
+      draw();
+    });
+  }
+
+  const alt = orbitMenuEl.querySelector("[data-orbit-alt]");
+  if (alt) {
+    alt.addEventListener("input", (e) => {
+      const v = Math.max(0, Math.min(200, Number(e.target.value) || 0));
+      pendingOrbit.altitudeM = Math.round(v);
+      setLbl("[data-orbit-alt-label]", `${pendingOrbit.altitudeM} m`);
+      orbitPreview = { key, orbit: pendingOrbit };
+      draw();
+    });
+  }
+
+  orbitMenuEl.querySelectorAll("[data-orbit-dir]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const dir = btn.dataset.orbitDir === "CCW" ? "CCW" : "CW";
+      pendingOrbit.direction = dir;
+      orbitMenuEl.querySelectorAll("[data-orbit-dir]").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      orbitPreview = { key, orbit: pendingOrbit };
+      draw();
+    });
+  });
+
+  const add = orbitMenuEl.querySelector("[data-action='orbit-add']");
+  if (add) {
+    add.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingOrbit || !groundControl) return;
+      const sel2 = getSelectedEntity();
+      const key2 = getSelectionKey(sel2);
+      if (!key2) return;
+      addOrbitToSequence(key2, pendingOrbit);
+      closeOrbitMenu();
+      tooltipMode = "info";
+      pinnedDroneId = null;
+      pinnedTeamId = null;
+      hoveredDroneId = null;
+      tooltipSuppressUntil = performance.now() + 1200;
+      if (tooltipEl) tooltipEl.style.display = "none";
+      updateStatusList();
+      updateCommandSequencePanel();
+      updateTooltip();
+      draw();
+    });
+  }
+
+  document.addEventListener("pointerdown", handleOrbitOutsideClick, true);
+}
+
+function addOrbitToSequence(key, orbit) {
+  if (!key || !orbit || !groundControl) return;
+  const a = orbit.anchor;
+  if (!a || !a.type) return;
+
+  const speed = Math.max(10, Math.min(100, Math.round(orbit.approachSpeedKmh || 60)));
+  const radius = Math.max(10, Math.min(1000, Math.round(orbit.radiusM || 80)));
+  const cycles = Math.max(1, Math.min(60, Math.round(orbit.cyclesPerHour || 12)));
+  const alt = Math.max(0, Math.min(200, Math.round(orbit.altitudeM || 0)));
+  const dir = orbit.direction === "CCW" ? "CCW" : "CW";
+
+  let pre = "Goto waypoint";
+  let around = "Waypoint";
+  if (a.type === "home") {
+    pre = `Goto home #${a.stationId + 1} (spd ${speed} km/h)`;
+    around = `Home #${a.stationId + 1}`;
+  } else if (a.type === "drone") {
+    pre = `Follow drone #${a.targetId + 1}`;
+    around = `Drone #${a.targetId + 1}`;
+  } else {
+    pre = `Goto waypoint (spd ${speed} km/h)`;
+    around = "Waypoint";
+  }
+
+  const orbitCmd = `Orbit (around ${around}, r ${radius} m, alt ${alt} m, ${cycles} cyc/h, ${dir})`;
+  groundControl.appendPlanned(key, pre);
+  groundControl.appendPlanned(key, orbitCmd);
+
+  // Persist a lightweight visualization for the selected entity so it appears when selected.
+  const spec = { anchor: a, radiusM: radius, cyclesPerHour: cycles, altitudeM: alt, direction: dir, approachSpeedKmh: speed };
+  if (key.startsWith("team:")) {
+    const teamId = Number(key.slice("team:".length));
+    const team = getTeamById(teamId);
+    if (team) [...team.members].forEach((id) => orbitTargets.set(id, spec));
+  } else if (key.startsWith("drone:")) {
+    const droneId = Number(key.slice("drone:".length));
+    if (Number.isFinite(droneId)) orbitTargets.set(droneId, spec);
+  }
+}
+
+function closeRelationMenu(suppress = true) {
+  if (relationMenuEl && relationMenuEl.parentNode) {
+    relationMenuEl.parentNode.removeChild(relationMenuEl);
+  }
+  relationMenuEl = null;
+  pendingRelation = null;
   if (suppress) {
     tooltipSuppressUntil = performance.now() + 400;
   }
@@ -1646,6 +2471,7 @@ function openStatusMemberMenu(droneId, teamId, anchorEl) {
   `;
   statusMemberMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
   host.appendChild(statusMemberMenuEl);
+  enableMenuDrag(statusMemberMenuEl);
 
   const position = (el) => {
     if (!statusMemberMenuEl || !el) return;
@@ -1675,8 +2501,11 @@ function openStatusMemberMenu(droneId, teamId, anchorEl) {
   };
 
   position(anchorEl);
-  // Re-anchor during status re-render.
-  statusMemberMenuEl._reposition = position;
+  // Re-anchor during status re-render, unless the user dragged it.
+  statusMemberMenuEl._reposition = (el) => {
+    if (statusMemberMenuEl && statusMemberMenuEl._dragged) return;
+    position(el);
+  };
 
   const btn = statusMemberMenuEl.querySelector("[data-action='leave-team']");
   if (btn) {
@@ -1763,6 +2592,7 @@ function openHomePickerMenu(anchorPoint = null) {
 
   const host = document.getElementById("app") || document.body;
   host.appendChild(homeMenuEl);
+  enableMenuDrag(homeMenuEl);
 
   const updateTitle = () => {
     const h4 = homeMenuEl.querySelector("h4");
@@ -1812,6 +2642,7 @@ function openHomeMenu(latlng, containerPoint, station) {
   if (tooltipEl) tooltipEl.style.display = "none";
   closeWaypointMenu(false, true);
   closeFollowMenu(false);
+  closeOrbitMenu(false, true);
 
   pendingHome = {
     ...(team ? { teamId: team.id } : { droneId: drone.id }),
@@ -1832,7 +2663,10 @@ function openHomeMenu(latlng, containerPoint, station) {
       <button type="button" class="seg-btn is-active" data-mode="land">Land</button>
       <button type="button" class="seg-btn" data-mode="hover">Hover</button>
     </div>
-    <button class="cmd-chip cmd-action" type="button" data-action="rth">Return to Home</button>
+    <div class="command-list cmd-action-list column" style="margin-top:8px;">
+      <button class="cmd-chip cmd-action" type="button" data-action="rth">Return to Home</button>
+      <button class="cmd-chip cmd-action" type="button" data-action="orbit-home">Orbit</button>
+    </div>
   `;
 
   const mapRect = map.getContainer().getBoundingClientRect();
@@ -1842,6 +2676,7 @@ function openHomeMenu(latlng, containerPoint, station) {
 
   const host = document.getElementById("app") || document.body;
   host.appendChild(homeMenuEl);
+  enableMenuDrag(homeMenuEl);
 
   homeMenuEl.querySelectorAll(".seg-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -1860,18 +2695,23 @@ function openHomeMenu(latlng, containerPoint, station) {
       issueReturnHome(pendingHome);
     });
   }
+
+  const orbit = homeMenuEl.querySelector("[data-action='orbit-home']");
+  if (orbit) {
+    orbit.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const anchor = { type: "home", stationId: station.id };
+      closeHomeMenu(false);
+      openOrbitMenu(anchor, containerPoint);
+    });
+  }
 }
 
 function issueFollowCommand(follower, targetId) {
   if (!follower || targetId === null || targetId === undefined) return;
   const latest = follower.getLatest && follower.getLatest();
   if (!latest) return;
-  const cmd = `Follow drone #${targetId + 1}`;
-  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
-  follower.updateTelemetry(next);
-  if (groundControl) groundControl.assignMission(follower.id, cmd);
-  if (groundControl) groundControl.clearPlanned(`drone:${follower.id}`);
-  followTargets.set(follower.id, targetId);
+  issueFollowCommandSingle(follower.id, targetId);
   closeFollowMenu();
   // Suppress tooltip and deselect after issuing follow.
   tooltipSuppressUntil = performance.now() + 2000;
@@ -1886,6 +2726,26 @@ function issueFollowCommand(follower, targetId) {
   updateCommandSequencePanel();
   updateTooltip();
   draw();
+}
+
+function issueFollowCommandSingle(followerId, targetId, options = {}) {
+  const follower = getDroneById(followerId);
+  if (!follower || targetId === null || targetId === undefined) return;
+  const latest = follower.getLatest && follower.getLatest();
+  if (!latest) return;
+  const cmd = `Follow drone #${targetId + 1}`;
+  const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01 };
+  follower.updateTelemetry(next);
+  if (groundControl) groundControl.assignMission(follower.id, cmd);
+  // Record only when issued directly by the user (not via sequence playback).
+  if (!options.fromSequence) {
+    const key = options.selectionKey || `drone:${follower.id}`;
+    appendPlannedForKey(key, cmd);
+  }
+  followTargets.set(follower.id, targetId);
+  waypointTargets.delete(follower.id);
+  homeTargets.delete(follower.id);
+  orbitTargets.delete(follower.id);
 }
 
 function openFollowMenu(targetDroneId, containerPoint) {
@@ -1922,6 +2782,7 @@ function openFollowMenu(targetDroneId, containerPoint) {
 
   const host = document.getElementById("app") || document.body;
   host.appendChild(followMenuEl);
+  enableMenuDrag(followMenuEl);
 
   const btn = followMenuEl.querySelector("[data-action='follow']");
   if (btn) {
@@ -1930,6 +2791,220 @@ function openFollowMenu(targetDroneId, containerPoint) {
       issueFollowCommand(follower, targetDroneId);
     });
   }
+}
+
+function openRelationMenu(targetId, containerPoint) {
+  if (!map) return;
+  const target = getDroneById(targetId);
+  if (!target) return;
+
+  const selTeam = pinnedTeamId !== null ? getTeamById(pinnedTeamId) : null;
+  const selDroneId = pinnedDroneId;
+  const selIsTeam = !!selTeam;
+  if (!selIsTeam && (selDroneId === null || selDroneId === undefined)) return;
+  if (!selIsTeam && selDroneId === targetId) return;
+
+  const targetTeam = getTeamForDrone(targetId);
+  const targetInTeam = !!targetTeam;
+
+  const withinSelectedTeam = selIsTeam && selTeam.members.has(targetId);
+
+  tooltipMode = "info";
+  tooltipSuppressUntil = performance.now() + 550;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  closeWaypointMenu(false, true);
+  closeHomeMenu(false);
+  closeFollowMenu(false);
+  closeOrbitMenu(false, true);
+  closeRelationMenu(false);
+
+  pendingRelation = {
+    selTeamId: selIsTeam ? selTeam.id : null,
+    selDroneId: selIsTeam ? null : selDroneId,
+    targetId,
+    targetTeamId: targetInTeam ? targetTeam.id : null,
+    withinSelectedTeam,
+  };
+
+  relationMenuEl = document.createElement("div");
+  relationMenuEl.className = "relative-menu";
+  relationMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+
+  const title = `Drone #${targetId + 1}`;
+  const actions = [];
+
+  if (withinSelectedTeam) {
+    actions.push({ key: "remove", label: "Remove from Team" });
+  } else if (!selIsTeam) {
+    // Selected is a single drone
+    if (!targetInTeam) {
+      actions.push({ key: "follow", label: `Follow drone #${targetId + 1}` });
+      actions.push({ key: "orbit", label: `Orbit around drone #${targetId + 1}` });
+      actions.push({ key: "team", label: "Form team" });
+    } else {
+      actions.push({ key: "assign", label: `Assign to Team #${targetTeam.id + 1}` });
+      actions.push({ key: "follow", label: `Follow drone #${targetId + 1}` });
+      actions.push({ key: "orbit", label: `Orbit around drone #${targetId + 1}` });
+    }
+  } else {
+    // Selected is a team
+    if (!targetInTeam) {
+      actions.push({ key: "assign", label: `Add Drone #${targetId + 1} to Team #${selTeam.id + 1}` });
+      actions.push({ key: "follow", label: `Follow drone #${targetId + 1}` });
+      actions.push({ key: "orbit", label: `Orbit around drone #${targetId + 1}` });
+    } else {
+      if (targetTeam.id !== selTeam.id) {
+        actions.push({ key: "unify", label: `Unify Team #${selTeam.id + 1} + Team #${targetTeam.id + 1}` });
+      } else {
+        actions.push({ key: "remove", label: "Remove from Team" });
+      }
+    }
+  }
+
+  const buttons = actions
+    .map((a) => `<button class="cmd-chip cmd-action" type="button" data-rel="${a.key}">${a.label}</button>`)
+    .join("");
+
+  relationMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>${title}</h4>
+    </div>
+    <div class="command-list cmd-action-list column">${buttons}</div>
+  `;
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  relationMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  relationMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const host = document.getElementById("app") || document.body;
+  host.appendChild(relationMenuEl);
+  enableMenuDrag(relationMenuEl);
+
+  relationMenuEl.querySelectorAll("[data-rel]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const act = btn.dataset.rel;
+      if (!pendingRelation) return;
+      const selTeamId2 = pendingRelation.selTeamId;
+      const selDroneId2 = pendingRelation.selDroneId;
+      const targetId2 = pendingRelation.targetId;
+      const targetTeamId2 = pendingRelation.targetTeamId;
+
+      const finalize = (keepSelection = false) => {
+        closeRelationMenu(false);
+        tooltipMode = "info";
+        hoveredDroneId = null;
+        tooltipSuppressUntil = performance.now() + 1200;
+        if (!keepSelection) {
+          pinnedDroneId = null;
+          pinnedTeamId = null;
+        }
+        if (tooltipEl) tooltipEl.style.display = "none";
+        updateStatusList();
+        updateCommandSequencePanel();
+        updateTooltip();
+        draw();
+      };
+
+      if (act === "follow") {
+        if (selTeamId2 !== null) {
+          const t = getTeamById(selTeamId2);
+          if (t) {
+            [...t.members].forEach((id) => issueFollowCommandSingle(id, targetId2, { fromSequence: true, selectionKey: `drone:${id}` }));
+            appendPlannedForKey(`team:${t.id}`, `Follow drone #${targetId2 + 1}`);
+          }
+        } else if (selDroneId2 !== null) {
+          issueFollowCommandSingle(selDroneId2, targetId2);
+        }
+        finalize(false);
+        return;
+      }
+
+      if (act === "orbit") {
+        closeRelationMenu(false);
+        openOrbitMenu({ type: "drone", targetId: targetId2 }, containerPoint);
+        return;
+      }
+
+      if (act === "team" && selDroneId2 !== null) {
+        const t = ensureTeam([selDroneId2, targetId2]);
+        closeRelationMenu(false);
+        if (t) setPinnedTeam(t.id, true);
+        else setPinnedDrone(selDroneId2);
+        tooltipSuppressUntil = performance.now() + 800;
+        if (tooltipEl) tooltipEl.style.display = "none";
+        updateStatusList();
+        updateCommandSequencePanel();
+        updateTooltip();
+        draw();
+        return;
+      }
+
+      if (act === "assign") {
+        if (selTeamId2 !== null) {
+          const team = getTeamById(selTeamId2);
+          if (team) {
+            const t = ensureTeam([...team.members, targetId2]);
+            closeRelationMenu(false);
+            if (t) setPinnedTeam(t.id, true);
+            tooltipSuppressUntil = performance.now() + 800;
+            if (tooltipEl) tooltipEl.style.display = "none";
+            updateStatusList();
+            updateCommandSequencePanel();
+            updateTooltip();
+            draw();
+          }
+          return;
+        }
+        if (targetTeamId2 !== null && selDroneId2 !== null) {
+          const team = getTeamById(targetTeamId2);
+          if (team) {
+            const t = ensureTeam([...team.members, selDroneId2]);
+            closeRelationMenu(false);
+            if (t) setPinnedTeam(t.id, true);
+            tooltipSuppressUntil = performance.now() + 800;
+            if (tooltipEl) tooltipEl.style.display = "none";
+            updateStatusList();
+            updateCommandSequencePanel();
+            updateTooltip();
+            draw();
+          }
+          return;
+        }
+      }
+
+      if (act === "unify" && selTeamId2 !== null && targetTeamId2 !== null) {
+        const a = getTeamById(selTeamId2);
+        const b = getTeamById(targetTeamId2);
+        if (a && b) {
+          const t = ensureTeam([...a.members, ...b.members]);
+          closeRelationMenu(false);
+          if (t) setPinnedTeam(t.id, true);
+          tooltipSuppressUntil = performance.now() + 800;
+          if (tooltipEl) tooltipEl.style.display = "none";
+          updateStatusList();
+          updateCommandSequencePanel();
+          updateTooltip();
+          draw();
+        }
+        return;
+      }
+
+      if (act === "remove") {
+        closeRelationMenu(false);
+        detachFromTeam(targetId2);
+        tooltipSuppressUntil = performance.now() + 800;
+        if (tooltipEl) tooltipEl.style.display = "none";
+        updateStatusList();
+        updateCommandSequencePanel();
+        updateTooltip();
+        draw();
+        return;
+      }
+
+      finalize(false);
+    });
+  });
 }
 
 function attemptFollowMenuFromPoint(containerPoint) {
@@ -1950,13 +3025,7 @@ function handleContextMenu(e) {
     return;
   }
   if (near && (pinnedDroneId !== null || pinnedTeamId !== null)) {
-    // Create/merge team with clicked drone
-    const baseIds = pinnedTeamId !== null ? [...(getTeamById(pinnedTeamId)?.members || [])] : [pinnedDroneId];
-    if (baseIds.length) {
-      const t = ensureTeam([...baseIds, near.id]);
-      if (t) setPinnedTeam(t.id, true);
-      return;
-    }
+    // Relation actions moved to long-press; keep right-click for goto-wp only.
   }
   if (pinnedTeamId !== null) {
     openWaypointMenu(e.latlng, point, null, null);
@@ -1972,8 +3041,25 @@ function attemptActionLongPress(containerPoint) {
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
 
+  // Long-press on a different drone while something is selected: open relation actions menu.
+  if (near && (pinnedDroneId !== null || pinnedTeamId !== null)) {
+    // keep the "self long-press opens commands" behavior for a selected single drone
+    if (!(pinnedDroneId !== null && pinnedTeamId === null && near.id === pinnedDroneId)) {
+      openRelationMenu(near.id, containerPoint);
+      return;
+    }
+  }
+
   // Long-press on a drone with no prior selection: select it and open Commands immediately.
   if (near && pinnedDroneId === null && pinnedTeamId === null) {
+    // An explicit long-press should override tooltip suppression and close other menus.
+    tooltipSuppressUntil = 0;
+    closeSequenceMenu();
+    closeWaypointMenu(false, true);
+    closeHomeMenu(false);
+    closeFollowMenu(false);
+    closeRelationMenu(false);
+    closeOrbitMenu(false, true);
     setPinnedDrone(near.id);
     tooltipMode = "commands";
     updateTooltip();
@@ -1982,6 +3068,13 @@ function attemptActionLongPress(containerPoint) {
 
   // Long-press on the already-selected single drone: jump straight to Commands.
   if (near && pinnedDroneId !== null && pinnedTeamId === null && near.id === pinnedDroneId) {
+    tooltipSuppressUntil = 0;
+    closeSequenceMenu();
+    closeWaypointMenu(false, true);
+    closeHomeMenu(false);
+    closeFollowMenu(false);
+    closeRelationMenu(false);
+    closeOrbitMenu(false, true);
     tooltipMode = "commands";
     updateTooltip();
     return;
@@ -1992,26 +3085,7 @@ function attemptActionLongPress(containerPoint) {
     openHomeMenu(latlng, containerPoint, nearGs);
     return;
   }
-  if (near) {
-    const selTeam = pinnedTeamId !== null ? getTeamById(pinnedTeamId) : null;
-    const nearTeam = getTeamForDrone(near.id);
-    if (selTeam && nearTeam && selTeam.id === nearTeam.id) {
-      // detach
-      detachFromTeam(near.id);
-      if (selTeam && selTeam.members.size >= 2) {
-        setPinnedTeam(selTeam.id, true);
-      }
-      return;
-    }
-    // add to team or create
-    const baseIds =
-      selTeam ? [...selTeam.members] : pinnedDroneId !== null ? [pinnedDroneId] : nearTeam ? [...nearTeam.members] : [];
-    if (baseIds.length) {
-      const t = ensureTeam([...baseIds, near.id]);
-      if (t) setPinnedTeam(t.id, true);
-      return;
-    }
-  }
+  // Team creation/merge via long-press moved into the relation menu.
 
   // Long-press on empty map to open Goto WP for the current selection.
   if (!near && !nearGs) {
@@ -2048,9 +3122,12 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   if (tooltipEl) tooltipEl.style.display = "none";
   closeFollowMenu();
   closeHomeMenu();
+  closeOrbitMenu(false, true);
 
-  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, ownerId: ownerId ?? null };
   const latest = selectedTeam ? getTeamSnapshot(selectedTeam) : drone.getLatest && drone.getLatest();
+  const defaultAlt = latest && isFinite(Number(latest.alt)) ? Math.round(Number(latest.alt)) : 30;
+  const initialAlt = Math.max(5, Math.min(100, defaultAlt || 30));
+  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, altM: initialAlt, ownerId: ownerId ?? null };
   const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, latlng.lat, latlng.lng) / 1000 : null;
   const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
   const ownerWp = ownerId !== null ? waypointTargets.get(ownerId) : null;
@@ -2078,6 +3155,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   waypointMenuEl.className = "relative-menu";
   host.appendChild(waypointMenuEl);
   waypointMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(waypointMenuEl);
 
   waypointDroneId = selectedTeam ? null : drone.id;
   waypointTeamId = selectedTeam ? selectedTeam.id : null;
@@ -2107,18 +3185,42 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     }
   };
 
+  const updateAltLabel = (val) => {
+    const lbl = waypointMenuEl.querySelector("[data-alt-label]");
+    if (lbl) lbl.textContent = `${val} m`;
+  };
+
   waypointMenuEl.innerHTML = `
     <div class="menu-head">
       <h4>${distLabel}</h4>
       ${showSync ? `<button class="sync-btn" type="button" data-sync title="Match ETA">⇆</button>` : ""}
       <span class="menu-eta">${etaLabel}</span>
     </div>
-    <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
-    <div class="speed-row">
+    <div class="command-list" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
+      <button class="cmd-chip cmd-action" data-action="orbit" type="button">Orbit</button>
+    </div>
+    <div class="speed-row" data-goto-details>
       <input type="range" min="10" max="100" value="${pendingWaypoint.speedKmh}" step="1" data-speed-slider>
       <span data-speed-label>${pendingWaypoint.speedKmh} km/h</span>
     </div>
+    <div class="speed-row" data-goto-details>
+      <input type="range" min="5" max="100" value="${pendingWaypoint.altM}" step="1" data-alt-slider>
+      <span data-alt-label>${pendingWaypoint.altM} m</span>
+    </div>
   `;
+
+  // Root view: show only distance + actions. Details (ETA/speed) appear only after pressing "Goto WP".
+  {
+    const etaEl = waypointMenuEl.querySelector(".menu-eta");
+    if (etaEl) etaEl.style.display = "none";
+    waypointMenuEl.querySelectorAll("[data-goto-details]").forEach((row) => {
+      row.style.display = "none";
+    });
+    const syncEl = waypointMenuEl.querySelector("[data-sync]");
+    if (syncEl) syncEl.style.display = "none";
+    waypointMenuEl.dataset.mode = "root";
+  }
 
   const slider = waypointMenuEl.querySelector("[data-speed-slider]");
   if (slider) {
@@ -2129,18 +3231,45 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     });
   }
 
+  const altSlider = waypointMenuEl.querySelector("[data-alt-slider]");
+  if (altSlider) {
+    altSlider.addEventListener("input", (e) => {
+      const v = Number(e.target.value) || pendingWaypoint.altM || 30;
+      pendingWaypoint.altM = Math.max(5, Math.min(100, Math.round(v)));
+      updateAltLabel(pendingWaypoint.altM);
+    });
+  }
+
   const btn = waypointMenuEl.querySelector("[data-action='goto-wp']");
   if (btn) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
+      // First click reveals the detailed controls (speed + ETA). Second click confirms.
+      if (waypointMenuEl && waypointMenuEl.dataset.mode !== "goto") {
+        waypointMenuEl.dataset.mode = "goto";
+        const etaEl = waypointMenuEl.querySelector(".menu-eta");
+        if (etaEl) etaEl.style.display = "";
+        waypointMenuEl.querySelectorAll("[data-goto-details]").forEach((row) => {
+          row.style.display = "flex";
+        });
+        const syncEl = waypointMenuEl.querySelector("[data-sync]");
+        if (syncEl) syncEl.style.display = "";
+        const orbitEl = waypointMenuEl.querySelector("[data-action='orbit']");
+        if (orbitEl) orbitEl.style.display = "none";
+        updateLabel(pendingWaypoint ? pendingWaypoint.speedKmh : 60);
+        updateAltLabel(pendingWaypoint ? pendingWaypoint.altM : 30);
+        return;
+      }
       if (waypointTeamId !== null) {
         const team = getTeamById(waypointTeamId);
         if (team) {
           [...team.members].forEach((id) => {
             const d = getDroneById(id);
-            if (d) issueGotoWaypointSingle(d, pendingWaypoint);
+            if (d) issueGotoWaypointSingle(d, pendingWaypoint, { fromSequence: true, selectionKey: `drone:${id}` });
           });
-          if (groundControl) groundControl.clearPlanned(`team:${team.id}`);
+          const speed = Math.max(10, Math.min(100, Math.round(pendingWaypoint.speedKmh || 60)));
+          const alt = Math.max(5, Math.min(100, Math.round(pendingWaypoint.altM || 30)));
+          appendPlannedForKey(`team:${team.id}`, `Goto waypoint (spd ${speed} km/h, alt ${alt} m)`);
         }
         closeWaypointMenu();
         tooltipMode = "info";
@@ -2153,6 +3282,17 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
       } else {
         issueGotoWaypoint(drone, pendingWaypoint);
       }
+    });
+  }
+
+  const orbitBtn = waypointMenuEl.querySelector("[data-action='orbit']");
+  if (orbitBtn) {
+    orbitBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingWaypoint) return;
+      const anchor = { type: "wp", lat: pendingWaypoint.lat, lng: pendingWaypoint.lng, ownerId: pendingWaypoint.ownerId ?? null };
+      closeWaypointMenu(false, true);
+      openOrbitMenu(anchor, containerPoint);
     });
   }
 
@@ -3004,6 +4144,38 @@ function draw() {
     drawWaypointPin(to.x, to.y);
   });
 
+  // Orbit visualization (only for the current selection)
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (sel && key) {
+    const preview = orbitPreview && orbitPreview.key === key ? orbitPreview.orbit : null;
+    if (preview && preview.anchor) {
+      const center = resolveOrbitCenter(preview.anchor);
+      if (center) {
+        drawOrbitVisualization(center, preview.radiusM, preview.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+      }
+    } else if (pinnedTeamId !== null && selMembers) {
+      // Team: show orbit (if any) for each member, lightly.
+      ctx.save();
+      ctx.globalAlpha = 0.65;
+      for (const id of selMembers) {
+        const spec = orbitTargets.get(id);
+        if (!spec) continue;
+        const center = resolveOrbitCenter(spec.anchor);
+        if (!center) continue;
+        drawOrbitVisualization(center, spec.radiusM, spec.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+        break; // avoid clutter: show the first available orbit spec
+      }
+      ctx.restore();
+    } else if (pinnedDroneId !== null) {
+      const spec = orbitTargets.get(pinnedDroneId);
+      if (spec && spec.anchor) {
+        const center = resolveOrbitCenter(spec.anchor);
+        if (center) drawOrbitVisualization(center, spec.radiusM, spec.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+      }
+    }
+  }
+
   // drones (on top, with visible shadows)
   const droneSize = Math.max(5, Math.min(11, zoom * 0.75));
 
@@ -3058,6 +4230,25 @@ window.addEventListener("DOMContentLoaded", () => {
       openSequenceMenu(addBtn);
     });
   }
+
+  const playBtn = document.getElementById("seqPlayBtn");
+  if (playBtn) {
+    playBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      playBtn.classList.add("is-active");
+      setTimeout(() => playBtn.classList.remove("is-active"), 220);
+      const sel = getSelectedEntity();
+      const key = getSelectionKey(sel);
+      if (!key) return;
+      if (isSequencePlaying(key)) {
+        pauseSelectedEntity();
+      } else {
+        executeSelectedSequenceCommand();
+      }
+    });
+  }
+
+  updateCommandSequencePanel();
 
   initMapOnline();
   makeMockSwarm();
