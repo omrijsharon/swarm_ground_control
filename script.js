@@ -31,7 +31,7 @@ let overlay, ctx;
 let drones = [];
 let groundStations = [];
 let waypointTargets = new Map(); // droneId -> { lat, lng, speedKmh }
-let orbitTargets = new Map(); // droneId -> { anchor, radiusM, cyclesPerHour, altitudeM, direction, approachSpeedKmh? }
+let orbitTargets = new Map(); // droneId -> { anchor, radiusM, orbitPeriodMin, altitudeM, direction, orbitSpeedKmh?, approachSpeedKmh? }
 let groundControl;
 
 const COMMAND_OPTIONS = [
@@ -88,6 +88,8 @@ let homeTargets = new Map(); // droneId -> stationId
 let teams = [];
 let pinnedTeamId = null;
 let lastCreatedTeamId = null;
+let userHomePromptEl = null;
+let pendingUserHomePlacement = false;
 
 function forceRedraw() {
   draw();
@@ -192,6 +194,62 @@ function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
     },
     true
   );
+}
+
+function closeUserHomePrompt() {
+  if (userHomePromptEl && userHomePromptEl.parentNode) {
+    userHomePromptEl.parentNode.removeChild(userHomePromptEl);
+  }
+  userHomePromptEl = null;
+}
+
+function openUserHomePrompt(reason = "Location unavailable") {
+  const host = document.getElementById("app") || document.body;
+  closeUserHomePrompt();
+  pendingUserHomePlacement = true;
+  userHomePromptEl = document.createElement("div");
+  userHomePromptEl.className = "relative-menu";
+  userHomePromptEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  userHomePromptEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Set Home Location</h4>
+    </div>
+    <div class="status-mission" style="line-height:1.35; opacity:0.9;">
+      ${reason}. Tap on the map to place your Home (H).
+    </div>
+    <div class="command-list cmd-action-list column">
+      <button class="cmd-chip cmd-action" type="button" data-action="cancel-home">Keep default home</button>
+    </div>
+  `;
+  host.appendChild(userHomePromptEl);
+  enableMenuDrag(userHomePromptEl);
+
+  const hostRect = host.getBoundingClientRect();
+  const menuW = userHomePromptEl.offsetWidth || 260;
+  const menuH = userHomePromptEl.offsetHeight || 140;
+  userHomePromptEl.style.left = `${Math.max(10, (hostRect.width - menuW) / 2)}px`;
+  userHomePromptEl.style.top = `${Math.max(10, (hostRect.height - menuH) / 2)}px`;
+
+  const cancel = userHomePromptEl.querySelector("[data-action='cancel-home']");
+  if (cancel) {
+    cancel.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pendingUserHomePlacement = false;
+      closeUserHomePrompt();
+    });
+  }
+}
+
+function addUserHomeAtLatLng(latlng, alt = 0) {
+  if (!latlng) return;
+  const lat = Number(latlng.lat);
+  const lng = Number(latlng.lng);
+  if (!isFinite(lat) || !isFinite(lng)) return;
+  const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
+  groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0));
+  pendingUserHomePlacement = false;
+  closeUserHomePrompt();
+  forceRedraw();
 }
 
 function focusTeamView(team) {
@@ -847,13 +905,39 @@ function resolveOrbitCenter(anchor) {
   return null;
 }
 
-function drawOrbitVisualization(centerLatLng, radiusM, direction, fromLatLng = null) {
+function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh = null, fromLatLng = null) {
   if (!ctx || !map || !centerLatLng) return;
   const cxcy = latLngToScreen(centerLatLng.lat, centerLatLng.lng);
   const rPx = metersToPixelsAtLatLng(centerLatLng.lat, centerLatLng.lng, radiusM);
   if (!isFinite(rPx) || rPx < 6) return;
 
   const stroke = SETTINGS.SELECTION_GLOW_COLOR || "rgba(120,220,255,1.0)";
+
+  // Radius label (top of the circle) so it's visible even when the finger covers the slider.
+  {
+    const rLabel = `${Math.round(Number(radiusM) || 0)} m`;
+    const sLabel =
+      orbitSpeedKmh !== null && orbitSpeedKmh !== undefined && isFinite(Number(orbitSpeedKmh))
+        ? `${Math.round(Number(orbitSpeedKmh))} km/h`
+        : null;
+    const x = cxcy.x;
+    const y = cxcy.y - rPx - 14;
+    ctx.save();
+    ctx.font = "800 12px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowBlur = 10;
+    ctx.fillStyle = "#ffffff";
+    if (sLabel) ctx.fillText(sLabel, x, y - 14);
+    ctx.fillText(rLabel, x, y);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 3;
+    if (sLabel) ctx.strokeText(sLabel, x, y - 14);
+    ctx.strokeText(rLabel, x, y);
+    ctx.restore();
+  }
 
   // Approach line (from current selected entity to the orbit circle)
   if (fromLatLng && isFinite(fromLatLng.lat) && isFinite(fromLatLng.lng)) {
@@ -919,30 +1003,33 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, fromLatLng = n
   ctx.arc(cxcy.x, cxcy.y, rPx, start, end, ccw);
   ctx.stroke();
 
+  // Arrowhead (stroked V) so it reads as an arrowhead, not a filled triangle.
   const arrowAngle = ccw ? start : end;
   const tipX = cxcy.x + rPx * Math.cos(arrowAngle);
   const tipY = cxcy.y + rPx * Math.sin(arrowAngle);
   const tangent = ccw ? arrowAngle - Math.PI / 2 : arrowAngle + Math.PI / 2;
-  const ux = Math.cos(tangent);
-  const uy = Math.sin(tangent);
-  const arrowLen = 10;
-  const back = 8;
-  const baseX = tipX - ux * back;
-  const baseY = tipY - uy * back;
-  const perpX = -uy;
-  const perpY = ux;
+  const z = map.getZoom ? map.getZoom() : 10;
+  const size = Math.max(14, Math.min(28, z * 1.9));
+  const phi = Math.PI / 6; // 30deg spread
+  const a1 = tangent + Math.PI - phi;
+  const a2 = tangent + Math.PI + phi;
+  const x1 = tipX + Math.cos(a1) * size;
+  const y1 = tipY + Math.sin(a1) * size;
+  const x2 = tipX + Math.cos(a2) * size;
+  const y2 = tipY + Math.sin(a2) * size;
 
   ctx.setLineDash([]);
+  ctx.lineWidth = 3.4;
+  ctx.lineCap = "round";
+  ctx.strokeStyle = stroke;
+  ctx.shadowColor = stroke;
+  ctx.shadowBlur = 10;
   ctx.beginPath();
-  ctx.moveTo(tipX, tipY);
-  ctx.lineTo(baseX + perpX * (arrowLen * 0.35), baseY + perpY * (arrowLen * 0.35));
-  ctx.lineTo(baseX - perpX * (arrowLen * 0.35), baseY - perpY * (arrowLen * 0.35));
-  ctx.closePath();
-  ctx.fillStyle = stroke;
-  ctx.strokeStyle = "rgba(0,0,0,0.55)";
-  ctx.lineWidth = 1.1;
-  ctx.fill();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(tipX, tipY);
+  ctx.lineTo(x2, y2);
   ctx.stroke();
+  ctx.shadowBlur = 0;
   ctx.restore();
 }
 
@@ -1821,6 +1908,11 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  // If we're asking the user to place their Home, the next click places it.
+  if (pendingUserHomePlacement) {
+    addUserHomeAtLatLng(e.latlng);
+    return;
+  }
   // A completed long-press should not also trigger a click action when the finger/mouse is released.
   if (suppressNextMapClick) {
     suppressNextMapClick = false;
@@ -2199,11 +2291,13 @@ function openOrbitMenu(anchor, containerPoint) {
     anchor,
     approachSpeedKmh: 60,
     radiusM: 500,
-    cyclesPerHour: 12,
+    orbitPeriodMin: 5,
     altitudeM: isFinite(altNow) ? Math.max(0, Math.round(altNow)) : 30,
     direction: "CW",
   };
   orbitPreview = { key, orbit: pendingOrbit };
+  // Immediately render the default orbit (before the user touches the sliders).
+  draw();
 
   const distKm = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng) / 1000;
   const distLabel = isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Orbit";
@@ -2238,6 +2332,23 @@ function openOrbitMenu(anchor, containerPoint) {
         : "Waypoint";
 
   const showApproachSpeed = anchor.type === "wp" || anchor.type === "home";
+  const calcOrbitSpeedKmh = () => {
+    const r = Math.max(10, Math.min(1000, Number(pendingOrbit.radiusM) || 0));
+    const periodMin = Math.max(0.5, Number(pendingOrbit.orbitPeriodMin) || 0);
+    const periodSec = periodMin * 60;
+    const speedMps = (2 * Math.PI * r) / Math.max(1, periodSec);
+    return Math.max(0, speedMps * 3.6);
+  };
+  const speedKmhLabel = () => `${Math.round(calcOrbitSpeedKmh())} km/h`;
+  const periodBoundsForRadius = () => {
+    const r = Math.max(10, Math.min(1000, Number(pendingOrbit.radiusM) || 10));
+    const circ = 2 * Math.PI * r;
+    const minSec = circ / (100 / 3.6); // 100 km/h
+    const maxSec = circ / (5 / 3.6); // 5 km/h
+    const minMin = Math.max(1, Math.ceil(minSec / 60));
+    const maxMin = Math.max(minMin + 1, Math.ceil(maxSec / 60));
+    return { minMin, maxMin };
+  };
 
   orbitMenuEl.innerHTML = `
     <div class="menu-head">
@@ -2258,10 +2369,13 @@ function openOrbitMenu(anchor, containerPoint) {
       <input type="range" min="10" max="1000" value="${pendingOrbit.radiusM}" step="10" data-orbit-radius>
       <span data-orbit-radius-label>${pendingOrbit.radiusM} m</span>
     </div>
-    <div class="label" style="margin-top:10px;">Cycles / hour</div>
+    <div class="label" style="margin-top:10px;">Orbit Period</div>
     <div class="speed-row">
-      <input type="range" min="1" max="60" value="${pendingOrbit.cyclesPerHour}" step="1" data-orbit-cycles>
-      <span data-orbit-cycles-label>${pendingOrbit.cyclesPerHour} cyc/h</span>
+      <input type="range" min="1" max="60" value="${pendingOrbit.orbitPeriodMin}" step="1" data-orbit-period>
+      <span data-orbit-period-label>${pendingOrbit.orbitPeriodMin} min/orbit</span>
+    </div>
+    <div class="alt-readout" style="justify-content:flex-start; opacity:0.85;">
+      Speed: <span style="margin-left:6px; font-weight:900;" data-orbit-speed>${speedKmhLabel()}</span>
     </div>
     <div class="label" style="margin-top:10px;">Altitude</div>
     <div class="speed-row">
@@ -2280,6 +2394,20 @@ function openOrbitMenu(anchor, containerPoint) {
     const el = orbitMenuEl.querySelector(selQ);
     if (el) el.textContent = text;
   };
+  const setOrbitSpeed = () => setLbl("[data-orbit-speed]", speedKmhLabel());
+  const setOrbitPeriodBounds = () => {
+    const slider = orbitMenuEl.querySelector("[data-orbit-period]");
+    if (!slider) return;
+    const { minMin, maxMin } = periodBoundsForRadius();
+    slider.min = String(minMin);
+    slider.max = String(maxMin);
+    const cur = Math.max(minMin, Math.min(maxMin, Math.round(Number(pendingOrbit.orbitPeriodMin) || minMin)));
+    pendingOrbit.orbitPeriodMin = cur;
+    slider.value = String(cur);
+    setLbl("[data-orbit-period-label]", `${cur} min/orbit`);
+    setOrbitSpeed();
+  };
+  setOrbitPeriodBounds();
 
   const updateEta = () => {
     const eta = orbitMenuEl.querySelector(".menu-eta");
@@ -2311,17 +2439,22 @@ function openOrbitMenu(anchor, containerPoint) {
       pendingOrbit.radiusM = Math.round(v / 10) * 10;
       setLbl("[data-orbit-radius-label]", `${pendingOrbit.radiusM} m`);
       orbitPreview = { key, orbit: pendingOrbit };
+      setOrbitPeriodBounds();
+      setOrbitSpeed();
       draw();
     });
   }
 
-  const cycles = orbitMenuEl.querySelector("[data-orbit-cycles]");
-  if (cycles) {
-    cycles.addEventListener("input", (e) => {
-      const v = Math.max(1, Math.min(60, Number(e.target.value) || 12));
-      pendingOrbit.cyclesPerHour = Math.round(v);
-      setLbl("[data-orbit-cycles-label]", `${pendingOrbit.cyclesPerHour} cyc/h`);
+  const period = orbitMenuEl.querySelector("[data-orbit-period]");
+  if (period) {
+    period.addEventListener("input", (e) => {
+      const min = Number(period.min) || 1;
+      const max = Number(period.max) || 60;
+      const v = Math.max(min, Math.min(max, Number(e.target.value) || min));
+      pendingOrbit.orbitPeriodMin = Math.round(v);
+      setLbl("[data-orbit-period-label]", `${pendingOrbit.orbitPeriodMin} min/orbit`);
       orbitPreview = { key, orbit: pendingOrbit };
+      setOrbitSpeed();
       draw();
     });
   }
@@ -2373,6 +2506,8 @@ function openOrbitMenu(anchor, containerPoint) {
   }
 
   document.addEventListener("pointerdown", handleOrbitOutsideClick, true);
+  // Ensure orbit is visible right after the menu is shown.
+  draw();
 }
 
 function addOrbitToSequence(key, orbit) {
@@ -2382,9 +2517,12 @@ function addOrbitToSequence(key, orbit) {
 
   const speed = Math.max(10, Math.min(100, Math.round(orbit.approachSpeedKmh || 60)));
   const radius = Math.max(10, Math.min(1000, Math.round(orbit.radiusM || 80)));
-  const cycles = Math.max(1, Math.min(60, Math.round(orbit.cyclesPerHour || 12)));
+  const periodMin = Math.max(1, Math.min(60, Math.round(orbit.orbitPeriodMin || 5)));
   const alt = Math.max(0, Math.min(200, Math.round(orbit.altitudeM || 0)));
   const dir = orbit.direction === "CCW" ? "CCW" : "CW";
+
+  const orbitSpeedKmh = Math.max(0, ((2 * Math.PI * radius) / (periodMin * 60)) * 3.6);
+  const orbitSpeedLabel = Math.round(orbitSpeedKmh);
 
   let pre = "Goto waypoint";
   let around = "Waypoint";
@@ -2399,12 +2537,12 @@ function addOrbitToSequence(key, orbit) {
     around = "Waypoint";
   }
 
-  const orbitCmd = `Orbit (around ${around}, r ${radius} m, alt ${alt} m, ${cycles} cyc/h, ${dir})`;
+  const orbitCmd = `Orbit (around ${around}, r ${radius} m, alt ${alt} m, ${periodMin} min/orbit, spd ${orbitSpeedLabel} km/h, ${dir})`;
   groundControl.appendPlanned(key, pre);
   groundControl.appendPlanned(key, orbitCmd);
 
   // Persist a lightweight visualization for the selected entity so it appears when selected.
-  const spec = { anchor: a, radiusM: radius, cyclesPerHour: cycles, altitudeM: alt, direction: dir, approachSpeedKmh: speed };
+  const spec = { anchor: a, radiusM: radius, orbitPeriodMin: periodMin, orbitSpeedKmh: orbitSpeedLabel, altitudeM: alt, direction: dir, approachSpeedKmh: speed };
   if (key.startsWith("team:")) {
     const teamId = Number(key.slice("team:".length));
     const team = getTeamById(teamId);
@@ -2593,6 +2731,8 @@ function openHomePickerMenu(anchorPoint = null) {
   const host = document.getElementById("app") || document.body;
   host.appendChild(homeMenuEl);
   enableMenuDrag(homeMenuEl);
+  // Draw the default (closest) home preview line immediately.
+  draw();
 
   const updateTitle = () => {
     const h4 = homeMenuEl.querySelector("h4");
@@ -2620,6 +2760,7 @@ function openHomePickerMenu(anchorPoint = null) {
       homeMenuEl.querySelectorAll("[data-home]").forEach((b) => b.classList.remove("is-active"));
       btn.classList.add("is-active");
       updateTitle();
+      draw();
     });
   });
 
@@ -2677,6 +2818,8 @@ function openHomeMenu(latlng, containerPoint, station) {
   const host = document.getElementById("app") || document.body;
   host.appendChild(homeMenuEl);
   enableMenuDrag(homeMenuEl);
+  // Draw the preview line to the selected home immediately on open.
+  draw();
 
   homeMenuEl.querySelectorAll(".seg-btn").forEach((btn) => {
     btn.addEventListener("click", (e) => {
@@ -3017,6 +3160,7 @@ function attemptFollowMenuFromPoint(containerPoint) {
 
 function handleContextMenu(e) {
   e.originalEvent?.preventDefault?.();
+  if (pendingUserHomePlacement) return;
   const point = e.containerPoint;
   const near = findNearestDrone(point, getHoverRadius());
   const nearGs = findNearestGroundStation(point, getHoverRadius());
@@ -3038,6 +3182,7 @@ function handleContextMenu(e) {
 }
 
 function attemptActionLongPress(containerPoint) {
+  if (pendingUserHomePlacement) return;
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
 
@@ -3196,7 +3341,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
       ${showSync ? `<button class="sync-btn" type="button" data-sync title="Match ETA">⇆</button>` : ""}
       <span class="menu-eta">${etaLabel}</span>
     </div>
-    <div class="command-list" style="margin-top:2px;">
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
       <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
       <button class="cmd-chip cmd-action" data-action="orbit" type="button">Orbit</button>
     </div>
@@ -3833,6 +3978,39 @@ function initGroundStations() {
   ];
 }
 
+function tryAddUserHomeFromDevice() {
+  if (typeof navigator === "undefined" || !navigator.geolocation) {
+    openUserHomePrompt("Device location not supported");
+    return;
+  }
+
+  const addHome = (lat, lng, alt = 0) => {
+    const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
+    groundStations.push(new GroundStation(nextId, lat, lng, alt));
+    forceRedraw();
+  };
+
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      const lat = Number(pos?.coords?.latitude);
+      const lng = Number(pos?.coords?.longitude);
+      const alt = Number(pos?.coords?.altitude);
+      if (!isFinite(lat) || !isFinite(lng)) return;
+      addHome(lat, lng, isFinite(alt) ? alt : 0);
+    },
+    (err) => {
+      const msg =
+        err && err.code === 1
+          ? "Location permission denied"
+          : err && err.code === 2
+            ? "Location unavailable"
+            : "Location request timed out";
+      openUserHomePrompt(msg);
+    },
+    { enableHighAccuracy: true, timeout: 8000, maximumAge: 60_000 }
+  );
+}
+
 function drawGroundStationIcon(x, y, size = 18) {
   ctx.save();
   ctx.translate(x, y);
@@ -4121,6 +4299,26 @@ function draw() {
     ctx.restore();
   });
 
+  // RTH preview (while the Home menu is open and a home is selected)
+  if (homeMenuEl && pendingHome && pendingHome.stationId !== null && pendingHome.stationId !== undefined) {
+    const sel = getSelectedEntity();
+    const latest = sel && sel.latest;
+    const station = groundStations.find((g) => g.id === pendingHome.stationId);
+    if (latest && station) {
+      const from = latLngToScreen(latest.lat, latest.lng);
+      const to = latLngToScreen(station.lat, station.lng);
+      ctx.save();
+      ctx.setLineDash([6, 5]);
+      ctx.lineWidth = 2.0;
+      ctx.strokeStyle = "rgba(255,255,255,0.92)";
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
   // Waypoints (relative commands)
   waypointTargets.forEach((wp, droneId) => {
     const d = getDroneById(droneId);
@@ -4148,11 +4346,18 @@ function draw() {
   const sel = getSelectedEntity();
   const key = getSelectionKey(sel);
   if (sel && key) {
+    const calcSpeed = (radiusM, periodMin) => {
+      const r = Number(radiusM);
+      const p = Number(periodMin);
+      if (!isFinite(r) || !isFinite(p) || r <= 0 || p <= 0) return null;
+      return ((2 * Math.PI * r) / (p * 60)) * 3.6;
+    };
     const preview = orbitPreview && orbitPreview.key === key ? orbitPreview.orbit : null;
     if (preview && preview.anchor) {
       const center = resolveOrbitCenter(preview.anchor);
       if (center) {
-        drawOrbitVisualization(center, preview.radiusM, preview.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+        const spd = calcSpeed(preview.radiusM, preview.orbitPeriodMin);
+        drawOrbitVisualization(center, preview.radiusM, preview.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
       }
     } else if (pinnedTeamId !== null && selMembers) {
       // Team: show orbit (if any) for each member, lightly.
@@ -4163,7 +4368,10 @@ function draw() {
         if (!spec) continue;
         const center = resolveOrbitCenter(spec.anchor);
         if (!center) continue;
-        drawOrbitVisualization(center, spec.radiusM, spec.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+        const spd = isFinite(Number(spec.orbitSpeedKmh))
+          ? Number(spec.orbitSpeedKmh)
+          : calcSpeed(spec.radiusM, spec.orbitPeriodMin);
+        drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
         break; // avoid clutter: show the first available orbit spec
       }
       ctx.restore();
@@ -4171,7 +4379,12 @@ function draw() {
       const spec = orbitTargets.get(pinnedDroneId);
       if (spec && spec.anchor) {
         const center = resolveOrbitCenter(spec.anchor);
-        if (center) drawOrbitVisualization(center, spec.radiusM, spec.direction, { lat: sel.latest.lat, lng: sel.latest.lng });
+        if (center) {
+          const spd = isFinite(Number(spec.orbitSpeedKmh))
+            ? Number(spec.orbitSpeedKmh)
+            : calcSpeed(spec.radiusM, spec.orbitPeriodMin);
+          drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
+        }
       }
     }
   }
@@ -4253,6 +4466,7 @@ window.addEventListener("DOMContentLoaded", () => {
   initMapOnline();
   makeMockSwarm();
   initGroundStations();
+  tryAddUserHomeFromDevice();
   setupOverlay();
   setupHoverHandlers();
   updateStatusList();

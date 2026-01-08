@@ -8,7 +8,7 @@ Current supported/placeholder commands in the UI and mock logic:
 - Land (when in air)
 - Hold position (when in air)
 - Goto waypoint (with speed)
-- Orbit (around waypoint/home/drone/target; radius, cycles/hour, altitude, CW/CCW)
+- Orbit (around waypoint/home/drone/target; radius, orbit period (min/orbit), altitude, CW/CCW)
 - Follow drone (follow drone #X)
 - Search target
 - Attack target
