@@ -1165,10 +1165,19 @@ function executeSelectedSequenceCommand() {
   }
 
   if (cmd === "Return to Home" || cmd.startsWith("Return home")) {
-    const homeId = getClosestHomeForSelection(sel);
-    if (homeId === null) return;
-    if (sel.type === "team") issueReturnHome({ teamId: sel.id, stationId: homeId, mode: "land" }, { fromSequence: true });
-    else issueReturnHome({ droneId: sel.id, stationId: homeId, mode: "land" }, { fromSequence: true });
+    // If the sequence item specifies a home number and/or mode, honor it.
+    // Examples:
+    // - "Return home #2 (hover)"
+    // - "Return home #1 (land)"
+    // - "Return to Home" (fallback to closest)
+    const m = String(cmd).match(/Return home\s*#\s*(\d+)\s*\(\s*(land|hover)\s*\)/i);
+    const modeMatch = String(cmd).match(/\(\s*(land|hover)\s*\)/i);
+    const parsedMode = modeMatch ? modeMatch[1].toLowerCase() : "land";
+    const parsedHomeId = m ? Number(m[1]) - 1 : null;
+    const homeId = Number.isFinite(parsedHomeId) ? parsedHomeId : getClosestHomeForSelection(sel);
+    if (homeId === null || homeId === undefined) return;
+    if (sel.type === "team") issueReturnHome({ teamId: sel.id, stationId: homeId, mode: parsedMode }, { fromSequence: true });
+    else issueReturnHome({ droneId: sel.id, stationId: homeId, mode: parsedMode }, { fromSequence: true });
     return;
   }
 }
