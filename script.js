@@ -4299,6 +4299,29 @@ function drawWaypointPin(x, y) {
   // No transparency/blur; keep the marker fully solid.
   ctx.shadowBlur = 0;
 
+  // White glow (draw once behind the marker)
+  {
+    const overlap = Math.max(lineW * 1.2, ringOuterR * 0.35);
+    const baseY = ringCy + ringOuterR - overlap;
+    ctx.save();
+    ctx.shadowColor = "rgba(255,255,255,0.95)";
+    ctx.shadowBlur = Math.max(10, ringOuterR * 1.2);
+    ctx.lineWidth = lineW + 1.6;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    ctx.arc(0, ringCy, ringOuterR, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-triW / 2, baseY);
+    ctx.lineTo(0, 0);
+    ctx.lineTo(triW / 2, baseY);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Draw ring + pointer as one object: same fill/stroke, overlapping connection.
   // Ring outer fill
   ctx.beginPath();
