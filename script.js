@@ -1000,13 +1000,13 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     const dirSign = direction === "CCW" ? -1 : 1;
     const tSec = performance.now() / 1000;
     const start = -Math.PI / 2 + dirSign * ((omegaVis * tSec) % (Math.PI * 2));
-    const arcSpan = Math.PI / 3; // 60° arc segment (fixed size)
+    const arcSpan = Math.PI * 1.85; // long trail (~333°), so almost entire orbit is visible
     const end = start + dirSign * arcSpan;
 
     // Futuristic "comet" trail: more transparent farther from the arrowhead.
     // (Draw as multiple short arc segments with increasing alpha toward the head.)
     const trailRgb = { r: 70, g: 255, b: 170 }; // glowing green
-    const segs = 22;
+    const segs = Math.max(28, Math.min(90, Math.round(Math.abs(arcSpan) * 18)));
     const spanAbs = Math.abs(arcSpan);
     for (let i = 0; i < segs; i++) {
       const t0 = i / segs;
