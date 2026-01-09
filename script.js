@@ -2105,12 +2105,9 @@ function handleMapClick(e) {
 
   if (hitWp) {
     if (waypointMenuEl) closeWaypointMenu(false, true);
-    // If nothing is selected, clicking an existing WP should open an edit entry point
-    // (do not select the owner drone automatically).
-    if (pinnedTeamId === null && pinnedDroneId === null) {
-      openEditWaypointMenu(hitWp, e.containerPoint);
-      return;
-    }
+    // If nothing is selected, a single click on a WP does nothing.
+    // (Editing requires a long-press on the WP.)
+    if (pinnedTeamId === null && pinnedDroneId === null) return;
     if (pinnedTeamId !== null) {
       openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, null, hitWp.droneId);
       return;
@@ -3358,8 +3355,15 @@ function handleContextMenu(e) {
 
 function attemptActionLongPress(containerPoint) {
   if (pendingUserHomePlacement) return;
+  const hitWp = findNearestWaypoint(containerPoint, 16);
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
+
+  // Long-press on a waypoint with no selection: open "Edit waypoint".
+  if (hitWp && pinnedDroneId === null && pinnedTeamId === null) {
+    openEditWaypointMenu(hitWp, containerPoint);
+    return;
+  }
 
   // Long-press on a different drone while something is selected: open relation actions menu.
   if (near && (pinnedDroneId !== null || pinnedTeamId !== null)) {
@@ -3409,6 +3413,12 @@ function attemptActionLongPress(containerPoint) {
 
   // Long-press on empty map to open Goto WP for the current selection.
   if (!near && !nearGs) {
+    // If long-pressing an existing waypoint while something is selected, treat it as a waypoint context,
+    // so the menu knows which WP we pressed (for sync/edit flows).
+    if (hitWp && (pinnedDroneId !== null || pinnedTeamId !== null)) {
+      openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, containerPoint, null, hitWp.droneId);
+      return;
+    }
     if (pinnedTeamId !== null || pinnedDroneId !== null) {
       const latlng = map.containerPointToLatLng(containerPoint);
       openWaypointMenu(latlng, containerPoint, null, null);
