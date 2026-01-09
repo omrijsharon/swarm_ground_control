@@ -3548,7 +3548,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   const latest = selectedTeam ? getTeamSnapshot(selectedTeam) : drone.getLatest && drone.getLatest();
   const defaultAlt = latest && isFinite(Number(latest.alt)) ? Math.round(Number(latest.alt)) : 30;
   const initialAlt = Math.max(5, Math.min(100, defaultAlt || 30));
-  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, altM: initialAlt, ownerId: ownerId ?? null };
+  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, altM: initialAlt, ownerId: ownerId ?? null, isEdit: !!(options && options.isEdit) };
   const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, latlng.lat, latlng.lng) / 1000 : null;
   const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
   const ownerWp = ownerId !== null ? waypointTargets.get(ownerId) : null;
@@ -4705,6 +4705,9 @@ function draw() {
 
   // Waypoints (relative commands)
   waypointTargets.forEach((wp, droneId) => {
+    // While editing a waypoint for a specific drone, hide its "stored" WP pin/line so
+    // the moving preview is the only one visible.
+    if (pendingWaypoint && pendingWaypoint.isEdit && pendingWaypoint.ownerId === droneId) return;
     const d = getDroneById(droneId);
     const latest = d && d.getLatest && d.getLatest();
     if (!latest) return;
@@ -4730,10 +4733,14 @@ function draw() {
   // not in the initial "Goto WP / Orbit" chooser menu.
   if (waypointMenuEl && pendingWaypoint && waypointMenuEl.dataset.mode === "goto") {
     const sel = getSelectedEntity();
-    const latest = sel && sel.latest ? sel.latest : null;
+    let latest = sel && sel.latest ? sel.latest : null;
+    if (!latest && waypointDroneId !== null && waypointDroneId !== undefined) {
+      const d = getDroneById(waypointDroneId);
+      latest = d && d.getLatest && d.getLatest();
+    }
+    const to = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
     if (latest && isFinite(latest.lat) && isFinite(latest.lng)) {
       const from = latLngToScreen(latest.lat, latest.lng);
-      const to = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
       ctx.save();
       ctx.setLineDash([6, 6]);
       ctx.lineWidth = 1.8;
@@ -4743,8 +4750,8 @@ function draw() {
       ctx.lineTo(to.x, to.y);
       ctx.stroke();
       ctx.restore();
-      drawWaypointPin(to.x, to.y);
     }
+    drawWaypointPin(to.x, to.y);
   }
 
   // Orbit visualization (only for the current selection)
