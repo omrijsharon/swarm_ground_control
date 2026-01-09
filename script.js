@@ -928,16 +928,15 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     ctx.font = "800 12px Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial";
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.shadowColor = "rgba(0,0,0,0.55)";
+    ctx.shadowColor = "rgba(0,0,0,0.65)";
     ctx.shadowBlur = 10;
-    ctx.fillStyle = "#ffffff";
-    if (sLabel) ctx.fillText(sLabel, x, y - 14);
-    ctx.fillText(rLabel, x, y);
-    ctx.shadowBlur = 0;
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.70)";
+    ctx.lineWidth = 2;
     if (sLabel) ctx.strokeText(sLabel, x, y - 14);
     ctx.strokeText(rLabel, x, y);
+    ctx.fillStyle = "rgba(255,255,255,0.98)";
+    if (sLabel) ctx.fillText(sLabel, x, y - 14);
+    ctx.fillText(rLabel, x, y);
     ctx.restore();
   }
 
