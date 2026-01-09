@@ -4285,8 +4285,8 @@ function drawWaypointPin(x, y) {
   ctx.translate(x, y);
   const z = map && map.getZoom ? map.getZoom() : 12;
   const ringOuterR = Math.max(8, Math.min(16, z * 1.0));
-  // Bring the ring a bit lower so it overlaps the pointer and reads as one object.
-  const ringCy = -ringOuterR * 1.82;
+  // Bring the ring lower so it overlaps the pointer and reads as one object.
+  const ringCy = -ringOuterR * 1.88;
   const ringThickness = Math.max(3.2, Math.min(7.0, ringOuterR * 0.45)); // thicker ring
   const ringInnerR = Math.max(2.2, ringOuterR - ringThickness);
   const triW = ringOuterR * 1.55;
@@ -4636,4 +4636,3 @@ window.addEventListener("DOMContentLoaded", () => {
     draw();
   });
 });
-
