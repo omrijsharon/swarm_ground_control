@@ -4284,42 +4284,66 @@ function drawWaypointPin(x, y) {
   ctx.save();
   ctx.translate(x, y);
   const z = map && map.getZoom ? map.getZoom() : 12;
-  const ringR = Math.max(7, Math.min(14, z * 0.9));
-  const ringCy = -ringR * 2.1;
-  const ringStroke = Math.max(1.6, Math.min(2.6, ringR * 0.18));
-  const triH = ringR * 2.1;
-  const triW = ringR * 1.45;
+  const ringOuterR = Math.max(8, Math.min(16, z * 1.0));
+  const ringCy = -ringOuterR * 2.05;
+  const ringThickness = Math.max(3.2, Math.min(7.0, ringOuterR * 0.45)); // thicker ring
+  const ringInnerR = Math.max(2.2, ringOuterR - ringThickness);
+  const triW = ringOuterR * 1.55;
+
+  const fill = "rgba(10,12,16,0.78)";
+  const stroke = "rgba(255,255,255,0.78)";
+  const lineW = Math.max(1.8, Math.min(3.2, ringOuterR * 0.16));
 
   // Shadow/glow
   ctx.shadowColor = "rgba(0,0,0,0.45)";
   ctx.shadowBlur = 10;
 
-  // Ring (thin circle with a hole inside)
+  // Draw ring + pointer as one object: same fill/stroke, overlapping connection.
+  // Ring outer fill
   ctx.beginPath();
-  ctx.arc(0, ringCy, ringR, 0, Math.PI * 2);
-  ctx.lineWidth = ringStroke;
-  ctx.strokeStyle = "rgba(255,255,255,0.85)";
-  ctx.stroke();
+  ctx.arc(0, ringCy, ringOuterR, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
 
-  // Inverted triangle pointer connected to the ring, tip anchored at waypoint coordinate (0,0)
-  const baseY = ringCy + ringR - ringStroke / 2; // connect at bottom of ring
+  // Pointer fill (overlaps the ring bottom slightly so it reads as one piece)
+  const baseY = ringCy + ringOuterR - lineW * 0.4;
   ctx.beginPath();
   ctx.moveTo(-triW / 2, baseY);
   ctx.lineTo(0, 0);
   ctx.lineTo(triW / 2, baseY);
   ctx.closePath();
-  ctx.fillStyle = "rgba(10,12,16,0.65)";
   ctx.fill();
+
+  // Cut the hole after fills
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
+  ctx.beginPath();
+  ctx.arc(0, ringCy, ringInnerR, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // Single outline pass for both shapes (same stroke, rounded joins)
   ctx.shadowBlur = 0;
-  ctx.lineWidth = ringStroke;
-  ctx.strokeStyle = "rgba(255,255,255,0.70)";
+  ctx.lineWidth = lineW;
+  ctx.lineJoin = "round";
+  ctx.lineCap = "round";
+  ctx.strokeStyle = stroke;
+  ctx.beginPath();
+  ctx.arc(0, ringCy, ringOuterR, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(-triW / 2, baseY);
+  ctx.lineTo(0, 0);
+  ctx.lineTo(triW / 2, baseY);
+  ctx.closePath();
   ctx.stroke();
 
-  // Tiny highlight at tip for visibility
+  // Soft inner ring edge to make the hole read on bright tiles
   ctx.beginPath();
-  ctx.arc(0, 0, Math.max(1.2, ringStroke * 0.55), 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255,255,255,0.65)";
-  ctx.fill();
+  ctx.arc(0, ringCy, ringInnerR, 0, Math.PI * 2);
+  ctx.lineWidth = Math.max(1.1, lineW * 0.6);
+  ctx.strokeStyle = "rgba(255,255,255,0.18)";
+  ctx.stroke();
   ctx.restore();
 }
 
