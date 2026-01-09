@@ -90,7 +90,7 @@ let pinnedTeamId = null;
 let lastCreatedTeamId = null;
 let userHomePromptEl = null;
 let pendingUserHomePlacement = false;
-let orbitAnim = { running: false, raf: 0, lastFrame: 0, t0: 0 };
+let orbitAnim = { running: false, raf: 0, lastFrame: 0 };
 
 function forceRedraw() {
   draw();
@@ -994,10 +994,11 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
   const periodMin = Number(orbitPeriodMin);
   if (isFinite(periodMin) && periodMin > 0) {
     const periodSec = periodMin * 60;
-    const omega = (2 * Math.PI) / periodSec; // rad/sec
+    const frequencyHz = 1 / periodSec;
+    const omega = 2 * Math.PI * frequencyHz; // rad/sec
     const dirSign = direction === "CCW" ? -1 : 1;
-    const tSec = (performance.now() - (orbitAnim.t0 || 0)) / 1000;
-    const start = -Math.PI / 2 + dirSign * ((tSec * omega) % (Math.PI * 2));
+    const tSec = performance.now() / 1000;
+    const start = -Math.PI / 2 + dirSign * ((omega * tSec) % (Math.PI * 2));
     const arcSpan = Math.PI / 3; // 60° arc segment (fixed size)
     const end = start + dirSign * arcSpan;
 
@@ -1078,7 +1079,6 @@ function ensureOrbitAnimationLoop() {
   }
   if (orbitAnim.running) return;
   orbitAnim.running = true;
-  orbitAnim.t0 = performance.now();
   orbitAnim.lastFrame = 0;
 
   const tick = (t) => {
