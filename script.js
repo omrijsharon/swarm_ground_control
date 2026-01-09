@@ -90,6 +90,7 @@ let pinnedTeamId = null;
 let lastCreatedTeamId = null;
 let userHomePromptEl = null;
 let pendingUserHomePlacement = false;
+let orbitAnim = { running: false, raf: 0, lastFrame: 0, t0: 0 };
 
 function forceRedraw() {
   draw();
@@ -905,7 +906,7 @@ function resolveOrbitCenter(anchor) {
   return null;
 }
 
-function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh = null, fromLatLng = null) {
+function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh = null, orbitPeriodMin = null, fromLatLng = null) {
   if (!ctx || !map || !centerLatLng) return;
   const cxcy = latLngToScreen(centerLatLng.lat, centerLatLng.lng);
   const rPx = metersToPixelsAtLatLng(centerLatLng.lat, centerLatLng.lng, radiusM);
@@ -989,48 +990,113 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
   ctx.arc(cxcy.x, cxcy.y, rPx, 0, Math.PI * 2);
   ctx.stroke();
 
-  // Direction arc + arrowhead
-  const span = Math.PI / 2.8;
-  const base = -Math.PI / 2; // start near top
-  const start = base - span / 2;
-  const end = base + span / 2;
-  const ccw = direction === "CCW";
+  // Animated orbit arc + arrow (angular velocity is based on orbit period).
+  const periodMin = Number(orbitPeriodMin);
+  if (isFinite(periodMin) && periodMin > 0) {
+    const periodSec = periodMin * 60;
+    const omega = (2 * Math.PI) / periodSec; // rad/sec
+    const dirSign = direction === "CCW" ? -1 : 1;
+    const tSec = (performance.now() - (orbitAnim.t0 || 0)) / 1000;
+    const start = -Math.PI / 2 + dirSign * ((tSec * omega) % (Math.PI * 2));
+    const arcSpan = Math.PI / 3; // 60° arc segment (fixed size)
+    const end = start + dirSign * arcSpan;
 
-  ctx.setLineDash([8, 6]);
-  ctx.lineWidth = 2.2;
-  ctx.strokeStyle = "rgba(120,220,255,0.85)";
-  ctx.beginPath();
-  ctx.arc(cxcy.x, cxcy.y, rPx, start, end, ccw);
-  ctx.stroke();
+    // The arc itself rotates around the circle (theta0/theta1 advance each frame).
+    ctx.setLineDash([]);
+    ctx.lineWidth = 3.4;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "rgba(120,220,255,0.92)";
+    ctx.shadowColor = stroke;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.arc(cxcy.x, cxcy.y, rPx, start, end, dirSign < 0);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
 
-  // Arrowhead (stroked V) so it reads as an arrowhead, not a filled triangle.
-  const arrowAngle = ccw ? start : end;
-  const tipX = cxcy.x + rPx * Math.cos(arrowAngle);
-  const tipY = cxcy.y + rPx * Math.sin(arrowAngle);
-  const tangent = ccw ? arrowAngle - Math.PI / 2 : arrowAngle + Math.PI / 2;
-  const z = map.getZoom ? map.getZoom() : 10;
-  const size = Math.max(14, Math.min(28, z * 1.9));
-  const phi = Math.PI / 6; // 30deg spread
-  const a1 = tangent + Math.PI - phi;
-  const a2 = tangent + Math.PI + phi;
-  const x1 = tipX + Math.cos(a1) * size;
-  const y1 = tipY + Math.sin(a1) * size;
-  const x2 = tipX + Math.cos(a2) * size;
-  const y2 = tipY + Math.sin(a2) * size;
+    // Arrowhead (stroked V) at the leading edge
+    const tipX = cxcy.x + rPx * Math.cos(end);
+    const tipY = cxcy.y + rPx * Math.sin(end);
+    const tangent = end + dirSign * (Math.PI / 2);
+    const z = map.getZoom ? map.getZoom() : 10;
+    const size = Math.max(18, Math.min(34, z * 2.3));
+    const phi = Math.PI / 7; // tighter arrowhead
+    const a1 = tangent + Math.PI - phi;
+    const a2 = tangent + Math.PI + phi;
+    const x1 = tipX + Math.cos(a1) * size;
+    const y1 = tipY + Math.sin(a1) * size;
+    const x2 = tipX + Math.cos(a2) * size;
+    const y2 = tipY + Math.sin(a2) * size;
 
-  ctx.setLineDash([]);
-  ctx.lineWidth = 3.4;
-  ctx.lineCap = "round";
-  ctx.strokeStyle = stroke;
-  ctx.shadowColor = stroke;
-  ctx.shadowBlur = 10;
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(tipX, tipY);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-  ctx.shadowBlur = 0;
+    ctx.setLineDash([]);
+    ctx.lineWidth = 4.2;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = stroke;
+    ctx.shadowColor = stroke;
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(tipX, tipY);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+  }
   ctx.restore();
+}
+
+function isOrbitAnimationWanted() {
+  // While the orbit menu is open, always animate the preview (even if selection snapshot is transient).
+  if (orbitMenuEl && pendingOrbit && isFinite(Number(pendingOrbit.orbitPeriodMin)) && Number(pendingOrbit.orbitPeriodMin) > 0) {
+    return true;
+  }
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key) return false;
+  const preview = orbitPreview && orbitPreview.key === key ? orbitPreview.orbit : null;
+  if (preview && preview.anchor && isFinite(Number(preview.orbitPeriodMin)) && Number(preview.orbitPeriodMin) > 0) return true;
+  if (pinnedTeamId !== null) {
+    const team = getTeamById(pinnedTeamId);
+    if (!team) return false;
+    for (const id of team.members) {
+      const spec = orbitTargets.get(id);
+      if (spec && spec.anchor && isFinite(Number(spec.orbitPeriodMin)) && Number(spec.orbitPeriodMin) > 0) return true;
+    }
+    return false;
+  }
+  if (pinnedDroneId !== null) {
+    const spec = orbitTargets.get(pinnedDroneId);
+    return !!(spec && spec.anchor && isFinite(Number(spec.orbitPeriodMin)) && Number(spec.orbitPeriodMin) > 0);
+  }
+  return false;
+}
+
+function ensureOrbitAnimationLoop() {
+  if (!isOrbitAnimationWanted()) {
+    orbitAnim.running = false;
+    if (orbitAnim.raf) cancelAnimationFrame(orbitAnim.raf);
+    orbitAnim.raf = 0;
+    return;
+  }
+  if (orbitAnim.running) return;
+  orbitAnim.running = true;
+  orbitAnim.t0 = performance.now();
+  orbitAnim.lastFrame = 0;
+
+  const tick = (t) => {
+    if (!orbitAnim.running) return;
+    if (!isOrbitAnimationWanted()) {
+      orbitAnim.running = false;
+      orbitAnim.raf = 0;
+      return;
+    }
+    // ~30fps cap
+    if (!orbitAnim.lastFrame || t - orbitAnim.lastFrame >= 33) {
+      orbitAnim.lastFrame = t;
+      draw();
+    }
+    orbitAnim.raf = requestAnimationFrame(tick);
+  };
+
+  orbitAnim.raf = requestAnimationFrame(tick);
 }
 
 function renderCommandList() {
@@ -4352,21 +4418,32 @@ function draw() {
   });
 
   // Orbit visualization (only for the current selection)
+  const calcSpeed = (radiusM, periodMin) => {
+    const r = Number(radiusM);
+    const p = Number(periodMin);
+    if (!isFinite(r) || !isFinite(p) || r <= 0 || p <= 0) return null;
+    return ((2 * Math.PI * r) / (p * 60)) * 3.6;
+  };
+
   const sel = getSelectedEntity();
   const key = getSelectionKey(sel);
-  if (sel && key) {
-    const calcSpeed = (radiusM, periodMin) => {
-      const r = Number(radiusM);
-      const p = Number(periodMin);
-      if (!isFinite(r) || !isFinite(p) || r <= 0 || p <= 0) return null;
-      return ((2 * Math.PI * r) / (p * 60)) * 3.6;
-    };
+
+  // When the orbit menu is open, always render the live preview from its pending values.
+  // (Selection snapshots can be transient during interaction; the preview should still animate.)
+  if (orbitMenuEl && pendingOrbit && pendingOrbit.anchor) {
+    const center = resolveOrbitCenter(pendingOrbit.anchor);
+    if (center) {
+      const spd = calcSpeed(pendingOrbit.radiusM, pendingOrbit.orbitPeriodMin);
+      const from = sel && sel.latest ? { lat: sel.latest.lat, lng: sel.latest.lng } : null;
+      drawOrbitVisualization(center, pendingOrbit.radiusM, pendingOrbit.direction, spd, pendingOrbit.orbitPeriodMin, from);
+    }
+  } else if (sel && key) {
     const preview = orbitPreview && orbitPreview.key === key ? orbitPreview.orbit : null;
     if (preview && preview.anchor) {
       const center = resolveOrbitCenter(preview.anchor);
       if (center) {
         const spd = calcSpeed(preview.radiusM, preview.orbitPeriodMin);
-        drawOrbitVisualization(center, preview.radiusM, preview.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
+        drawOrbitVisualization(center, preview.radiusM, preview.direction, spd, preview.orbitPeriodMin, { lat: sel.latest.lat, lng: sel.latest.lng });
       }
     } else if (pinnedTeamId !== null && selMembers) {
       // Team: show orbit (if any) for each member, lightly.
@@ -4380,7 +4457,7 @@ function draw() {
         const spd = isFinite(Number(spec.orbitSpeedKmh))
           ? Number(spec.orbitSpeedKmh)
           : calcSpeed(spec.radiusM, spec.orbitPeriodMin);
-        drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
+        drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, spec.orbitPeriodMin, { lat: sel.latest.lat, lng: sel.latest.lng });
         break; // avoid clutter: show the first available orbit spec
       }
       ctx.restore();
@@ -4392,7 +4469,7 @@ function draw() {
           const spd = isFinite(Number(spec.orbitSpeedKmh))
             ? Number(spec.orbitSpeedKmh)
             : calcSpeed(spec.radiusM, spec.orbitPeriodMin);
-          drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, { lat: sel.latest.lat, lng: sel.latest.lng });
+          drawOrbitVisualization(center, spec.radiusM, spec.direction, spd, spec.orbitPeriodMin, { lat: sel.latest.lat, lng: sel.latest.lng });
         }
       }
     }
@@ -4426,6 +4503,7 @@ function draw() {
   });
 
   updateTooltip();
+  ensureOrbitAnimationLoop();
 }
 
 window.addEventListener("DOMContentLoaded", () => {
