@@ -4516,7 +4516,7 @@ function draw() {
   const selMembers = selTeam ? selTeam.members : null;
 
   // Ground stations (anchors)
-  const gsSize = Math.max(14, Math.min(26, zoom * 1.45));
+  const gsSize = Math.max(14, Math.min(26, zoom * 1.45)) * 0.75;
   groundStations.forEach((gs) => {
     const p = latLngToScreen(gs.lat, gs.lng);
     drawGroundStationIcon(p.x, p.y, gsSize);
