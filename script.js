@@ -4290,8 +4290,9 @@ function drawWaypointPin(x, y) {
   const ringInnerR = Math.max(2.2, ringOuterR - ringThickness);
   const triW = ringOuterR * 1.55;
 
-  const fill = "rgba(10,12,16,0.78)";
-  const stroke = "rgba(255,255,255,0.78)";
+  const pinColor = "rgba(255, 90, 90, 0.85)"; // light red, single color for fill + edge
+  const fill = pinColor;
+  const stroke = pinColor;
   const lineW = Math.max(1.8, Math.min(3.2, ringOuterR * 0.16));
 
   // Shadow/glow
@@ -4338,12 +4339,7 @@ function drawWaypointPin(x, y) {
   ctx.closePath();
   ctx.stroke();
 
-  // Soft inner ring edge to make the hole read on bright tiles
-  ctx.beginPath();
-  ctx.arc(0, ringCy, ringInnerR, 0, Math.PI * 2);
-  ctx.lineWidth = Math.max(1.1, lineW * 0.6);
-  ctx.strokeStyle = "rgba(255,255,255,0.18)";
-  ctx.stroke();
+  // Keep the hole clean (no extra inner edge stroke) so it reads as a single combined shape.
   ctx.restore();
 }
 
