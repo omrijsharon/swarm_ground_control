@@ -4284,41 +4284,42 @@ function drawWaypointPin(x, y) {
   ctx.save();
   ctx.translate(x, y);
   const z = map && map.getZoom ? map.getZoom() : 12;
-  const h = Math.max(20, Math.min(34, z * 2.2));
-  const cy = -h * 0.62;
-  const r = h * 0.23;
-  const w = r * 2.15;
+  const ringR = Math.max(7, Math.min(14, z * 0.9));
+  const ringCy = -ringR * 2.1;
+  const ringStroke = Math.max(1.6, Math.min(2.6, ringR * 0.18));
+  const triH = ringR * 2.1;
+  const triW = ringR * 1.45;
 
-  // Outer teardrop marker
-  ctx.beginPath();
-  ctx.moveTo(0, 0); // tip anchored at the waypoint coordinate
-  ctx.bezierCurveTo(w, -h * 0.28, w, cy + r * 1.05, 0, cy + r);
-  ctx.bezierCurveTo(-w, cy + r * 1.05, -w, -h * 0.28, 0, 0);
-  ctx.closePath();
-
-  ctx.fillStyle = "rgba(10,12,16,0.86)";
+  // Shadow/glow
   ctx.shadowColor = "rgba(0,0,0,0.45)";
   ctx.shadowBlur = 10;
+
+  // Ring (thin circle with a hole inside)
+  ctx.beginPath();
+  ctx.arc(0, ringCy, ringR, 0, Math.PI * 2);
+  ctx.lineWidth = ringStroke;
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
+  ctx.stroke();
+
+  // Inverted triangle pointer connected to the ring, tip anchored at waypoint coordinate (0,0)
+  const baseY = ringCy + ringR - ringStroke / 2; // connect at bottom of ring
+  ctx.beginPath();
+  ctx.moveTo(-triW / 2, baseY);
+  ctx.lineTo(0, 0);
+  ctx.lineTo(triW / 2, baseY);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(10,12,16,0.65)";
   ctx.fill();
   ctx.shadowBlur = 0;
-  ctx.lineWidth = 1.6;
-  ctx.strokeStyle = "rgba(255,255,255,0.60)";
+  ctx.lineWidth = ringStroke;
+  ctx.strokeStyle = "rgba(255,255,255,0.70)";
   ctx.stroke();
 
-  // Inner circular cut-out
-  ctx.save();
-  ctx.globalCompositeOperation = "destination-out";
+  // Tiny highlight at tip for visibility
   ctx.beginPath();
-  ctx.arc(0, cy + r * 0.10, r * 0.62, 0, Math.PI * 2);
+  ctx.arc(0, 0, Math.max(1.2, ringStroke * 0.55), 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.65)";
   ctx.fill();
-  ctx.restore();
-
-  // Subtle inner ring so the cutout reads clearly on light basemaps
-  ctx.beginPath();
-  ctx.arc(0, cy + r * 0.10, r * 0.62, 0, Math.PI * 2);
-  ctx.lineWidth = 1.2;
-  ctx.strokeStyle = "rgba(255,255,255,0.22)";
-  ctx.stroke();
   ctx.restore();
 }
 
