@@ -4306,8 +4306,11 @@ function drawWaypointPin(x, y) {
   ctx.fillStyle = fill;
   ctx.fill();
 
-  // Pointer fill (overlaps the ring bottom slightly so it reads as one piece)
-  const baseY = ringCy + ringOuterR - lineW * 0.15;
+  // Pointer fill (overlap into the ring so it reads as one piece).
+  // NOTE: `ringCy` moves the ring and would also move `baseY` if we tie them directly,
+  // so keep an explicit overlap amount to control how much the triangle intrudes into the ring.
+  const overlap = Math.max(lineW * 1.2, ringOuterR * 0.35);
+  const baseY = ringCy + ringOuterR - overlap;
   ctx.beginPath();
   ctx.moveTo(-triW / 2, baseY);
   ctx.lineTo(0, 0);
