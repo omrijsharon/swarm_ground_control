@@ -1014,12 +1014,23 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     ctx.stroke();
     ctx.shadowBlur = 0;
 
+    // Add a moving dashed overlay so rotation is obvious even at slow angular velocities.
+    ctx.save();
+    ctx.setLineDash([10, 10]);
+    ctx.lineDashOffset = -dirSign * (omega * tSec * rPx);
+    ctx.lineWidth = 2.4;
+    ctx.strokeStyle = "rgba(255,255,255,0.55)";
+    ctx.beginPath();
+    ctx.arc(cxcy.x, cxcy.y, rPx, start, end, dirSign < 0);
+    ctx.stroke();
+    ctx.restore();
+
     // Arrowhead (stroked V) at the leading edge
     const tipX = cxcy.x + rPx * Math.cos(end);
     const tipY = cxcy.y + rPx * Math.sin(end);
     const tangent = end + dirSign * (Math.PI / 2);
     const z = map.getZoom ? map.getZoom() : 10;
-    const size = Math.max(18, Math.min(34, z * 2.3));
+    const size = Math.max(22, Math.min(40, z * 2.6));
     const phi = Math.PI / 7; // tighter arrowhead
     const a1 = tangent + Math.PI - phi;
     const a2 = tangent + Math.PI + phi;
