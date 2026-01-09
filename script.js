@@ -3432,18 +3432,21 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
       ${showSync ? `<button class="sync-btn" type="button" data-sync title="Match ETA">⇆</button>` : ""}
       <span class="menu-eta">${etaLabel}</span>
     </div>
-    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+    <div class="command-list cmd-action-list column" data-root-actions style="margin-top:2px;">
       <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
       <button class="cmd-chip cmd-action" data-action="orbit" type="button">Orbit</button>
     </div>
     <div class="speed-row" data-goto-details>
+      <span class="slider-label">Speed</span>
       <input type="range" min="10" max="100" value="${pendingWaypoint.speedKmh}" step="1" data-speed-slider>
-      <span data-speed-label>${pendingWaypoint.speedKmh} km/h</span>
+      <span class="slider-value" data-speed-label>${pendingWaypoint.speedKmh} km/h</span>
     </div>
     <div class="speed-row" data-goto-details>
+      <span class="slider-label">Altitude</span>
       <input type="range" min="5" max="100" value="${pendingWaypoint.altM}" step="1" data-alt-slider>
-      <span data-alt-label>${pendingWaypoint.altM} m</span>
+      <span class="slider-value" data-alt-label>${pendingWaypoint.altM} m</span>
     </div>
+    <button class="cmd-chip cmd-action confirm-btn" data-action="goto-wp-confirm" data-goto-details type="button">Goto WP</button>
   `;
 
   // Root view: show only distance + actions. Details (ETA/speed) appear only after pressing "Goto WP".
@@ -3480,7 +3483,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   if (btn) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
-      // First click reveals the detailed controls (speed + ETA). Second click confirms.
+      // Reveal the detailed controls (speed + ETA). Confirm is done via the bottom button.
       if (waypointMenuEl && waypointMenuEl.dataset.mode !== "goto") {
         waypointMenuEl.dataset.mode = "goto";
         const etaEl = waypointMenuEl.querySelector(".menu-eta");
@@ -3490,12 +3493,19 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
         });
         const syncEl = waypointMenuEl.querySelector("[data-sync]");
         if (syncEl) syncEl.style.display = "";
-        const orbitEl = waypointMenuEl.querySelector("[data-action='orbit']");
-        if (orbitEl) orbitEl.style.display = "none";
+        const rootActions = waypointMenuEl.querySelector("[data-root-actions]");
+        if (rootActions) rootActions.style.display = "none";
         updateLabel(pendingWaypoint ? pendingWaypoint.speedKmh : 60);
         updateAltLabel(pendingWaypoint ? pendingWaypoint.altM : 30);
-        return;
       }
+    });
+  }
+
+  const confirmBtn = waypointMenuEl.querySelector("[data-action='goto-wp-confirm']");
+  if (confirmBtn) {
+    confirmBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingWaypoint) return;
       if (waypointTeamId !== null) {
         const team = getTeamById(waypointTeamId);
         if (team) {
