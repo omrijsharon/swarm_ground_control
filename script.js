@@ -984,8 +984,8 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
   // Radius circle
   ctx.save();
   ctx.setLineDash([]);
-  ctx.lineWidth = 2.0;
-  ctx.strokeStyle = "rgba(120,220,255,0.55)";
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = "rgba(120,220,255,0.10)";
   ctx.beginPath();
   ctx.arc(cxcy.x, cxcy.y, rPx, 0, Math.PI * 2);
   ctx.stroke();
