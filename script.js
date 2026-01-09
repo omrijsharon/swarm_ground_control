@@ -3497,6 +3497,8 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
         if (rootActions) rootActions.style.display = "none";
         updateLabel(pendingWaypoint ? pendingWaypoint.speedKmh : 60);
         updateAltLabel(pendingWaypoint ? pendingWaypoint.altM : 30);
+        // Show the WP preview (pin + dashed line) exactly when transitioning into the Goto WP details view.
+        draw();
       }
     });
   }
