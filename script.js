@@ -4359,22 +4359,6 @@ function drawWaypointPin(x, y) {
   ctx.fill();
   ctx.restore();
 
-  // Inner-hole glow (clip to the hole so the glow appears inside the cutout)
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(0, ringCy, ringInnerR + Math.max(2, lineW * 1.2), 0, Math.PI * 2);
-  ctx.clip();
-  ctx.shadowColor = "rgba(255,255,255,1)";
-  ctx.shadowBlur = Math.max(10, ringOuterR * 1.4);
-  ctx.lineWidth = lineW + 2.0;
-  ctx.lineJoin = "round";
-  ctx.lineCap = "round";
-  ctx.strokeStyle = "rgba(255,255,255,0.85)";
-  ctx.beginPath();
-  ctx.arc(0, ringCy, ringInnerR, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.restore();
-
   // Single outline pass for both shapes (same stroke, rounded joins)
   ctx.shadowBlur = 0;
   ctx.lineWidth = lineW;
