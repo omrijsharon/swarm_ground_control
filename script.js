@@ -62,6 +62,8 @@ let tooltipSuppressUntil = 0;
 let waypointDroneId = null;
 let waypointTeamId = null;
 let waypointDrag = null; // { type: "pending"|"existing", droneId?, pointerId }
+let editWaypointMenuEl = null;
+let pendingEditWaypoint = null; // { lat, lng, ownerId }
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -1952,7 +1954,11 @@ function setupHoverHandlers() {
   const updateWaypointMenuHeader = () => {
     if (!waypointMenuEl || !pendingWaypoint) return;
     const sel = getSelectedEntity();
-    const latest = sel && sel.latest ? sel.latest : null;
+    let latest = sel && sel.latest ? sel.latest : null;
+    if (!latest && waypointDroneId !== null && waypointDroneId !== undefined) {
+      const d = getDroneById(waypointDroneId);
+      latest = d && d.getLatest && d.getLatest();
+    }
     const title = waypointMenuEl.querySelector(".menu-head h4");
     const etaSpan = waypointMenuEl.querySelector(".menu-eta");
     if (!latest || !isFinite(latest.lat) || !isFinite(latest.lng)) return;
@@ -2099,6 +2105,12 @@ function handleMapClick(e) {
 
   if (hitWp) {
     if (waypointMenuEl) closeWaypointMenu(false, true);
+    // If nothing is selected, clicking an existing WP should open an edit entry point
+    // (do not select the owner drone automatically).
+    if (pinnedTeamId === null && pinnedDroneId === null) {
+      openEditWaypointMenu(hitWp, e.containerPoint);
+      return;
+    }
     if (pinnedTeamId !== null) {
       openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, null, hitWp.droneId);
       return;
@@ -3427,6 +3439,75 @@ function isContainerPointOnPendingWaypointPin(containerPoint) {
   return Math.min(dTip, dRing) <= hitR;
 }
 
+function closeEditWaypointMenu() {
+  if (editWaypointMenuEl && editWaypointMenuEl.parentNode) {
+    editWaypointMenuEl.parentNode.removeChild(editWaypointMenuEl);
+  }
+  editWaypointMenuEl = null;
+  pendingEditWaypoint = null;
+  document.removeEventListener("pointerdown", handleEditWaypointOutsideClick, true);
+}
+
+function handleEditWaypointOutsideClick(e) {
+  if (!editWaypointMenuEl) return;
+  if (editWaypointMenuEl.contains(e.target)) return;
+  closeEditWaypointMenu();
+}
+
+function openEditWaypointMenu(hitWp, containerPoint) {
+  if (!map || !hitWp || !hitWp.wp || !containerPoint) return;
+  const host = document.getElementById("app") || document.body;
+
+  closeEditWaypointMenu();
+  closeWaypointMenu(false, true);
+  closeOrbitMenu(false, true);
+  closeHomeMenu(false);
+  closeFollowMenu(false);
+  closeRelationMenu(false);
+  closeSequenceMenu();
+
+  pendingEditWaypoint = { lat: hitWp.wp.lat, lng: hitWp.wp.lng, ownerId: hitWp.droneId };
+
+  editWaypointMenuEl = document.createElement("div");
+  editWaypointMenuEl.className = "relative-menu";
+  host.appendChild(editWaypointMenuEl);
+  editWaypointMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(editWaypointMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  editWaypointMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  editWaypointMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const ownerId = Number.isFinite(hitWp.droneId) ? hitWp.droneId : null;
+  const droneLabel = ownerId !== null ? `Drone #${ownerId + 1}` : "Waypoint";
+
+  editWaypointMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>${droneLabel}</h4>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action" data-action="edit-wp" type="button">Edit waypoint</button>
+    </div>
+  `;
+
+  const btn = editWaypointMenuEl.querySelector("[data-action='edit-wp']");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = pendingEditWaypoint;
+      if (!p || p.ownerId === null || p.ownerId === undefined) return;
+      closeEditWaypointMenu();
+      openWaypointMenu({ lat: p.lat, lng: p.lng }, containerPoint, p.ownerId, p.ownerId, {
+        pinSelection: false,
+        startInGotoMode: true,
+        isEdit: true,
+      });
+    });
+  }
+
+  document.addEventListener("pointerdown", handleEditWaypointOutsideClick, true);
+}
+
 function handleWaypointOutsideClick(e) {
   if (!waypointMenuEl) return;
   if (waypointMenuEl.contains(e.target)) return;
@@ -3442,7 +3523,7 @@ function handleWaypointOutsideClick(e) {
   closeWaypointMenu(true);
 }
 
-function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null) {
+function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null, options = {}) {
   const selectedTeam = droneId === null || droneId === undefined ? (pinnedTeamId !== null ? getTeamById(pinnedTeamId) : null) : null;
   const drone =
     droneId !== null && droneId !== undefined
@@ -3459,6 +3540,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   tooltipMode = "info";
   tooltipSuppressUntil = performance.now() + 550;
   if (tooltipEl) tooltipEl.style.display = "none";
+  closeEditWaypointMenu();
   closeFollowMenu();
   closeHomeMenu();
   closeOrbitMenu(false, true);
@@ -3471,6 +3553,10 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
   const ownerWp = ownerId !== null ? waypointTargets.get(ownerId) : null;
   const showSync = !!ownerWp;
+  if (options && options.isEdit && ownerWp) {
+    pendingWaypoint.speedKmh = Math.max(10, Math.min(100, Math.round(ownerWp.speedKmh || 60)));
+    pendingWaypoint.altM = Math.max(5, Math.min(100, Math.round(ownerWp.altM ?? initialAlt)));
+  }
 
   const formatEta = (km, speed) => {
     if (!isFinite(km) || !isFinite(speed) || speed <= 0) return "";
@@ -3498,12 +3584,15 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
 
   waypointDroneId = selectedTeam ? null : drone.id;
   waypointTeamId = selectedTeam ? selectedTeam.id : null;
-  if (selectedTeam) {
-    pinnedTeamId = selectedTeam.id; // keep team selected while menu is open
-    pinnedDroneId = null;
-  } else {
-    pinnedDroneId = drone.id; // keep drone selected while menu is open
-    pinnedTeamId = null;
+  const pinSelection = !(options && options.pinSelection === false);
+  if (pinSelection) {
+    if (selectedTeam) {
+      pinnedTeamId = selectedTeam.id; // keep team selected while menu is open
+      pinnedDroneId = null;
+    } else {
+      pinnedDroneId = drone.id; // keep drone selected while menu is open
+      pinnedTeamId = null;
+    }
   }
 
   const mapRect = map.getContainer().getBoundingClientRect();
@@ -3564,6 +3653,25 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     waypointMenuEl.dataset.mode = "root";
   }
 
+  const enterGotoDetails = () => {
+    if (!waypointMenuEl) return;
+    if (waypointMenuEl.dataset.mode === "goto") return;
+    waypointMenuEl.dataset.mode = "goto";
+    const etaEl = waypointMenuEl.querySelector(".menu-eta");
+    if (etaEl) etaEl.style.display = "";
+    waypointMenuEl.querySelectorAll("[data-goto-details]").forEach((row) => {
+      row.style.display = "flex";
+    });
+    const syncEl = waypointMenuEl.querySelector("[data-sync]");
+    if (syncEl) syncEl.style.display = "";
+    const rootActions = waypointMenuEl.querySelector("[data-root-actions]");
+    if (rootActions) rootActions.style.display = "none";
+    updateLabel(pendingWaypoint ? pendingWaypoint.speedKmh : 60);
+    updateAltLabel(pendingWaypoint ? pendingWaypoint.altM : 30);
+    // Show the WP preview (pin + dashed line) exactly when transitioning into the Goto WP details view.
+    draw();
+  };
+
   const slider = waypointMenuEl.querySelector("[data-speed-slider]");
   if (slider) {
     slider.addEventListener("input", (e) => {
@@ -3587,22 +3695,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       // Reveal the detailed controls (speed + ETA). Confirm is done via the bottom button.
-      if (waypointMenuEl && waypointMenuEl.dataset.mode !== "goto") {
-        waypointMenuEl.dataset.mode = "goto";
-        const etaEl = waypointMenuEl.querySelector(".menu-eta");
-        if (etaEl) etaEl.style.display = "";
-        waypointMenuEl.querySelectorAll("[data-goto-details]").forEach((row) => {
-          row.style.display = "flex";
-        });
-        const syncEl = waypointMenuEl.querySelector("[data-sync]");
-        if (syncEl) syncEl.style.display = "";
-        const rootActions = waypointMenuEl.querySelector("[data-root-actions]");
-        if (rootActions) rootActions.style.display = "none";
-        updateLabel(pendingWaypoint ? pendingWaypoint.speedKmh : 60);
-        updateAltLabel(pendingWaypoint ? pendingWaypoint.altM : 30);
-        // Show the WP preview (pin + dashed line) exactly when transitioning into the Goto WP details view.
-        draw();
-      }
+      enterGotoDetails();
     });
   }
 
@@ -3641,6 +3734,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     orbitBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!pendingWaypoint) return;
+      closeEditWaypointMenu();
       const anchor = { type: "wp", lat: pendingWaypoint.lat, lng: pendingWaypoint.lng, ownerId: pendingWaypoint.ownerId ?? null };
       closeWaypointMenu(false, true);
       openOrbitMenu(anchor, containerPoint);
@@ -3669,8 +3763,11 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   }
 
   document.addEventListener("pointerdown", handleWaypointOutsideClick, true);
-  // Ensure the dashed preview line + pin appear immediately.
-  draw();
+  if (options && options.startInGotoMode) {
+    enterGotoDetails();
+  } else {
+    draw();
+  }
 }
 
 function renderBatteryBars(batteryPct) {
