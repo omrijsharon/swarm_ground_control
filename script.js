@@ -1003,28 +1003,31 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     const arcSpan = Math.PI / 3; // 60° arc segment (fixed size)
     const end = start + dirSign * arcSpan;
 
-    // The arc itself rotates around the circle (theta0/theta1 advance each frame).
-    ctx.setLineDash([]);
-    ctx.lineWidth = 3.4;
-    ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(120,220,255,0.92)";
-    ctx.shadowColor = stroke;
-    ctx.shadowBlur = 12;
-    ctx.beginPath();
-    ctx.arc(cxcy.x, cxcy.y, rPx, start, end, dirSign < 0);
-    ctx.stroke();
-    ctx.shadowBlur = 0;
+    // Futuristic "comet" trail: more transparent farther from the arrowhead.
+    // (Draw as multiple short arc segments with increasing alpha toward the head.)
+    const trailRgb = { r: 70, g: 255, b: 170 }; // glowing green
+    const segs = 22;
+    const spanAbs = Math.abs(arcSpan);
+    for (let i = 0; i < segs; i++) {
+      const t0 = i / segs;
+      const t1 = (i + 1) / segs;
+      const a0 = start + dirSign * spanAbs * t0;
+      const a1 = start + dirSign * spanAbs * t1;
+      const strength = Math.pow(t1, 2.2); // bias brightness toward the head
+      const alpha = 0.06 + strength * 0.86;
 
-    // Add a moving dashed overlay so rotation is obvious even at slow angular velocities.
-    ctx.save();
-    ctx.setLineDash([10, 10]);
-    ctx.lineDashOffset = -dirSign * (omegaVis * tSec * rPx);
-    ctx.lineWidth = 2.4;
-    ctx.strokeStyle = "rgba(255,255,255,0.55)";
-    ctx.beginPath();
-    ctx.arc(cxcy.x, cxcy.y, rPx, start, end, dirSign < 0);
-    ctx.stroke();
-    ctx.restore();
+      ctx.save();
+      ctx.setLineDash([]);
+      ctx.lineWidth = 3.6;
+      ctx.lineCap = "round";
+      ctx.strokeStyle = `rgba(${trailRgb.r},${trailRgb.g},${trailRgb.b},${alpha})`;
+      ctx.shadowColor = `rgba(${trailRgb.r},${trailRgb.g},${trailRgb.b},${Math.min(1, alpha)})`;
+      ctx.shadowBlur = 14 * strength + 2;
+      ctx.beginPath();
+      ctx.arc(cxcy.x, cxcy.y, rPx, a0, a1, dirSign < 0);
+      ctx.stroke();
+      ctx.restore();
+    }
 
     // Arrowhead (stroked V) at the leading edge
     const tipX = cxcy.x + rPx * Math.cos(end);
@@ -1044,8 +1047,8 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     ctx.setLineDash([]);
     ctx.lineWidth = 4.2;
     ctx.lineCap = "round";
-    ctx.strokeStyle = stroke;
-    ctx.shadowColor = stroke;
+    ctx.strokeStyle = `rgba(${trailRgb.r},${trailRgb.g},${trailRgb.b},1)`;
+    ctx.shadowColor = `rgba(${trailRgb.r},${trailRgb.g},${trailRgb.b},1)`;
     ctx.shadowBlur = 12;
     ctx.beginPath();
     ctx.moveTo(x1, y1);
