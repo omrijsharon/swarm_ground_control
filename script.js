@@ -1950,29 +1950,6 @@ function setupHoverHandlers() {
   let longPressPointerId = null;
   let longPressStartClient = null;
 
-  const getWpPinHitRadiusPx = () => {
-    const z = map && map.getZoom ? map.getZoom() : 12;
-    const scale = 0.7;
-    const ringOuterR = Math.max(8 * scale, Math.min(16 * scale, z * 1.0 * scale));
-    return ringOuterR * 2.4;
-  };
-
-  const isOverPendingWaypointPin = (containerPoint) => {
-    if (!waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
-    if (!pendingWaypoint) return false;
-    const tip = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
-    if (!tip) return false;
-    const z = map && map.getZoom ? map.getZoom() : 12;
-    const scale = 0.7;
-    const ringOuterR = Math.max(8 * scale, Math.min(16 * scale, z * 1.0 * scale));
-    const ringCy = -ringOuterR * 1.88;
-    const ringC = { x: tip.x, y: tip.y + ringCy };
-    const hitR = getWpPinHitRadiusPx();
-    const dTip = Math.hypot(containerPoint.x - tip.x, containerPoint.y - tip.y);
-    const dRing = Math.hypot(containerPoint.x - ringC.x, containerPoint.y - ringC.y);
-    return Math.min(dTip, dRing) <= hitR;
-  };
-
   const updateWaypointMenuHeader = () => {
     if (!waypointMenuEl || !pendingWaypoint) return;
     const sel = getSelectedEntity();
@@ -1997,7 +1974,7 @@ function setupHoverHandlers() {
     if (performance.now() < suppressMapClickUntil) return false;
     if (!pendingWaypoint || !waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
     const pt = map.mouseEventToContainerPoint(ev);
-    if (!isOverPendingWaypointPin(pt)) return false;
+    if (!isContainerPointOnPendingWaypointPin(pt)) return false;
 
     waypointDrag = { type: "pending", pointerId: ev.pointerId ?? null };
     suppressMapClickUntil = performance.now() + 400;
@@ -3429,9 +3406,40 @@ function attemptActionLongPress(containerPoint) {
   }
 }
 
+function getWaypointPinGeometryPx() {
+  const z = map && map.getZoom ? map.getZoom() : 12;
+  const scale = 0.7;
+  const ringOuterR = Math.max(8 * scale, Math.min(16 * scale, z * 1.0 * scale));
+  const ringCy = -ringOuterR * 1.88;
+  const hitR = ringOuterR * 2.4;
+  return { ringOuterR, ringCy, hitR };
+}
+
+function isContainerPointOnPendingWaypointPin(containerPoint) {
+  if (!map || !containerPoint) return false;
+  if (!waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
+  if (!pendingWaypoint) return false;
+  const tip = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
+  if (!tip) return false;
+  const { ringCy, hitR } = getWaypointPinGeometryPx();
+  const ringC = { x: tip.x, y: tip.y + ringCy };
+  const dTip = Math.hypot(containerPoint.x - tip.x, containerPoint.y - tip.y);
+  const dRing = Math.hypot(containerPoint.x - ringC.x, containerPoint.y - ringC.y);
+  return Math.min(dTip, dRing) <= hitR;
+}
+
 function handleWaypointOutsideClick(e) {
   if (!waypointMenuEl) return;
   if (waypointMenuEl.contains(e.target)) return;
+  // Allow dragging the pending WP pin without the menu auto-closing.
+  if (map && pendingWaypoint && waypointMenuEl.dataset.mode === "goto") {
+    try {
+      const pt = map.mouseEventToContainerPoint(e);
+      if (isContainerPointOnPendingWaypointPin(pt)) return;
+    } catch (_) {
+      // ignore
+    }
+  }
   closeWaypointMenu(true);
 }
 
