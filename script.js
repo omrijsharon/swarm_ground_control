@@ -4283,20 +4283,41 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
 function drawWaypointPin(x, y) {
   ctx.save();
   ctx.translate(x, y);
-  ctx.lineWidth = 2;
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
+  const z = map && map.getZoom ? map.getZoom() : 12;
+  const h = Math.max(20, Math.min(34, z * 2.2));
+  const cy = -h * 0.62;
+  const r = h * 0.23;
+  const w = r * 2.15;
+
+  // Outer teardrop marker
   ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(0, -18);
+  ctx.moveTo(0, 0); // tip anchored at the waypoint coordinate
+  ctx.bezierCurveTo(w, -h * 0.28, w, cy + r * 1.05, 0, cy + r);
+  ctx.bezierCurveTo(-w, cy + r * 1.05, -w, -h * 0.28, 0, 0);
+  ctx.closePath();
+
+  ctx.fillStyle = "rgba(10,12,16,0.86)";
+  ctx.shadowColor = "rgba(0,0,0,0.45)";
+  ctx.shadowBlur = 10;
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.lineWidth = 1.6;
+  ctx.strokeStyle = "rgba(255,255,255,0.60)";
   ctx.stroke();
 
-  const r = 6;
-  ctx.fillStyle = "rgba(255,80,80,0.95)";
+  // Inner circular cut-out
+  ctx.save();
+  ctx.globalCompositeOperation = "destination-out";
   ctx.beginPath();
-  ctx.arc(0, -18, r, 0, Math.PI * 2);
+  ctx.arc(0, cy + r * 0.10, r * 0.62, 0, Math.PI * 2);
   ctx.fill();
-  ctx.strokeStyle = "rgba(255,255,255,0.9)";
-  ctx.lineWidth = 1.4;
+  ctx.restore();
+
+  // Subtle inner ring so the cutout reads clearly on light basemaps
+  ctx.beginPath();
+  ctx.arc(0, cy + r * 0.10, r * 0.62, 0, Math.PI * 2);
+  ctx.lineWidth = 1.2;
+  ctx.strokeStyle = "rgba(255,255,255,0.22)";
   ctx.stroke();
   ctx.restore();
 }
