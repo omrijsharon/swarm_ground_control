@@ -1030,8 +1030,9 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     const tipX = cxcy.x + rPx * Math.cos(end);
     const tipY = cxcy.y + rPx * Math.sin(end);
     const tangent = end + dirSign * (Math.PI / 2);
-    const z = map.getZoom ? map.getZoom() : 10;
-    const size = Math.max(22, Math.min(40, z * 2.6));
+    // Scale arrowhead with orbit radius in pixels (already reflects zoom).
+    // Keep it proportional so it doesn't look huge on small orbits / too tiny on big orbits.
+    const size = Math.max(8, Math.min(28, rPx * 0.22));
     const phi = Math.PI / 7; // tighter arrowhead
     const a1 = tangent + Math.PI - phi;
     const a2 = tangent + Math.PI + phi;
