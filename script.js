@@ -61,6 +61,7 @@ let waypointCloseSuppressUntil = 0;
 let tooltipSuppressUntil = 0;
 let waypointDroneId = null;
 let waypointTeamId = null;
+let waypointDrag = null; // { type: "pending"|"existing", droneId?, pointerId }
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -1948,7 +1949,102 @@ function setupHoverHandlers() {
   const DRAG_CANCEL_PX = 10;
   let longPressPointerId = null;
   let longPressStartClient = null;
+
+  const getWpPinHitRadiusPx = () => {
+    const z = map && map.getZoom ? map.getZoom() : 12;
+    const scale = 0.7;
+    const ringOuterR = Math.max(8 * scale, Math.min(16 * scale, z * 1.0 * scale));
+    return ringOuterR * 2.4;
+  };
+
+  const isOverPendingWaypointPin = (containerPoint) => {
+    if (!waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
+    if (!pendingWaypoint) return false;
+    const tip = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
+    if (!tip) return false;
+    const z = map && map.getZoom ? map.getZoom() : 12;
+    const scale = 0.7;
+    const ringOuterR = Math.max(8 * scale, Math.min(16 * scale, z * 1.0 * scale));
+    const ringCy = -ringOuterR * 1.88;
+    const ringC = { x: tip.x, y: tip.y + ringCy };
+    const hitR = getWpPinHitRadiusPx();
+    const dTip = Math.hypot(containerPoint.x - tip.x, containerPoint.y - tip.y);
+    const dRing = Math.hypot(containerPoint.x - ringC.x, containerPoint.y - ringC.y);
+    return Math.min(dTip, dRing) <= hitR;
+  };
+
+  const updateWaypointMenuHeader = () => {
+    if (!waypointMenuEl || !pendingWaypoint) return;
+    const sel = getSelectedEntity();
+    const latest = sel && sel.latest ? sel.latest : null;
+    const title = waypointMenuEl.querySelector(".menu-head h4");
+    const etaSpan = waypointMenuEl.querySelector(".menu-eta");
+    if (!latest || !isFinite(latest.lat) || !isFinite(latest.lng)) return;
+    const distKm = haversine2dMeters(latest.lat, latest.lng, pendingWaypoint.lat, pendingWaypoint.lng) / 1000;
+    if (title && isFinite(distKm)) title.textContent = `${distKm.toFixed(2)} km`;
+    if (etaSpan && waypointMenuEl.dataset.mode === "goto" && isFinite(distKm)) {
+      const speed = Math.max(1, Number(pendingWaypoint.speedKmh) || 60);
+      const totalSec = (distKm / speed) * 3600;
+      const m = Math.floor(totalSec / 60);
+      const s = Math.max(0, Math.round(totalSec - m * 60));
+      etaSpan.textContent = `${m}m ${s.toString().padStart(2, "0")}s`;
+    }
+  };
+
+  const tryStartWaypointDrag = (ev) => {
+    if (!map || !ev) return false;
+    if (isZooming || isMapDragging) return false;
+    if (performance.now() < suppressMapClickUntil) return false;
+    if (!pendingWaypoint || !waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
+    const pt = map.mouseEventToContainerPoint(ev);
+    if (!isOverPendingWaypointPin(pt)) return false;
+
+    waypointDrag = { type: "pending", pointerId: ev.pointerId ?? null };
+    suppressMapClickUntil = performance.now() + 400;
+    suppressNextMapClick = true;
+    longPressSuppressUntil = performance.now() + 400;
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+
+    // Prevent Leaflet from panning while dragging the pin.
+    const hadDragging = !!(map.dragging && map.dragging.enabled && map.dragging.enabled());
+    if (hadDragging) map.dragging.disable();
+
+    const move = (e2) => {
+      if (!waypointDrag) return;
+      if (waypointDrag.pointerId !== null && e2.pointerId !== undefined && e2.pointerId !== waypointDrag.pointerId) return;
+      const ll = map.mouseEventToLatLng(e2);
+      if (!ll || !pendingWaypoint) return;
+      pendingWaypoint.lat = ll.lat;
+      pendingWaypoint.lng = ll.lng;
+      updateWaypointMenuHeader();
+      draw();
+      e2.preventDefault?.();
+    };
+    const up = (e2) => {
+      if (!waypointDrag) return;
+      if (waypointDrag.pointerId !== null && e2.pointerId !== undefined && e2.pointerId !== waypointDrag.pointerId) return;
+      waypointDrag = null;
+      if (hadDragging) map.dragging.enable();
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+      suppressMapClickUntil = performance.now() + 300;
+      suppressNextMapClick = true;
+      e2.preventDefault?.();
+    };
+
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
+    ev.preventDefault?.();
+    return true;
+  };
+
   const startLongPress = (ev) => {
+    if (tryStartWaypointDrag(ev)) return;
     if (performance.now() < longPressSuppressUntil) return;
     if (isZooming || isMapDragging) return;
     if (ev.pointerType === "touch" && ev.isPrimary === false) return;
