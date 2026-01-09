@@ -4285,19 +4285,19 @@ function drawWaypointPin(x, y) {
   ctx.translate(x, y);
   const z = map && map.getZoom ? map.getZoom() : 12;
   const ringOuterR = Math.max(8, Math.min(16, z * 1.0));
-  const ringCy = -ringOuterR * 2.05;
+  // Bring the ring a bit lower so it overlaps the pointer and reads as one object.
+  const ringCy = -ringOuterR * 1.82;
   const ringThickness = Math.max(3.2, Math.min(7.0, ringOuterR * 0.45)); // thicker ring
   const ringInnerR = Math.max(2.2, ringOuterR - ringThickness);
   const triW = ringOuterR * 1.55;
 
-  const pinColor = "rgba(255, 90, 90, 0.85)"; // light red, single color for fill + edge
+  const pinColor = "rgb(255, 90, 90)"; // light red, fully opaque
   const fill = pinColor;
   const stroke = pinColor;
   const lineW = Math.max(1.8, Math.min(3.2, ringOuterR * 0.16));
 
-  // Shadow/glow
-  ctx.shadowColor = "rgba(0,0,0,0.45)";
-  ctx.shadowBlur = 10;
+  // No transparency/blur; keep the marker fully solid.
+  ctx.shadowBlur = 0;
 
   // Draw ring + pointer as one object: same fill/stroke, overlapping connection.
   // Ring outer fill
@@ -4307,7 +4307,7 @@ function drawWaypointPin(x, y) {
   ctx.fill();
 
   // Pointer fill (overlaps the ring bottom slightly so it reads as one piece)
-  const baseY = ringCy + ringOuterR - lineW * 0.4;
+  const baseY = ringCy + ringOuterR - lineW * 0.15;
   ctx.beginPath();
   ctx.moveTo(-triW / 2, baseY);
   ctx.lineTo(0, 0);
