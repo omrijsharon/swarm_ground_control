@@ -4523,8 +4523,9 @@ function draw() {
     drawWaypointPin(to.x, to.y);
   });
 
-  // Waypoint preview (while the waypoint menu is open, before confirming the command)
-  if (waypointMenuEl && pendingWaypoint) {
+  // Waypoint preview: show only after the user chose "Goto WP" (details step),
+  // not in the initial "Goto WP / Orbit" chooser menu.
+  if (waypointMenuEl && pendingWaypoint && waypointMenuEl.dataset.mode === "goto") {
     const sel = getSelectedEntity();
     const latest = sel && sel.latest ? sel.latest : null;
     if (latest && isFinite(latest.lat) && isFinite(latest.lng)) {
