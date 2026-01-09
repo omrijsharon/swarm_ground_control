@@ -995,10 +995,11 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
   if (isFinite(periodMin) && periodMin > 0) {
     const periodSec = periodMin * 60;
     const frequencyHz = 1 / periodSec;
-    const omega = 2 * Math.PI * frequencyHz; // rad/sec
+    const omega = 2 * Math.PI * frequencyHz; // rad/sec (real)
+    const omegaVis = omega * 60; // visual speed-up so motion is obvious
     const dirSign = direction === "CCW" ? -1 : 1;
     const tSec = performance.now() / 1000;
-    const start = -Math.PI / 2 + dirSign * ((omega * tSec) % (Math.PI * 2));
+    const start = -Math.PI / 2 + dirSign * ((omegaVis * tSec) % (Math.PI * 2));
     const arcSpan = Math.PI / 3; // 60° arc segment (fixed size)
     const end = start + dirSign * arcSpan;
 
@@ -1017,7 +1018,7 @@ function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh 
     // Add a moving dashed overlay so rotation is obvious even at slow angular velocities.
     ctx.save();
     ctx.setLineDash([10, 10]);
-    ctx.lineDashOffset = -dirSign * (omega * tSec * rPx);
+    ctx.lineDashOffset = -dirSign * (omegaVis * tSec * rPx);
     ctx.lineWidth = 2.4;
     ctx.strokeStyle = "rgba(255,255,255,0.55)";
     ctx.beginPath();
