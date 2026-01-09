@@ -3564,6 +3564,8 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   }
 
   document.addEventListener("pointerdown", handleWaypointOutsideClick, true);
+  // Ensure the dashed preview line + pin appear immediately.
+  draw();
 }
 
 function renderBatteryBars(batteryPct) {
@@ -4520,6 +4522,26 @@ function draw() {
     // Pin (lollipop)
     drawWaypointPin(to.x, to.y);
   });
+
+  // Waypoint preview (while the waypoint menu is open, before confirming the command)
+  if (waypointMenuEl && pendingWaypoint) {
+    const sel = getSelectedEntity();
+    const latest = sel && sel.latest ? sel.latest : null;
+    if (latest && isFinite(latest.lat) && isFinite(latest.lng)) {
+      const from = latLngToScreen(latest.lat, latest.lng);
+      const to = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
+      ctx.save();
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 1.8;
+      ctx.strokeStyle = "rgba(255,255,255,0.85)";
+      ctx.beginPath();
+      ctx.moveTo(from.x, from.y);
+      ctx.lineTo(to.x, to.y);
+      ctx.stroke();
+      ctx.restore();
+      drawWaypointPin(to.x, to.y);
+    }
+  }
 
   // Orbit visualization (only for the current selection)
   const calcSpeed = (radiusM, periodMin) => {
