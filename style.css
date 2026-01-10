@@ -906,6 +906,11 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   box-shadow: none !important;
   border-radius: 0;
   padding: 4px 8px !important;
+  /* Black halo for readability on bright tiles */
+  text-shadow:
+    0 1px 2px rgba(0,0,0,0.85),
+    0 0 6px rgba(0,0,0,0.75);
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.85)) drop-shadow(0 0 6px rgba(0,0,0,0.65));
 }
 
 .drone-tooltip .mission-line{
