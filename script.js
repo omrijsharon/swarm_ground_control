@@ -149,13 +149,13 @@ function setScaleUnits(units) {
     el.addEventListener("click", (ev) => {
       ev.preventDefault();
       ev.stopPropagation();
-      openScaleMenu(el.getBoundingClientRect());
+      openScaleMenu();
     });
   }
 }
 
-function openScaleMenu(anchorRect) {
-  if (!map || !anchorRect) return;
+function openScaleMenu() {
+  if (!map) return;
   const host = document.getElementById("app") || document.body;
   closeScaleMenu();
 
@@ -165,12 +165,11 @@ function openScaleMenu(anchorRect) {
   scaleMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
   enableMenuDrag(scaleMenuEl);
 
-  // Position above the scale bar (bottom-left)
-  const pad = 8;
-  const left = Math.round(anchorRect.left);
-  const top = Math.round(anchorRect.top) - 10;
-  scaleMenuEl.style.left = `${left}px`;
-  scaleMenuEl.style.top = `${Math.max(pad, top)}px`;
+  // Always anchor to bottom-left of the browser window (within the host bounds).
+  const pad = 12;
+  const hostRect = host.getBoundingClientRect();
+  scaleMenuEl.style.left = `${pad}px`;
+  scaleMenuEl.style.top = `${pad}px`; // temporary until we know the height
 
   const isMetric = scaleUnits === "metric";
   scaleMenuEl.innerHTML = `
@@ -193,6 +192,15 @@ function openScaleMenu(anchorRect) {
   });
 
   document.addEventListener("pointerdown", handleScaleMenuOutsideClick, true);
+
+  // Reposition after layout so its bottom-left sits inside the bottom-left of the host.
+  requestAnimationFrame(() => {
+    if (!scaleMenuEl) return;
+    const menuH = scaleMenuEl.offsetHeight || 120;
+    const maxTop = Math.max(pad, hostRect.height - menuH - pad);
+    scaleMenuEl.style.left = `${pad}px`;
+    scaleMenuEl.style.top = `${maxTop}px`;
+  });
 }
 
 function clearTooltipPinnedIfSelectionChanges(nextDroneId, nextTeamId) {
