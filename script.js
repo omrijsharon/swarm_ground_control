@@ -2591,9 +2591,7 @@ function openOrbitMenu(anchor, containerPoint) {
   // Immediately render the default orbit (before the user touches the sliders).
   draw();
 
-  const dCenterM0 = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng);
-  const dCircleM0 = Math.max(0, dCenterM0 - Math.max(0, Number(pendingOrbit.radiusM) || 0));
-  const distKm = dCircleM0 / 1000;
+  const distKm = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng) / 1000;
   const distLabel = isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Orbit";
   const formatEta = (km, speed) => {
     if (!isFinite(km) || !isFinite(speed) || speed <= 0) return "";
@@ -2693,34 +2691,16 @@ function openOrbitMenu(anchor, containerPoint) {
     setOrbitSpeed();
   };
   setOrbitPeriodBounds();
-  updateEta();
 
   const updateEta = () => {
-    if (!orbitMenuEl) return;
-    const title = orbitMenuEl.querySelector(".menu-head h4");
     const eta = orbitMenuEl.querySelector(".menu-eta");
+    if (!eta) return;
     const center2 = resolveCenterLatLng();
     if (!center2) return;
-    let latest = getSelectedEntity()?.latest || sel.latest || null;
-    if (!latest) {
-      if (orbitTeamId !== null) {
-        const t = getTeamById(orbitTeamId);
-        latest = t ? getTeamSnapshot(t) : null;
-      } else if (orbitDroneId !== null && orbitDroneId !== undefined) {
-        const d = getDroneById(orbitDroneId);
-        latest = d && d.getLatest ? d.getLatest() : null;
-      }
-    }
+    const latest = getSelectedEntity()?.latest;
     if (!latest) return;
-
-    // Approach distance is to the orbit circle, not the center.
-    const dCenterM = haversine2dMeters(latest.lat, latest.lng, center2.lat, center2.lng);
-    const radiusM = Math.max(0, Number(pendingOrbit?.radiusM) || 0);
-    const dCircleM = Math.max(0, dCenterM - radiusM);
-    const km = dCircleM / 1000;
-
-    if (title && isFinite(km)) title.textContent = `${km.toFixed(2)} km`;
-    if (eta) eta.textContent = showApproachSpeed ? formatEta(km, pendingOrbit.approachSpeedKmh) : "";
+    const km = haversine2dMeters(latest.lat, latest.lng, center2.lat, center2.lng) / 1000;
+    eta.textContent = showApproachSpeed ? formatEta(km, pendingOrbit.approachSpeedKmh) : "";
   };
 
   const approach = orbitMenuEl.querySelector("[data-orbit-approach]");
@@ -2744,7 +2724,6 @@ function openOrbitMenu(anchor, containerPoint) {
       orbitPreview = { key, orbit: pendingOrbit };
       setOrbitPeriodBounds();
       setOrbitSpeed();
-      updateEta();
       draw();
     });
   }
