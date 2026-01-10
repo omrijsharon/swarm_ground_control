@@ -3860,6 +3860,9 @@ function initMapOnline() {
   // Tel Aviv coordinates: 32.0853°N, 34.7818°E
   map = L.map("map", { zoomControl: false }).setView([32.0853, 34.7818], 11);
 
+  // Dynamic scale bar (updates automatically with zoom).
+  L.control.scale({ position: "bottomleft", imperial: false, metric: true, maxWidth: 140 }).addTo(map);
+
   // --- Esri basemaps (no API key). Licensing/terms apply. ---
   const esriBase = {
     "Esri • Satellite": L.tileLayer(

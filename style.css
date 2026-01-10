@@ -889,6 +889,25 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   box-shadow: inset 0 0 8px rgba(0,0,0,0.45), 0 2px 8px rgba(0,0,0,0.35);
 }
 
+/* Leaflet scale bar styling (bottom-left) */
+.leaflet-control-scale{
+  margin-left: 14px !important;
+  margin-bottom: 14px !important;
+}
+
+.leaflet-control-scale-line{
+  background: rgba(18, 24, 32, 0.90) !important;
+  border: 1px solid rgba(255,255,255,0.20) !important;
+  border-top: none !important;
+  color: rgba(255,255,255,0.92) !important;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.25) !important;
+  border-radius: 10px;
+  padding: 6px 10px !important;
+}
+
 .drone-tooltip .mission-line{
   display: flex;
   align-items: center;
