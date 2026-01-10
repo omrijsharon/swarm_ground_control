@@ -2125,6 +2125,20 @@ function handleMapClick(e) {
   }
 
   if (nearest) {
+    // If the user clicks the already-selected single drone, open its local actions menu.
+    if (pinnedTeamId === null && pinnedDroneId !== null && nearest.id === pinnedDroneId) {
+      tooltipSuppressUntil = 0;
+      closeSequenceMenu();
+      closeWaypointMenu(false, true);
+      closeHomeMenu(false);
+      closeFollowMenu(false);
+      closeRelationMenu(false);
+      closeOrbitMenu(false, true);
+      tooltipMode = "commands";
+      updateTooltip();
+      return;
+    }
+
     closeWaypointMenu();
     setPinnedDrone(nearest.id);
     return;
