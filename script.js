@@ -30,7 +30,9 @@ let map;
 let overlay, ctx;
 let drones = [];
 let groundStations = [];
-let waypointTargets = new Map(); // droneId -> { lat, lng, speedKmh }
+let waypoints = new Map(); // wpId -> { id, lat, lng, name? }
+let nextWaypointId = 1;
+let waypointTargets = new Map(); // droneId -> { wpId, speedKmh, altM }
 let orbitTargets = new Map(); // droneId -> { anchor, radiusM, orbitPeriodMin, altitudeM, direction, orbitSpeedKmh?, approachSpeedKmh? }
 let groundControl;
 
@@ -39,7 +41,7 @@ const COMMAND_OPTIONS = [
   "Disarm",
   "Takeoff",
   "Land",
-  "Goto waypoint",
+  "Goto WP",
   "Hold position",
   "Follow drone",
   "Search target",
@@ -63,7 +65,9 @@ let waypointDroneId = null;
 let waypointTeamId = null;
 let waypointDrag = null; // { type: "pending"|"existing", droneId?, pointerId }
 let editWaypointMenuEl = null;
-let pendingEditWaypoint = null; // { lat, lng, ownerId }
+let pendingEditWaypoint = null; // { wpId }
+let createWaypointMenuEl = null;
+let pendingCreateWaypoint = null; // { lat, lng }
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -83,6 +87,11 @@ let suppressNextMapClick = false;
 let isMapDragging = false;
 let suppressStatusClickUntil = 0;
 let sequenceMenuEl = null;
+let sequenceGotoWpMenuEl = null;
+let pendingSequenceGotoWp = null; // { key, wpId, speedKmh, altM }
+let suppressSequenceClickUntil = 0;
+let sequenceGotoWpEditMenuEl = null;
+let pendingSequenceGotoWpEdit = null; // { key, index, wpId }
 let sequenceSelected = { key: null, index: 0 };
 let sequencePlayingByKey = new Map(); // key -> boolean
 let sequenceActiveIndexByKey = new Map(); // key -> number (user-defined list index)
@@ -972,14 +981,58 @@ function findNearestGroundStation(containerPoint, maxDist) {
   return best;
 }
 
+function createWaypoint(lat, lng, { name = null } = {}) {
+  const id = nextWaypointId++;
+  const wp = { id, lat: Number(lat), lng: Number(lng), name: name || null };
+  waypoints.set(id, wp);
+  return wp;
+}
+
+function getWaypointById(id) {
+  return waypoints.get(Number(id));
+}
+
+function updateWaypointPosition(id, lat, lng) {
+  const wp = getWaypointById(id);
+  if (!wp) return null;
+  wp.lat = Number(lat);
+  wp.lng = Number(lng);
+  return wp;
+}
+
+function normalizeWaypointTarget(droneId) {
+  const t = waypointTargets.get(droneId);
+  if (!t) return null;
+  // Legacy shape: { lat, lng, speedKmh, altM } -> promote to waypoint object.
+  if (t.wpId === undefined && t.lat !== undefined && t.lng !== undefined) {
+    const wp = createWaypoint(t.lat, t.lng);
+    const speedKmh = t.speedKmh;
+    const altM = t.altM;
+    waypointTargets.set(droneId, { wpId: wp.id, speedKmh, altM });
+    return waypointTargets.get(droneId);
+  }
+  return t;
+}
+
+function getAnyDroneTargetingWaypoint(wpId, { excludeDroneId = null } = {}) {
+  const id = Number(wpId);
+  for (const [droneId, t0] of waypointTargets.entries()) {
+    const t = normalizeWaypointTarget(droneId);
+    if (!t) continue;
+    if (excludeDroneId !== null && droneId === excludeDroneId) continue;
+    if (Number(t.wpId) === id) return droneId;
+  }
+  return null;
+}
+
 function findNearestWaypoint(containerPoint, maxDist = 14) {
   let best = null;
   let bestDist = maxDist;
-  waypointTargets.forEach((wp, droneId) => {
+  waypoints.forEach((wp, wpId) => {
     const p = map.latLngToContainerPoint([wp.lat, wp.lng]);
     const dist = Math.hypot(p.x - containerPoint.x, p.y - containerPoint.y);
     if (dist < bestDist) {
-      best = { droneId, wp, point: p };
+      best = { wpId, wp, point: p };
       bestDist = dist;
     }
   });
@@ -1002,7 +1055,13 @@ function metersToPixelsAtLatLng(lat, lng, meters) {
 
 function resolveOrbitCenter(anchor) {
   if (!anchor) return null;
-  if (anchor.type === "wp") return { lat: anchor.lat, lng: anchor.lng };
+  if (anchor.type === "wp") {
+    if (anchor.wpId !== null && anchor.wpId !== undefined) {
+      const wp = getWaypointById(anchor.wpId);
+      if (wp) return { lat: wp.lat, lng: wp.lng };
+    }
+    return { lat: anchor.lat, lng: anchor.lng };
+  }
   if (anchor.type === "home") {
     const gs = groundStations.find((g) => g.id === anchor.stationId);
     if (gs) return { lat: gs.lat, lng: gs.lng };
@@ -1322,8 +1381,7 @@ function executeSelectedSequenceCommand() {
 
   // Commands that require additional context (target/waypoint) are not runnable from sequence yet.
   if (
-    cmd === "Goto waypoint" ||
-    cmd.startsWith("Goto waypoint") ||
+    cmd === "Goto WP" ||
     cmd === "Follow drone" ||
     cmd.startsWith("Follow drone") ||
     cmd === "Search target" ||
@@ -1351,6 +1409,31 @@ function executeSelectedSequenceCommand() {
 
   if (["Arm", "Disarm", "Takeoff", "Land", "Hold position"].includes(cmd)) {
     runLocal(cmd);
+    return;
+  }
+
+  // Goto WP from sequence: "Goto WP #<id> (spd <n> km/h, alt <m> m)"
+  if (cmd.startsWith("Goto WP #")) {
+    const parsed = parseGotoWpSequenceCommand(cmd);
+    if (!parsed) return;
+    const { wpId, speedKmh: speed, altM: alt } = parsed;
+    const wp = getWaypointById(wpId);
+    if (!wp) {
+      window.alert(`Waypoint #${wpId} was not found.`);
+      return;
+    }
+    const payload = { wpId, lat: wp.lat, lng: wp.lng, speedKmh: speed, altM: alt };
+    if (sel.type === "team") {
+      const team = getTeamById(sel.id);
+      if (!team) return;
+      [...team.members].forEach((id) => {
+        const d = getDroneById(id);
+        if (d) issueGotoWaypointSingle(d, payload, { fromSequence: true, selectionKey: `drone:${id}` });
+      });
+    } else {
+      const d = getDroneById(sel.id);
+      if (d) issueGotoWaypointSingle(d, payload, { fromSequence: true, selectionKey: `drone:${d.id}` });
+    }
     return;
   }
 
@@ -1420,10 +1503,275 @@ function closeSequenceMenu() {
   document.removeEventListener("pointerdown", handleSequenceMenuOutside, true);
 }
 
+function closeSequenceGotoWpMenu() {
+  if (sequenceGotoWpMenuEl && sequenceGotoWpMenuEl.parentNode) {
+    sequenceGotoWpMenuEl.parentNode.removeChild(sequenceGotoWpMenuEl);
+  }
+  sequenceGotoWpMenuEl = null;
+  pendingSequenceGotoWp = null;
+  document.removeEventListener("pointerdown", handleSequenceGotoWpOutside, true);
+}
+
+function closeSequenceGotoWpEditMenu() {
+  if (sequenceGotoWpEditMenuEl && sequenceGotoWpEditMenuEl.parentNode) {
+    sequenceGotoWpEditMenuEl.parentNode.removeChild(sequenceGotoWpEditMenuEl);
+  }
+  sequenceGotoWpEditMenuEl = null;
+  pendingSequenceGotoWpEdit = null;
+  document.removeEventListener("pointerdown", handleSequenceGotoWpEditOutside, true);
+}
+
 function handleSequenceMenuOutside(e) {
   if (!sequenceMenuEl) return;
   if (sequenceMenuEl.contains(e.target)) return;
   closeSequenceMenu();
+}
+
+function handleSequenceGotoWpOutside(e) {
+  if (!sequenceGotoWpMenuEl) return;
+  if (sequenceGotoWpMenuEl.contains(e.target)) return;
+  closeSequenceGotoWpMenu();
+}
+
+function handleSequenceGotoWpEditOutside(e) {
+  if (!sequenceGotoWpEditMenuEl) return;
+  if (sequenceGotoWpEditMenuEl.contains(e.target)) return;
+  closeSequenceGotoWpEditMenu();
+}
+
+function setSequenceGotoWpAtIndex(key, index, wpId, speedKmh, altM) {
+  if (!groundControl || !key) return;
+  const planned = groundControl.getPlanned(key);
+  if (!planned || !planned.length) return;
+  const i = Math.max(0, Math.min(planned.length - 1, Number(index) || 0));
+  const cmd = `Goto WP #${wpId} (spd ${Math.round(speedKmh)} km/h, alt ${Math.round(altM)} m)`;
+  const next = [...planned];
+  next[i] = cmd;
+  groundControl.setPlanned(key, next);
+}
+
+function openSequenceGotoWpEditMenu(anchorEl, key, index, parsed) {
+  if (!anchorEl || !key || parsed === null || parsed === undefined) return;
+  if (!groundControl) return;
+  const { wpId, speedKmh, altM } = parsed;
+
+  closeSequenceGotoWpEditMenu();
+  const host = document.getElementById("app") || document.body;
+  sequenceGotoWpEditMenuEl = document.createElement("div");
+  sequenceGotoWpEditMenuEl.className = "relative-menu";
+  host.appendChild(sequenceGotoWpEditMenuEl);
+  sequenceGotoWpEditMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(sequenceGotoWpEditMenuEl);
+
+  pendingSequenceGotoWpEdit = { key, index, wpId };
+
+  const initSpeed = Math.max(10, Math.min(100, Math.round(Number(speedKmh) || 60)));
+  const initAlt = Math.max(5, Math.min(100, Math.round(Number(altM) || 30)));
+
+  const wp = getWaypointById(wpId);
+  const sel = getSelectedEntity();
+  const origin = sel && sel.latest ? { lat: sel.latest.lat, lng: sel.latest.lng } : null;
+  const distKm =
+    origin && wp ? haversine2dMeters(origin.lat, origin.lng, wp.lat, wp.lng) / 1000 : null;
+
+  const formatEta = (km, spdKmh) => {
+    if (!isFinite(km) || !isFinite(spdKmh) || spdKmh <= 0) return "N/A";
+    const totalSec = (km / spdKmh) * 3600;
+    const m = Math.floor(totalSec / 60);
+    const s = Math.max(0, Math.round(totalSec - m * 60));
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  };
+
+  const getEtaLabel = (spdKmh) => (distKm !== null && isFinite(distKm) ? formatEta(distKm, spdKmh) : "N/A");
+
+  sequenceGotoWpEditMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>WP #${wpId}</h4>
+      <span class="menu-eta" data-edit-eta>${getEtaLabel(initSpeed)}</span>
+    </div>
+    <div class="speed-row">
+      <span class="slider-label">Speed</span>
+      <input type="range" min="10" max="100" value="${initSpeed}" step="1" data-edit-speed>
+      <span class="slider-value" data-edit-speed-label>${initSpeed} km/h</span>
+    </div>
+    <div class="speed-row">
+      <span class="slider-label">Altitude</span>
+      <input type="range" min="5" max="100" value="${initAlt}" step="1" data-edit-alt>
+      <span class="slider-value" data-edit-alt-label>${initAlt} m</span>
+    </div>
+  `;
+
+  // Position to the right of the Commands Sequence panel, aligned with the row's Y.
+  const hostRect = host.getBoundingClientRect();
+  const rowRect = anchorEl.getBoundingClientRect();
+  // Match the popover header row height to the sequence item height for clean alignment.
+  const headEl = sequenceGotoWpEditMenuEl.querySelector(".menu-head");
+  if (headEl) {
+    const h = Math.max(28, Math.round(rowRect.height || 0));
+    headEl.style.height = `${h}px`;
+    headEl.style.minHeight = `${h}px`;
+  }
+  const panelEl = anchorEl.closest("aside.panel.left") || document.querySelector("aside.panel.left");
+  const panelRect = panelEl ? panelEl.getBoundingClientRect() : null;
+  const pad = 10;
+  const menuW = sequenceGotoWpEditMenuEl.offsetWidth || 270;
+  const menuH = sequenceGotoWpEditMenuEl.offsetHeight || 190;
+  let left = panelRect ? panelRect.right - hostRect.left + pad : rowRect.right - hostRect.left + pad;
+  let top = rowRect.top - hostRect.top;
+  left = Math.max(pad, Math.min(hostRect.width - menuW - pad, left));
+  top = Math.max(pad, Math.min(hostRect.height - menuH - pad, top));
+  sequenceGotoWpEditMenuEl.style.left = `${left}px`;
+  sequenceGotoWpEditMenuEl.style.top = `${top}px`;
+
+  const speedEl = sequenceGotoWpEditMenuEl.querySelector("[data-edit-speed]");
+  const speedLbl = sequenceGotoWpEditMenuEl.querySelector("[data-edit-speed-label]");
+  const altEl = sequenceGotoWpEditMenuEl.querySelector("[data-edit-alt]");
+  const altLbl = sequenceGotoWpEditMenuEl.querySelector("[data-edit-alt-label]");
+  const etaEl = sequenceGotoWpEditMenuEl.querySelector("[data-edit-eta]");
+
+  const apply = () => {
+    const s = speedEl ? Math.round(Number(speedEl.value) || initSpeed) : initSpeed;
+    const a = altEl ? Math.round(Number(altEl.value) || initAlt) : initAlt;
+    if (etaEl) etaEl.textContent = getEtaLabel(s);
+    setSequenceGotoWpAtIndex(key, index, wpId, s, a);
+    updateCommandSequencePanel();
+  };
+
+  if (speedEl && speedLbl) {
+    speedEl.addEventListener("input", () => {
+      const s = Math.round(Number(speedEl.value) || initSpeed);
+      speedLbl.textContent = `${s} km/h`;
+      apply();
+    });
+  }
+  if (altEl && altLbl) {
+    altEl.addEventListener("input", () => {
+      const a = Math.round(Number(altEl.value) || initAlt);
+      altLbl.textContent = `${a} m`;
+      apply();
+    });
+  }
+
+  // Ensure initial values are normalized into the canonical command string.
+  apply();
+  document.addEventListener("pointerdown", handleSequenceGotoWpEditOutside, true);
+}
+
+function openSequenceGotoWpMenu(anchorEl) {
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key || !groundControl || !anchorEl) return;
+
+  closeSequenceGotoWpMenu();
+  closeSequenceGotoWpEditMenu();
+  const host = document.getElementById("app") || document.body;
+  sequenceGotoWpMenuEl = document.createElement("div");
+  sequenceGotoWpMenuEl.className = "relative-menu";
+  host.appendChild(sequenceGotoWpMenuEl);
+  sequenceGotoWpMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(sequenceGotoWpMenuEl);
+
+  const hostRect = host.getBoundingClientRect();
+  const aRect = anchorEl.getBoundingClientRect();
+  const pad = 10;
+  const menuW = 260;
+  let left = aRect.left - hostRect.left + aRect.width / 2 - menuW / 2;
+  let top = aRect.top - hostRect.top - 240 - pad;
+  if (top < pad) top = aRect.bottom - hostRect.top + pad;
+  left = Math.max(pad, Math.min(hostRect.width - menuW - pad, left));
+  top = Math.max(pad, Math.min(hostRect.height - 240 - pad, top));
+  sequenceGotoWpMenuEl.style.left = `${left}px`;
+  sequenceGotoWpMenuEl.style.top = `${top}px`;
+
+  const getOrigin = () => {
+    if (!sel || !sel.latest) return null;
+    return { lat: sel.latest.lat, lng: sel.latest.lng };
+  };
+
+  const origin = getOrigin();
+  const wpItems = [...waypoints.values()].map((wp) => {
+    const dKm = origin ? haversine2dMeters(origin.lat, origin.lng, wp.lat, wp.lng) / 1000 : null;
+    return { wp, dKm };
+  });
+  wpItems.sort((a, b) => (a.dKm ?? 1e9) - (b.dKm ?? 1e9));
+
+  const listHtml =
+    wpItems.length === 0
+      ? `<div class="sequence-empty">No waypoints yet. Long-press on the map to create one.</div>`
+      : wpItems
+          .slice(0, 30)
+          .map(({ wp, dKm }) => {
+            const km = dKm !== null && isFinite(dKm) ? `${dKm.toFixed(2)} km` : "";
+            return `<button class="cmd-chip cmd-action" type="button" data-wp="${wp.id}">WP #${wp.id} <span class="menu-eta" style="margin-left:8px;">${km}</span></button>`;
+          })
+          .join("");
+
+  sequenceGotoWpMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Goto WP</h4>
+      <span class="menu-eta">Add to sequence</span>
+    </div>
+    <div class="command-list cmd-action-list column">${listHtml}</div>
+    <div class="speed-row" data-goto-details style="display:none;">
+      <span class="slider-label">Speed</span>
+      <input type="range" min="10" max="100" value="60" step="1" data-wp-speed>
+      <span class="slider-value" data-wp-speed-label>60 km/h</span>
+    </div>
+    <div class="speed-row" data-goto-details style="display:none;">
+      <span class="slider-label">Altitude</span>
+      <input type="range" min="5" max="100" value="30" step="1" data-wp-alt>
+      <span class="slider-value" data-wp-alt-label>30 m</span>
+    </div>
+    <button class="cmd-chip cmd-action confirm-btn" data-add style="display:none;" type="button">Add</button>
+  `;
+
+  const speedEl = sequenceGotoWpMenuEl.querySelector("[data-wp-speed]");
+  const speedLbl = sequenceGotoWpMenuEl.querySelector("[data-wp-speed-label]");
+  const altEl = sequenceGotoWpMenuEl.querySelector("[data-wp-alt]");
+  const altLbl = sequenceGotoWpMenuEl.querySelector("[data-wp-alt-label]");
+  const addBtn = sequenceGotoWpMenuEl.querySelector("[data-add]");
+  const details = sequenceGotoWpMenuEl.querySelectorAll("[data-goto-details]");
+
+  const showDetails = () => {
+    details.forEach((d) => (d.style.display = "flex"));
+    if (addBtn) addBtn.style.display = "flex";
+  };
+
+  if (speedEl && speedLbl) {
+    speedEl.addEventListener("input", () => {
+      speedLbl.textContent = `${Math.round(Number(speedEl.value) || 60)} km/h`;
+      if (pendingSequenceGotoWp) pendingSequenceGotoWp.speedKmh = Math.round(Number(speedEl.value) || 60);
+    });
+  }
+  if (altEl && altLbl) {
+    altEl.addEventListener("input", () => {
+      altLbl.textContent = `${Math.round(Number(altEl.value) || 30)} m`;
+      if (pendingSequenceGotoWp) pendingSequenceGotoWp.altM = Math.round(Number(altEl.value) || 30);
+    });
+  }
+
+  sequenceGotoWpMenuEl.querySelectorAll("[data-wp]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = Number(btn.dataset.wp);
+      if (!Number.isFinite(id)) return;
+      pendingSequenceGotoWp = { key, wpId: id, speedKmh: 60, altM: 30 };
+      showDetails();
+    });
+  });
+
+  if (addBtn) {
+    addBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingSequenceGotoWp) return;
+      const { wpId, speedKmh, altM } = pendingSequenceGotoWp;
+      groundControl.appendPlanned(key, `Goto WP #${wpId} (spd ${Math.round(speedKmh)} km/h, alt ${Math.round(altM)} m)`);
+      closeSequenceGotoWpMenu();
+      updateCommandSequencePanel();
+    });
+  }
+
+  document.addEventListener("pointerdown", handleSequenceGotoWpOutside, true);
 }
 
 function openSequenceMenu(anchorEl) {
@@ -1432,6 +1780,8 @@ function openSequenceMenu(anchorEl) {
   if (!sel || !key || !groundControl) return;
 
   closeSequenceMenu();
+  closeSequenceGotoWpMenu();
+  closeSequenceGotoWpEditMenu();
   const host = document.getElementById("app") || document.body;
   sequenceMenuEl = document.createElement("div");
   sequenceMenuEl.className = "relative-menu";
@@ -1471,6 +1821,11 @@ function openSequenceMenu(anchorEl) {
       e.stopPropagation();
       const cmd = btn.dataset.seq;
       if (!cmd) return;
+      if (cmd === "Goto WP") {
+        closeSequenceMenu();
+        openSequenceGotoWpMenu(anchorEl);
+        return;
+      }
       groundControl.appendPlanned(key, cmd);
       closeSequenceMenu();
       updateCommandSequencePanel();
@@ -1491,6 +1846,7 @@ function updateCommandSequencePanel() {
   list.innerHTML = "";
 
   if (!sel || !key) {
+    closeSequenceGotoWpEditMenu();
     addBtn.disabled = true;
     addBtn.style.opacity = "0.45";
     updateSequenceTransport(null);
@@ -1506,6 +1862,11 @@ function updateCommandSequencePanel() {
 
   const planned = groundControl ? groundControl.getPlanned(key) : [];
   updateSequenceTransport(planned.length ? key : null);
+
+  // If the selection changed, close any "edit relation" popover attached to the old entity.
+  if (pendingSequenceGotoWpEdit && pendingSequenceGotoWpEdit.key !== key) {
+    closeSequenceGotoWpEditMenu();
+  }
 
   const currentCmdRaw = (sel.latest && sel.latest.command) || "Idle";
   const currentRow = document.createElement("div");
@@ -1578,9 +1939,60 @@ function updateCommandSequencePanel() {
     }
 
     row.addEventListener("click", () => {
+      if (performance.now() < suppressSequenceClickUntil) return;
       setSequenceSelection(key, idx);
       updateCommandSequencePanel();
     });
+
+    // Long-press on a "Goto WP #..." item to edit the drone↔WP relation (speed/alt).
+    const SEQ_LONGPRESS_MS = 220;
+    const SEQ_DRAG_CANCEL_PX = 10;
+    let seqPressTimer = null;
+    let seqPressStart = null;
+
+    const clearSeqPress = () => {
+      if (seqPressTimer) {
+        clearTimeout(seqPressTimer);
+        seqPressTimer = null;
+      }
+      seqPressStart = null;
+    };
+
+    row.addEventListener(
+      "pointerdown",
+      (ev) => {
+        if (!cmd || !String(cmd).startsWith("Goto WP #")) return;
+        if (typeof ev.button === "number" && ev.button !== 0) return;
+        clearSeqPress();
+        seqPressStart = { x: ev.clientX, y: ev.clientY, pointerId: ev.pointerId ?? null };
+        seqPressTimer = setTimeout(() => {
+          seqPressTimer = null;
+          const parsed = parseGotoWpSequenceCommand(cmd);
+          if (!parsed) return;
+          suppressSequenceClickUntil = performance.now() + 650;
+          setSequenceSelection(key, idx);
+          openSequenceGotoWpEditMenu(row, key, idx, parsed);
+        }, SEQ_LONGPRESS_MS);
+      },
+      true
+    );
+
+    row.addEventListener(
+      "pointermove",
+      (ev) => {
+        if (!seqPressTimer || !seqPressStart) return;
+        if (seqPressStart.pointerId !== null && ev.pointerId !== undefined && ev.pointerId !== seqPressStart.pointerId)
+          return;
+        const dx = (ev.clientX ?? 0) - seqPressStart.x;
+        const dy = (ev.clientY ?? 0) - seqPressStart.y;
+        if (Math.hypot(dx, dy) > SEQ_DRAG_CANCEL_PX) clearSeqPress();
+      },
+      true
+    );
+
+    row.addEventListener("pointerup", clearSeqPress, true);
+    row.addEventListener("pointercancel", clearSeqPress, true);
+    row.addEventListener("pointerleave", clearSeqPress, true);
 
     list.appendChild(row);
   });
@@ -2059,6 +2471,13 @@ function setupHoverHandlers() {
 
   const updateWaypointMenuHeader = () => {
     if (!waypointMenuEl || !pendingWaypoint) return;
+    if (waypointMenuEl.dataset.mode === "edit") {
+      const title = waypointMenuEl.querySelector(".menu-head h4");
+      if (title && pendingWaypoint.wpId !== null && pendingWaypoint.wpId !== undefined) {
+        title.textContent = `WP #${pendingWaypoint.wpId}`;
+      }
+      return;
+    }
     const sel = getSelectedEntity();
     let latest = sel && sel.latest ? sel.latest : null;
     if (!latest && waypointDroneId !== null && waypointDroneId !== undefined) {
@@ -2083,7 +2502,7 @@ function setupHoverHandlers() {
     if (!map || !ev) return false;
     if (isZooming || isMapDragging) return false;
     if (performance.now() < suppressMapClickUntil) return false;
-    if (!pendingWaypoint || !waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
+    if (!pendingWaypoint || !waypointMenuEl || !["goto", "edit"].includes(waypointMenuEl.dataset.mode)) return false;
     const pt = map.mouseEventToContainerPoint(ev);
     if (!isContainerPointOnPendingWaypointPin(pt)) return false;
 
@@ -2107,6 +2526,9 @@ function setupHoverHandlers() {
       if (!ll || !pendingWaypoint) return;
       pendingWaypoint.lat = ll.lat;
       pendingWaypoint.lng = ll.lng;
+      if (pendingWaypoint.wpId !== null && pendingWaypoint.wpId !== undefined) {
+        updateWaypointPosition(pendingWaypoint.wpId, pendingWaypoint.lat, pendingWaypoint.lng);
+      }
       updateWaypointMenuHeader();
       draw();
       e2.preventDefault?.();
@@ -2215,14 +2637,11 @@ function handleMapClick(e) {
     // (Editing requires a long-press on the WP.)
     if (pinnedTeamId === null && pinnedDroneId === null) return;
     if (pinnedTeamId !== null) {
-      openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, null, hitWp.droneId);
+      openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, null, hitWp.wpId);
       return;
     }
-    const targetId = pinnedDroneId !== null ? pinnedDroneId : hitWp.droneId;
-    if (targetId !== null && targetId !== undefined) {
-      setPinnedDrone(targetId);
-    }
-    openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, targetId, hitWp.droneId);
+    const targetId = pinnedDroneId;
+    openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, e.containerPoint, targetId, hitWp.wpId);
     return;
   }
 
@@ -2339,7 +2758,7 @@ function issueLocalCommand(drone, cmd, options = {}) {
     next.alt = Math.max(0, next.alt - 5);
   }
 
-  // Changing mission clears any stored waypoint visuals for this drone.
+  // Changing mission clears any stored *goto-WP relationship* for this drone (the waypoint entity remains).
   waypointTargets.delete(drone.id);
   followTargets.delete(drone.id);
   homeTargets.delete(drone.id);
@@ -2377,10 +2796,24 @@ function issueGotoWaypointSingle(drone, wp, options = {}) {
   if (!latest) return;
   const speed = Math.max(10, Math.min(100, Math.round(wp.speedKmh || 60)));
   const alt = Math.max(5, Math.min(100, Math.round(wp.altM ?? 30)));
-  const cmd = `Goto waypoint (spd ${speed} km/h, alt ${alt} m)`;
+  let wpId = wp.wpId ?? null;
+  if (wpId !== null && wpId !== undefined) {
+    wpId = Number(wpId);
+    if (waypoints.has(wpId)) {
+      // If the user dragged the pin, keep the waypoint object in sync.
+      updateWaypointPosition(wpId, wp.lat, wp.lng);
+    } else {
+      wpId = null;
+    }
+  }
+  if (wpId === null || wpId === undefined) {
+    wpId = createWaypoint(wp.lat, wp.lng).id;
+  }
+
+  const cmd = `Goto WP #${wpId} (spd ${speed} km/h, alt ${alt} m)`;
   const next = { ...latest, command: cmd, uptimeSec: latest.uptimeSec + 0.01, alt };
   drone.updateTelemetry(next);
-  waypointTargets.set(drone.id, { lat: wp.lat, lng: wp.lng, speedKmh: speed, altM: alt });
+  waypointTargets.set(drone.id, { wpId, speedKmh: speed, altM: alt });
   followTargets.delete(drone.id);
   homeTargets.delete(drone.id);
   orbitTargets.delete(drone.id);
@@ -2389,6 +2822,21 @@ function issueGotoWaypointSingle(drone, wp, options = {}) {
     const key = options.selectionKey || `drone:${drone.id}`;
     appendPlannedForKey(key, cmd);
   }
+}
+
+function parseGotoWpSequenceCommand(cmd) {
+  if (!cmd) return null;
+  const m = String(cmd).match(/Goto\s+WP\s*#\s*(\d+).*?spd\s*(\d+)\s*km\/h.*?alt\s*(\d+)\s*m/i);
+  if (!m) return null;
+  const wpId = Number(m[1]);
+  const speedKmh = Number(m[2]);
+  const altM = Number(m[3]);
+  if (!Number.isFinite(wpId)) return null;
+  return {
+    wpId,
+    speedKmh: Number.isFinite(speedKmh) ? speedKmh : 60,
+    altM: Number.isFinite(altM) ? altM : 30,
+  };
 }
 
 function issueGotoWaypoint(drone, wp) {
@@ -2561,7 +3009,13 @@ function openOrbitMenu(anchor, containerPoint) {
   }
 
   const resolveCenterLatLng = () => {
-    if (anchor.type === "wp") return { lat: anchor.lat, lng: anchor.lng };
+    if (anchor.type === "wp") {
+      if (anchor.wpId !== null && anchor.wpId !== undefined) {
+        const wp = getWaypointById(anchor.wpId);
+        if (wp) return { lat: wp.lat, lng: wp.lng };
+      }
+      return { lat: anchor.lat, lng: anchor.lng };
+    }
     if (anchor.type === "home") {
       const gs = groundStations.find((g) => g.id === anchor.stationId);
       if (gs) return { lat: gs.lat, lng: gs.lng };
@@ -2807,7 +3261,7 @@ function addOrbitToSequence(key, orbit) {
   const orbitSpeedKmh = Math.max(0, ((2 * Math.PI * radius) / (periodMin * 60)) * 3.6);
   const orbitSpeedLabel = Math.round(orbitSpeedKmh);
 
-  let pre = "Goto waypoint";
+  let pre = "Goto WP";
   let around = "Waypoint";
   if (a.type === "home") {
     pre = `Goto home #${a.stationId + 1} (spd ${speed} km/h)`;
@@ -2815,8 +3269,22 @@ function addOrbitToSequence(key, orbit) {
   } else if (a.type === "drone") {
     pre = `Follow drone #${a.targetId + 1}`;
     around = `Drone #${a.targetId + 1}`;
+  } else if (a.type === "wp") {
+    let wpId = a.wpId;
+    if (wpId === null || wpId === undefined) {
+      const wp = createWaypoint(a.lat, a.lng, { name: "Orbit center" });
+      wpId = wp ? wp.id : null;
+    }
+    if (wpId !== null && wpId !== undefined) {
+      pre = `Goto WP #${wpId} (spd ${speed} km/h, alt ${alt} m)`;
+      around = `WP #${wpId}`;
+      orbit.anchor = { type: "wp", wpId };
+    } else {
+      pre = `Goto WP (spd ${speed} km/h, alt ${alt} m)`;
+      around = "Waypoint";
+    }
   } else {
-    pre = `Goto waypoint (spd ${speed} km/h)`;
+    pre = `Goto WP (spd ${speed} km/h, alt ${alt} m)`;
     around = "Waypoint";
   }
 
@@ -3527,12 +3995,18 @@ function attemptActionLongPress(containerPoint) {
     // If long-pressing an existing waypoint while something is selected, treat it as a waypoint context,
     // so the menu knows which WP we pressed (for sync/edit flows).
     if (hitWp && (pinnedDroneId !== null || pinnedTeamId !== null)) {
-      openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, containerPoint, null, hitWp.droneId);
+      openWaypointMenu({ lat: hitWp.wp.lat, lng: hitWp.wp.lng }, containerPoint, null, hitWp.wpId);
       return;
     }
     if (pinnedTeamId !== null || pinnedDroneId !== null) {
       const latlng = map.containerPointToLatLng(containerPoint);
       openWaypointMenu(latlng, containerPoint, null, null);
+      return;
+    }
+    // Long-press on empty map with no selection: create an independent waypoint.
+    if (!hitWp && pinnedDroneId === null && pinnedTeamId === null) {
+      const latlng = map.containerPointToLatLng(containerPoint);
+      openCreateWaypointMenu(latlng, containerPoint);
       return;
     }
   }
@@ -3549,7 +4023,7 @@ function getWaypointPinGeometryPx() {
 
 function isContainerPointOnPendingWaypointPin(containerPoint) {
   if (!map || !containerPoint) return false;
-  if (!waypointMenuEl || waypointMenuEl.dataset.mode !== "goto") return false;
+  if (!waypointMenuEl || !["goto", "edit"].includes(waypointMenuEl.dataset.mode)) return false;
   if (!pendingWaypoint) return false;
   const tip = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
   if (!tip) return false;
@@ -3575,6 +4049,69 @@ function handleEditWaypointOutsideClick(e) {
   closeEditWaypointMenu();
 }
 
+function closeCreateWaypointMenu() {
+  if (createWaypointMenuEl && createWaypointMenuEl.parentNode) {
+    createWaypointMenuEl.parentNode.removeChild(createWaypointMenuEl);
+  }
+  createWaypointMenuEl = null;
+  pendingCreateWaypoint = null;
+  document.removeEventListener("pointerdown", handleCreateWaypointOutsideClick, true);
+}
+
+function handleCreateWaypointOutsideClick(e) {
+  if (!createWaypointMenuEl) return;
+  if (createWaypointMenuEl.contains(e.target)) return;
+  closeCreateWaypointMenu();
+}
+
+function openCreateWaypointMenu(latlng, containerPoint) {
+  if (!map || !latlng || !containerPoint) return;
+  const host = document.getElementById("app") || document.body;
+  closeCreateWaypointMenu();
+  closeEditWaypointMenu();
+  closeWaypointMenu(false, true);
+  closeOrbitMenu(false, true);
+  closeHomeMenu(false);
+  closeFollowMenu(false);
+  closeRelationMenu(false);
+  closeSequenceMenu();
+
+  pendingCreateWaypoint = { lat: latlng.lat, lng: latlng.lng };
+  createWaypointMenuEl = document.createElement("div");
+  createWaypointMenuEl.className = "relative-menu";
+  host.appendChild(createWaypointMenuEl);
+  createWaypointMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(createWaypointMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  createWaypointMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  createWaypointMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  createWaypointMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Create WP</h4>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action" data-action="wp-create" type="button">Create waypoint</button>
+    </div>
+  `;
+
+  const btn = createWaypointMenuEl.querySelector("[data-action='wp-create']");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const p = pendingCreateWaypoint;
+      if (!p) return;
+      const wp = createWaypoint(p.lat, p.lng);
+      closeCreateWaypointMenu();
+      // Immediately allow repositioning the new WP by opening edit mode.
+      openWaypointEditModeMenu(wp.id, containerPoint);
+    });
+  }
+
+  document.addEventListener("pointerdown", handleCreateWaypointOutsideClick, true);
+}
+
 function openEditWaypointMenu(hitWp, containerPoint) {
   if (!map || !hitWp || !hitWp.wp || !containerPoint) return;
   const host = document.getElementById("app") || document.body;
@@ -3587,7 +4124,7 @@ function openEditWaypointMenu(hitWp, containerPoint) {
   closeRelationMenu(false);
   closeSequenceMenu();
 
-  pendingEditWaypoint = { lat: hitWp.wp.lat, lng: hitWp.wp.lng, ownerId: hitWp.droneId };
+  pendingEditWaypoint = { wpId: hitWp.wpId };
 
   editWaypointMenuEl = document.createElement("div");
   editWaypointMenuEl.className = "relative-menu";
@@ -3599,8 +4136,7 @@ function openEditWaypointMenu(hitWp, containerPoint) {
   editWaypointMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
   editWaypointMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
 
-  const ownerId = Number.isFinite(hitWp.droneId) ? hitWp.droneId : null;
-  const droneLabel = ownerId !== null ? `Drone #${ownerId + 1}` : "Waypoint";
+  const droneLabel = `WP #${hitWp.wpId}`;
 
   editWaypointMenuEl.innerHTML = `
     <div class="menu-head">
@@ -3616,24 +4152,75 @@ function openEditWaypointMenu(hitWp, containerPoint) {
     btn.addEventListener("click", (e) => {
       e.stopPropagation();
       const p = pendingEditWaypoint;
-      if (!p || p.ownerId === null || p.ownerId === undefined) return;
+      if (!p || p.wpId === null || p.wpId === undefined) return;
       closeEditWaypointMenu();
-      openWaypointMenu({ lat: p.lat, lng: p.lng }, containerPoint, p.ownerId, p.ownerId, {
-        pinSelection: false,
-        startInGotoMode: true,
-        isEdit: true,
-      });
+      openWaypointEditModeMenu(p.wpId, containerPoint);
     });
   }
 
   document.addEventListener("pointerdown", handleEditWaypointOutsideClick, true);
 }
 
+function openWaypointEditModeMenu(wpId, containerPoint) {
+  if (!map || wpId === null || wpId === undefined || !containerPoint) return;
+  const wp = getWaypointById(wpId);
+  if (!wp) return;
+
+  closeWaypointMenu(false, true);
+  const host = document.getElementById("app") || document.body;
+  if (waypointMenuEl && waypointMenuEl.parentNode) waypointMenuEl.parentNode.removeChild(waypointMenuEl);
+
+  waypointMenuEl = document.createElement("div");
+  waypointMenuEl.className = "relative-menu";
+  host.appendChild(waypointMenuEl);
+  waypointMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(waypointMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  waypointMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  waypointMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  waypointDroneId = null;
+  waypointTeamId = null;
+  pendingWaypoint = { wpId: wp.id, lat: wp.lat, lng: wp.lng };
+  waypointMenuEl.dataset.mode = "edit";
+
+  waypointMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>WP #${wp.id}</h4>
+      <span class="menu-eta">Drag to move</span>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action" data-action="wp-delete" type="button">Delete WP</button>
+    </div>
+  `;
+
+  const del = waypointMenuEl.querySelector("[data-action='wp-delete']");
+  if (del) {
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const id = pendingWaypoint && pendingWaypoint.wpId;
+      if (id === null || id === undefined) return;
+      // Remove the waypoint and clear any drone relationships pointing to it.
+      waypoints.delete(Number(id));
+      for (const [droneId, t0] of waypointTargets.entries()) {
+        const t = normalizeWaypointTarget(droneId);
+        if (t && Number(t.wpId) === Number(id)) waypointTargets.delete(droneId);
+      }
+      closeWaypointMenu(true);
+      draw();
+    });
+  }
+
+  document.addEventListener("pointerdown", handleWaypointOutsideClick, true);
+  draw();
+}
+
 function handleWaypointOutsideClick(e) {
   if (!waypointMenuEl) return;
   if (waypointMenuEl.contains(e.target)) return;
   // Allow dragging the pending WP pin without the menu auto-closing.
-  if (map && pendingWaypoint && waypointMenuEl.dataset.mode === "goto") {
+  if (map && pendingWaypoint && ["goto", "edit"].includes(waypointMenuEl.dataset.mode)) {
     try {
       const pt = map.mouseEventToContainerPoint(e);
       if (isContainerPointOnPendingWaypointPin(pt)) return;
@@ -3644,7 +4231,7 @@ function handleWaypointOutsideClick(e) {
   closeWaypointMenu(true);
 }
 
-function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null, options = {}) {
+function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, options = {}) {
   const selectedTeam = droneId === null || droneId === undefined ? (pinnedTeamId !== null ? getTeamById(pinnedTeamId) : null) : null;
   const drone =
     droneId !== null && droneId !== undefined
@@ -3661,6 +4248,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   tooltipMode = "info";
   tooltipSuppressUntil = performance.now() + 550;
   if (tooltipEl) tooltipEl.style.display = "none";
+  closeCreateWaypointMenu();
   closeEditWaypointMenu();
   closeFollowMenu();
   closeHomeMenu();
@@ -3669,14 +4257,18 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
   const latest = selectedTeam ? getTeamSnapshot(selectedTeam) : drone.getLatest && drone.getLatest();
   const defaultAlt = latest && isFinite(Number(latest.alt)) ? Math.round(Number(latest.alt)) : 30;
   const initialAlt = Math.max(5, Math.min(100, defaultAlt || 30));
-  pendingWaypoint = { lat: latlng.lat, lng: latlng.lng, speedKmh: 60, altM: initialAlt, ownerId: ownerId ?? null, isEdit: !!(options && options.isEdit) };
-  const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, latlng.lat, latlng.lng) / 1000 : null;
+  const existingWp = wpId !== null && wpId !== undefined ? getWaypointById(wpId) : null;
+  const wpLat = existingWp ? existingWp.lat : latlng.lat;
+  const wpLng = existingWp ? existingWp.lng : latlng.lng;
+  pendingWaypoint = { wpId: existingWp ? existingWp.id : null, lat: wpLat, lng: wpLng, speedKmh: 60, altM: initialAlt };
+  const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, wpLat, wpLng) / 1000 : null;
   const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
-  const ownerWp = ownerId !== null ? waypointTargets.get(ownerId) : null;
-  const showSync = !!ownerWp;
-  if (options && options.isEdit && ownerWp) {
-    pendingWaypoint.speedKmh = Math.max(10, Math.min(100, Math.round(ownerWp.speedKmh || 60)));
-    pendingWaypoint.altM = Math.max(5, Math.min(100, Math.round(ownerWp.altM ?? initialAlt)));
+  const syncDroneId = existingWp ? getAnyDroneTargetingWaypoint(existingWp.id, { excludeDroneId: drone ? drone.id : null }) : null;
+  const syncTarget = syncDroneId !== null ? normalizeWaypointTarget(syncDroneId) : null;
+  const showSync = !!(syncTarget && isFinite(Number(syncTarget.speedKmh)));
+  if (options && options.isEdit && syncTarget) {
+    pendingWaypoint.speedKmh = Math.max(10, Math.min(100, Math.round(syncTarget.speedKmh || 60)));
+    pendingWaypoint.altM = Math.max(5, Math.min(100, Math.round(syncTarget.altM ?? initialAlt)));
   }
 
   const formatEta = (km, speed) => {
@@ -3825,6 +4417,9 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
     confirmBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       if (!pendingWaypoint) return;
+      if (pendingWaypoint.wpId === null || pendingWaypoint.wpId === undefined) {
+        pendingWaypoint.wpId = createWaypoint(pendingWaypoint.lat, pendingWaypoint.lng).id;
+      }
       if (waypointTeamId !== null) {
         const team = getTeamById(waypointTeamId);
         if (team) {
@@ -3834,7 +4429,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
           });
           const speed = Math.max(10, Math.min(100, Math.round(pendingWaypoint.speedKmh || 60)));
           const alt = Math.max(5, Math.min(100, Math.round(pendingWaypoint.altM || 30)));
-          appendPlannedForKey(`team:${team.id}`, `Goto waypoint (spd ${speed} km/h, alt ${alt} m)`);
+          appendPlannedForKey(`team:${team.id}`, `Goto WP #${pendingWaypoint.wpId} (spd ${speed} km/h, alt ${alt} m)`);
         }
         closeWaypointMenu();
         tooltipMode = "info";
@@ -3856,22 +4451,23 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, ownerId = null
       e.stopPropagation();
       if (!pendingWaypoint) return;
       closeEditWaypointMenu();
-      const anchor = { type: "wp", lat: pendingWaypoint.lat, lng: pendingWaypoint.lng, ownerId: pendingWaypoint.ownerId ?? null };
+      const anchor = { type: "wp", wpId: pendingWaypoint.wpId ?? null, lat: pendingWaypoint.lat, lng: pendingWaypoint.lng };
       closeWaypointMenu(false, true);
       openOrbitMenu(anchor, containerPoint);
     });
   }
 
   const syncBtn = waypointMenuEl.querySelector("[data-sync]");
-  if (syncBtn && ownerWp && latest) {
+  if (syncBtn && syncDroneId !== null && syncTarget && latest) {
     syncBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const ownerDrone = getDroneById(ownerId);
+      const ownerDrone = getDroneById(syncDroneId);
       const ownerLatest = ownerDrone && ownerDrone.getLatest && ownerDrone.getLatest();
-      if (!ownerLatest || !ownerWp.speedKmh) return;
-      const ownerDistKm = haversine2dMeters(ownerLatest.lat, ownerLatest.lng, ownerWp.lat, ownerWp.lng) / 1000;
+      const ownerSpeed = Number(syncTarget.speedKmh);
+      if (!ownerLatest || !isFinite(ownerSpeed) || ownerSpeed <= 0) return;
+      const ownerDistKm = haversine2dMeters(ownerLatest.lat, ownerLatest.lng, pendingWaypoint.lat, pendingWaypoint.lng) / 1000;
       if (!isFinite(ownerDistKm) || ownerDistKm <= 0) return;
-      const etaHours = ownerDistKm / ownerWp.speedKmh;
+      const etaHours = ownerDistKm / ownerSpeed;
       if (!isFinite(etaHours) || etaHours <= 0) return;
       if (!distKm || !isFinite(distKm)) return;
       let targetSpeed = distKm / etaHours;
@@ -4329,7 +4925,7 @@ function randomCommand(rng) {
   const cmd = COMMAND_OPTIONS[Math.floor(rng() * COMMAND_OPTIONS.length)];
   if (cmd === "Follow drone") return `Follow drone #${Math.floor(rng() * 50)}`;
   if (cmd === "Boid group") return `Boid group #${1 + Math.floor(rng() * 4)}`;
-  if (cmd === "Goto waypoint") return `Goto waypoint (spd ${Math.round(5 + rng() * 10)} m/s)`;
+  if (cmd === "Goto WP") return "Goto WP";
   return cmd;
 }
 
@@ -4827,18 +5423,25 @@ function draw() {
     }
   }
 
-  // Waypoints (relative commands)
-  waypointTargets.forEach((wp, droneId) => {
-    // While editing a waypoint for a specific drone, hide its "stored" WP pin/line so
-    // the moving preview is the only one visible.
-    if (pendingWaypoint && pendingWaypoint.isEdit && pendingWaypoint.ownerId === droneId) return;
+  // Waypoints (independent map entities)
+  waypoints.forEach((wp, wpId) => {
+    // If a WP is being moved via a menu, draw it only once (in the preview section below).
+    if (pendingWaypoint && pendingWaypoint.wpId === wpId && waypointMenuEl) return;
+    const p = latLngToScreen(wp.lat, wp.lng);
+    drawWaypointPin(p.x, p.y);
+  });
+
+  // Goto-WP links (dashed line from drone to a waypoint)
+  waypointTargets.forEach((t0, droneId) => {
+    const t = normalizeWaypointTarget(droneId);
+    if (!t || t.wpId === null || t.wpId === undefined) return;
+    const wp = getWaypointById(t.wpId);
+    if (!wp) return;
     const d = getDroneById(droneId);
     const latest = d && d.getLatest && d.getLatest();
     if (!latest) return;
     const from = latLngToScreen(latest.lat, latest.lng);
     const to = latLngToScreen(wp.lat, wp.lng);
-
-    // Dashed line
     ctx.save();
     ctx.setLineDash([6, 6]);
     ctx.lineWidth = 1.6;
@@ -4848,13 +5451,9 @@ function draw() {
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
     ctx.restore();
-
-    // Pin (lollipop)
-    drawWaypointPin(to.x, to.y);
   });
 
-  // Waypoint preview: show only after the user chose "Goto WP" (details step),
-  // not in the initial "Goto WP / Orbit" chooser menu.
+  // Waypoint preview (pin + dashed line) after entering the Goto WP details view.
   if (waypointMenuEl && pendingWaypoint && waypointMenuEl.dataset.mode === "goto") {
     const sel = getSelectedEntity();
     let latest = sel && sel.latest ? sel.latest : null;
@@ -4875,6 +5474,12 @@ function draw() {
       ctx.stroke();
       ctx.restore();
     }
+    drawWaypointPin(to.x, to.y);
+  }
+
+  // Waypoint edit preview (no dashed line; just the movable pin)
+  if (waypointMenuEl && pendingWaypoint && waypointMenuEl.dataset.mode === "edit") {
+    const to = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
     drawWaypointPin(to.x, to.y);
   }
 
