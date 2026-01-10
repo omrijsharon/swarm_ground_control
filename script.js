@@ -94,11 +94,105 @@ let lastCreatedTeamId = null;
 let userHomePromptEl = null;
 let pendingUserHomePlacement = false;
 let orbitAnim = { running: false, raf: 0, lastFrame: 0 };
+let scaleControl = null;
+let scaleUnits = "metric"; // "metric" | "imperial"
+let scaleMenuEl = null;
 
 function forceRedraw() {
   draw();
   requestAnimationFrame(draw);
   setTimeout(draw, 0);
+}
+
+function closeScaleMenu() {
+  if (scaleMenuEl && scaleMenuEl.parentNode) {
+    scaleMenuEl.parentNode.removeChild(scaleMenuEl);
+  }
+  scaleMenuEl = null;
+  document.removeEventListener("pointerdown", handleScaleMenuOutsideClick, true);
+}
+
+function handleScaleMenuOutsideClick(e) {
+  if (!scaleMenuEl) return;
+  if (scaleMenuEl.contains(e.target)) return;
+  closeScaleMenu();
+}
+
+function setScaleUnits(units) {
+  const next = units === "imperial" ? "imperial" : "metric";
+  scaleUnits = next;
+  if (!map) return;
+  // Recreate Leaflet scale control to apply new options.
+  if (scaleControl) {
+    try {
+      map.removeControl(scaleControl);
+    } catch {
+      // ignore
+    }
+    scaleControl = null;
+  }
+  scaleControl = L.control.scale({
+    position: "bottomleft",
+    metric: next === "metric",
+    imperial: next === "imperial",
+    maxWidth: 140,
+  });
+  scaleControl.addTo(map);
+
+  const el = scaleControl.getContainer && scaleControl.getContainer();
+  if (el) {
+    // Prevent map click/pan triggers when tapping the scale bar.
+    L.DomEvent.disableClickPropagation(el);
+    L.DomEvent.disableScrollPropagation(el);
+    el.style.cursor = "pointer";
+    el.title = "Scale units";
+    el.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      openScaleMenu(el.getBoundingClientRect());
+    });
+  }
+}
+
+function openScaleMenu(anchorRect) {
+  if (!map || !anchorRect) return;
+  const host = document.getElementById("app") || document.body;
+  closeScaleMenu();
+
+  scaleMenuEl = document.createElement("div");
+  scaleMenuEl.className = "relative-menu";
+  host.appendChild(scaleMenuEl);
+  scaleMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(scaleMenuEl);
+
+  // Position above the scale bar (bottom-left)
+  const pad = 8;
+  const left = Math.round(anchorRect.left);
+  const top = Math.round(anchorRect.top) - 10;
+  scaleMenuEl.style.left = `${left}px`;
+  scaleMenuEl.style.top = `${Math.max(pad, top)}px`;
+
+  const isMetric = scaleUnits === "metric";
+  scaleMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Scale Units</h4>
+    </div>
+    <div class="segmented" role="group" aria-label="Scale units">
+      <button class="seg-btn${isMetric ? " is-active" : ""}" type="button" data-scale="metric">Metric</button>
+      <button class="seg-btn${!isMetric ? " is-active" : ""}" type="button" data-scale="imperial">Imperial (miles)</button>
+    </div>
+  `;
+
+  scaleMenuEl.querySelectorAll("[data-scale]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const v = btn.dataset.scale === "imperial" ? "imperial" : "metric";
+      setScaleUnits(v);
+      closeScaleMenu();
+    });
+  });
+
+  document.addEventListener("pointerdown", handleScaleMenuOutsideClick, true);
 }
 
 function clearTooltipPinnedIfSelectionChanges(nextDroneId, nextTeamId) {
@@ -3860,8 +3954,8 @@ function initMapOnline() {
   // Tel Aviv coordinates: 32.0853°N, 34.7818°E
   map = L.map("map", { zoomControl: false }).setView([32.0853, 34.7818], 11);
 
-  // Dynamic scale bar (updates automatically with zoom).
-  L.control.scale({ position: "bottomleft", imperial: false, metric: true, maxWidth: 140 }).addTo(map);
+  // Dynamic scale bar (updates automatically with zoom). Click to change units.
+  setScaleUnits("metric");
 
   // --- Esri basemaps (no API key). Licensing/terms apply. ---
   const esriBase = {
