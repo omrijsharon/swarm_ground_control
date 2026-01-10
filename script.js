@@ -2591,7 +2591,9 @@ function openOrbitMenu(anchor, containerPoint) {
   // Immediately render the default orbit (before the user touches the sliders).
   draw();
 
-  const distKm = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng) / 1000;
+  const dCenterM0 = haversine2dMeters(sel.latest.lat, sel.latest.lng, center.lat, center.lng);
+  const dCircleM0 = Math.max(0, dCenterM0 - Math.max(0, Number(pendingOrbit.radiusM) || 0));
+  const distKm = dCircleM0 / 1000;
   const distLabel = isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Orbit";
   const formatEta = (km, speed) => {
     if (!isFinite(km) || !isFinite(speed) || speed <= 0) return "";
@@ -2699,7 +2701,16 @@ function openOrbitMenu(anchor, containerPoint) {
     const eta = orbitMenuEl.querySelector(".menu-eta");
     const center2 = resolveCenterLatLng();
     if (!center2) return;
-    const latest = getSelectedEntity()?.latest;
+    let latest = getSelectedEntity()?.latest || sel.latest || null;
+    if (!latest) {
+      if (orbitTeamId !== null) {
+        const t = getTeamById(orbitTeamId);
+        latest = t ? getTeamSnapshot(t) : null;
+      } else if (orbitDroneId !== null && orbitDroneId !== undefined) {
+        const d = getDroneById(orbitDroneId);
+        latest = d && d.getLatest ? d.getLatest() : null;
+      }
+    }
     if (!latest) return;
 
     // Approach distance is to the orbit circle, not the center.
