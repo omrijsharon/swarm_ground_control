@@ -2607,7 +2607,7 @@ function openOrbitMenu(anchor, containerPoint) {
     orbitMenuEl.parentNode.removeChild(orbitMenuEl);
   }
   orbitMenuEl = document.createElement("div");
-  orbitMenuEl.className = "relative-menu";
+  orbitMenuEl.className = "relative-menu orbit-menu";
   orbitMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
   host.appendChild(orbitMenuEl);
   enableMenuDrag(orbitMenuEl);
@@ -2649,19 +2649,12 @@ function openOrbitMenu(anchor, containerPoint) {
     </div>
     <div class="label" style="margin-top:2px;">Orbit around</div>
     <div style="font-weight:800; letter-spacing:0.06em; opacity:0.9;">${aroundLabel}</div>
-    ${showApproachSpeed ? `
-      <div class="label" style="margin-top:10px;">Approach speed</div>
-      <div class="speed-row">
-        <input type="range" min="10" max="100" value="${pendingOrbit.approachSpeedKmh}" step="1" data-orbit-approach>
-        <span data-orbit-approach-label>${pendingOrbit.approachSpeedKmh} km/h</span>
-      </div>
-    ` : ""}
-    <div class="label" style="margin-top:10px;">Radius</div>
+    <div class="label" style="margin-top:8px;">Radius</div>
     <div class="speed-row">
       <input type="range" min="10" max="1000" value="${pendingOrbit.radiusM}" step="10" data-orbit-radius>
       <span data-orbit-radius-label>${pendingOrbit.radiusM} m</span>
     </div>
-    <div class="label" style="margin-top:10px;">Orbit Period</div>
+    <div class="label" style="margin-top:8px;">Orbit Period</div>
     <div class="speed-row">
       <input type="range" min="1" max="60" value="${pendingOrbit.orbitPeriodMin}" step="1" data-orbit-period>
       <span data-orbit-period-label>${pendingOrbit.orbitPeriodMin} min/orbit</span>
@@ -2669,17 +2662,24 @@ function openOrbitMenu(anchor, containerPoint) {
     <div class="alt-readout" style="justify-content:flex-start; opacity:0.85;">
       Speed: <span style="margin-left:6px; font-weight:900;" data-orbit-speed>${speedKmhLabel()}</span>
     </div>
-    <div class="label" style="margin-top:10px;">Altitude</div>
+    ${showApproachSpeed ? `
+      <div class="label" style="margin-top:8px;">Approach speed</div>
+      <div class="speed-row">
+        <input type="range" min="10" max="100" value="${pendingOrbit.approachSpeedKmh}" step="1" data-orbit-approach>
+        <span data-orbit-approach-label>${pendingOrbit.approachSpeedKmh} km/h</span>
+      </div>
+    ` : ""}
+    <div class="label" style="margin-top:8px;">Altitude</div>
     <div class="speed-row">
       <input type="range" min="0" max="200" value="${pendingOrbit.altitudeM}" step="1" data-orbit-alt>
       <span data-orbit-alt-label>${pendingOrbit.altitudeM} m</span>
     </div>
-    <div class="label" style="margin-top:10px;">Direction</div>
+    <div class="label" style="margin-top:8px;">Direction</div>
     <div class="segmented">
       <button type="button" class="seg-btn is-active" data-orbit-dir="CW">CW</button>
       <button type="button" class="seg-btn" data-orbit-dir="CCW">CCW</button>
     </div>
-    <button class="cmd-chip cmd-action" type="button" data-action="orbit-add" style="margin-top:10px;">Add Orbit</button>
+    <button class="cmd-chip cmd-action" type="button" data-action="orbit-add" style="margin-top:8px;">Add Orbit</button>
   `;
 
   const setLbl = (selQ, text) => {
