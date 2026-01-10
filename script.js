@@ -2616,13 +2616,6 @@ function openOrbitMenu(anchor, containerPoint) {
   orbitMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
   orbitMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
 
-  const aroundLabel =
-    anchor.type === "home"
-      ? `Home #${anchor.stationId + 1}`
-      : anchor.type === "drone"
-        ? `Drone #${anchor.targetId + 1}`
-        : "Waypoint";
-
   const showApproachSpeed = anchor.type === "wp" || anchor.type === "home";
   const calcOrbitSpeedKmh = () => {
     const r = Math.max(10, Math.min(1000, Number(pendingOrbit.radiusM) || 0));
@@ -2647,8 +2640,6 @@ function openOrbitMenu(anchor, containerPoint) {
       <h4>${distLabel}</h4>
       <span class="menu-eta">${etaLabel}</span>
     </div>
-    <div class="label" style="margin-top:2px;">Orbit around</div>
-    <div style="font-weight:800; letter-spacing:0.06em; opacity:0.9;">${aroundLabel}</div>
     <div class="label" style="margin-top:8px;">Radius</div>
     <div class="speed-row">
       <input type="range" min="10" max="1000" value="${pendingOrbit.radiusM}" step="10" data-orbit-radius>
