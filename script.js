@@ -2691,16 +2691,25 @@ function openOrbitMenu(anchor, containerPoint) {
     setOrbitSpeed();
   };
   setOrbitPeriodBounds();
+  updateEta();
 
   const updateEta = () => {
+    if (!orbitMenuEl) return;
+    const title = orbitMenuEl.querySelector(".menu-head h4");
     const eta = orbitMenuEl.querySelector(".menu-eta");
-    if (!eta) return;
     const center2 = resolveCenterLatLng();
     if (!center2) return;
     const latest = getSelectedEntity()?.latest;
     if (!latest) return;
-    const km = haversine2dMeters(latest.lat, latest.lng, center2.lat, center2.lng) / 1000;
-    eta.textContent = showApproachSpeed ? formatEta(km, pendingOrbit.approachSpeedKmh) : "";
+
+    // Approach distance is to the orbit circle, not the center.
+    const dCenterM = haversine2dMeters(latest.lat, latest.lng, center2.lat, center2.lng);
+    const radiusM = Math.max(0, Number(pendingOrbit?.radiusM) || 0);
+    const dCircleM = Math.max(0, dCenterM - radiusM);
+    const km = dCircleM / 1000;
+
+    if (title && isFinite(km)) title.textContent = `${km.toFixed(2)} km`;
+    if (eta) eta.textContent = showApproachSpeed ? formatEta(km, pendingOrbit.approachSpeedKmh) : "";
   };
 
   const approach = orbitMenuEl.querySelector("[data-orbit-approach]");
@@ -2724,6 +2733,7 @@ function openOrbitMenu(anchor, containerPoint) {
       orbitPreview = { key, orbit: pendingOrbit };
       setOrbitPeriodBounds();
       setOrbitSpeed();
+      updateEta();
       draw();
     });
   }
