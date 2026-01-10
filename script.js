@@ -161,6 +161,8 @@ function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
       const startLeft = rect.left - hostRect.left;
       const startTop = rect.top - hostRect.top;
       const start = { x: ev.clientX, y: ev.clientY, left: startLeft, top: startTop };
+      let moved = false;
+      const DRAG_START_PX = 3;
 
       try {
         el.setPointerCapture(ev.pointerId);
@@ -173,6 +175,7 @@ function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
         e.preventDefault();
         const dx = (e.clientX ?? 0) - start.x;
         const dy = (e.clientY ?? 0) - start.y;
+        if (!moved && Math.hypot(dx, dy) >= DRAG_START_PX) moved = true;
         const next = clampWithinHost(start.left + dx, start.top + dy);
         el.style.left = `${next.left}px`;
         el.style.top = `${next.top}px`;
@@ -189,7 +192,8 @@ function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
         window.removeEventListener("pointermove", move, true);
         window.removeEventListener("pointerup", up, true);
         window.removeEventListener("pointercancel", up, true);
-        menuDragSuppressUntil = performance.now() + 250;
+        // Only suppress "click" behaviors if the user actually dragged.
+        if (moved) menuDragSuppressUntil = performance.now() + 250;
       };
 
       window.addEventListener("pointermove", move, true);
