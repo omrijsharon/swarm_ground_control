@@ -252,6 +252,78 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   flex-direction: column;
   gap: 8px;
   margin-top: 8px;
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 4px;
+
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255,255,255,0.25) transparent;
+}
+
+.comms-thread{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.comms-msg{
+  max-width: 85%;
+  padding: 8px 10px;
+  border-radius: 14px;
+  font-size: var(--ui-font-xs);
+  line-height: 1.35;
+  border: 1px solid rgba(255,255,255,0.14);
+  background: rgba(255,255,255,0.04);
+  color: rgba(255,255,255,0.92);
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.45);
+}
+
+.comms-msg.from-us{
+  align-self: flex-end;
+  border-color: rgba(120,220,255,0.22);
+  background: rgba(120,220,255,0.08);
+}
+
+.comms-msg.from-gs{
+  align-self: flex-start;
+}
+
+.comms-composer{
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.comms-input{
+  flex: 1;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+}
+
+.comms-input::placeholder{
+  color: rgba(255,255,255,0.55);
+}
+
+.comms-send{
+  white-space: nowrap;
+  width: 42px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.paper-plane{
+  width: 20px;
+  height: 20px;
+  display: block;
+  color: rgba(255,255,255,0.92);
 }
 
 .sequence-item{

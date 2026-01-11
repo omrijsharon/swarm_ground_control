@@ -64,6 +64,8 @@ let tooltipSuppressUntil = 0;
 let waypointDroneId = null;
 let waypointTeamId = null;
 let waypointDrag = null; // { type: "pending"|"existing", droneId?, pointerId }
+let activeWaypointId = null;
+let waypointRelocate = null; // { wpId } while user is placing the WP on the map
 let editWaypointMenuEl = null;
 let pendingEditWaypoint = null; // { wpId }
 let createWaypointMenuEl = null;
@@ -86,6 +88,7 @@ let suppressMapClickUntil = 0;
 let suppressNextMapClick = false;
 let isMapDragging = false;
 let suppressStatusClickUntil = 0;
+let pendingEmptyMapClickTimer = null;
 let sequenceMenuEl = null;
 let sequenceGotoWpMenuEl = null;
 let pendingSequenceGotoWp = null; // { key, wpId, speedKmh, altM }
@@ -106,6 +109,15 @@ let orbitAnim = { running: false, raf: 0, lastFrame: 0 };
 let scaleControl = null;
 let scaleUnits = "metric"; // "metric" | "imperial"
 let scaleMenuEl = null;
+let gsNameMenuEl = null;
+let pendingGsNaming = null; // { stationId }
+let userGroundStationId = null;
+let gsMenuEl = null;
+let activeGroundStationId = null;
+let gsRelocate = null; // { stationId } while user is placing a GS on the map
+let gsWatchId = null;
+let commsLogsByStationId = new Map(); // stationId -> { messages: {from,text,ts}[] }
+let commsComposerEl = null;
 
 function forceRedraw() {
   draw();
@@ -359,15 +371,329 @@ function openUserHomePrompt(reason = "Location unavailable") {
   }
 }
 
+function closeGroundStationNameMenu() {
+  if (gsNameMenuEl && gsNameMenuEl.parentNode) {
+    gsNameMenuEl.parentNode.removeChild(gsNameMenuEl);
+  }
+  gsNameMenuEl = null;
+  pendingGsNaming = null;
+  document.removeEventListener("pointerdown", handleGsNameOutsideClick, true);
+  window.removeEventListener("keydown", handleGsNameKeydown, true);
+  if (!gsMenuEl) forceRedraw();
+}
+
+function finalizeGroundStationNamingDefault() {
+  const stationId = pendingGsNaming && pendingGsNaming.stationId;
+  if (stationId === null || stationId === undefined) return;
+  const gs = groundStations.find((g) => g.id === stationId);
+  if (!gs) return;
+  if (!gs.name || !String(gs.name).trim()) {
+    gs.name = `Home #${gs.id + 1}`;
+  }
+}
+
+function handleGsNameOutsideClick(e) {
+  if (!gsNameMenuEl) return;
+  if (gsNameMenuEl.contains(e.target)) return;
+  // Leaving naming via outside click: keep default name and suppress map click side-effects.
+  finalizeGroundStationNamingDefault();
+  closeGroundStationNameMenu();
+  suppressMapClickUntil = performance.now() + 450;
+  longPressSuppressUntil = performance.now() + 450;
+  forceRedraw();
+}
+
+function handleGsNameKeydown(e) {
+  if (!gsNameMenuEl) return;
+  if (e.key !== "Escape") return;
+  e.preventDefault();
+  e.stopPropagation();
+  // Leaving naming via ESC: keep default name.
+  finalizeGroundStationNamingDefault();
+  closeGroundStationNameMenu();
+  suppressMapClickUntil = performance.now() + 450;
+  longPressSuppressUntil = performance.now() + 450;
+  forceRedraw();
+}
+
+function openGroundStationNameMenu(stationId) {
+  const gs = groundStations.find((g) => g.id === stationId);
+  if (!gs) return;
+
+  const host = document.getElementById("app") || document.body;
+  closeGroundStationNameMenu();
+  pendingGsNaming = { stationId };
+  activeGroundStationId = stationId;
+  gsNameMenuEl = document.createElement("div");
+  gsNameMenuEl.className = "relative-menu";
+  gsNameMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  host.appendChild(gsNameMenuEl);
+  enableMenuDrag(gsNameMenuEl);
+
+  gsNameMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Ground Station Name</h4>
+    </div>
+    <div class="status-mission" style="line-height:1.35; opacity:0.9; margin-top:2px;">
+      Name this location so it shows on the map.
+    </div>
+    <div style="margin-top:10px; display:flex; gap:8px; align-items:center;">
+      <input data-gs-name-input type="text" placeholder="e.g., Field HQ"
+        style="flex:1; background:rgba(0,0,0,0.35); border:1px solid rgba(255,255,255,0.18); color:#fff; border-radius:10px; padding:10px 12px; outline:none;">
+      <button class="cmd-chip cmd-action" data-action="gs-name-save" type="button" disabled style="white-space:nowrap;">Save</button>
+    </div>
+  `;
+
+  const hostRect = host.getBoundingClientRect();
+  const menuW = gsNameMenuEl.offsetWidth || 300;
+  const menuH = gsNameMenuEl.offsetHeight || 180;
+  gsNameMenuEl.style.left = `${Math.max(10, (hostRect.width - menuW) / 2)}px`;
+  gsNameMenuEl.style.top = `${Math.max(10, (hostRect.height - menuH) / 2)}px`;
+
+  const input = gsNameMenuEl.querySelector("[data-gs-name-input]");
+  const save = gsNameMenuEl.querySelector("[data-action='gs-name-save']");
+  if (input) input.value = (gs.name || "").trim();
+
+  const updateState = () => {
+    const v = (input && input.value ? input.value : "").trim();
+    if (save) save.disabled = !v;
+  };
+
+  const doSave = () => {
+    const v = (input && input.value ? input.value : "").trim();
+    if (!v) return;
+    const g2 = groundStations.find((g) => g.id === stationId);
+    if (g2) g2.name = v;
+    closeGroundStationNameMenu();
+    forceRedraw();
+  };
+
+  if (input) {
+    input.addEventListener("input", updateState);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        doSave();
+      }
+    });
+    setTimeout(() => {
+      try {
+        input.focus();
+        input.select();
+      } catch {
+        // ignore
+      }
+      updateState();
+    }, 0);
+  }
+  if (save) {
+    save.addEventListener("click", (e) => {
+      e.stopPropagation();
+      doSave();
+    });
+  }
+  updateState();
+
+  document.addEventListener("pointerdown", handleGsNameOutsideClick, true);
+  window.addEventListener("keydown", handleGsNameKeydown, true);
+}
+
+function closeGroundStationMenu(clearSelection = false) {
+  if (gsMenuEl && gsMenuEl.parentNode) {
+    gsMenuEl.parentNode.removeChild(gsMenuEl);
+  }
+  gsMenuEl = null;
+  gsRelocate = null;
+  if (clearSelection) activeGroundStationId = null;
+  document.removeEventListener("pointerdown", handleGsMenuOutsideClick, true);
+  updateCommandSequencePanel();
+  forceRedraw();
+}
+
+function handleGsMenuOutsideClick(e) {
+  if (!gsMenuEl) return;
+  if (gsMenuEl.contains(e.target)) return;
+  // While "Change location" is active, allow a map click to place without closing via outside-click.
+  if (gsRelocate && activeGroundStationId !== null && activeGroundStationId !== undefined) return;
+  closeGroundStationMenu(false);
+}
+
+function stopGsDynamicUpdates() {
+  if (gsWatchId !== null && gsWatchId !== undefined && typeof navigator !== "undefined" && navigator.geolocation) {
+    try {
+      navigator.geolocation.clearWatch(gsWatchId);
+    } catch {
+      // ignore
+    }
+  }
+  gsWatchId = null;
+}
+
+function startGsDynamicUpdates(stationId) {
+  const gs = groundStations.find((g) => g.id === stationId);
+  if (!gs) return;
+  if (typeof navigator === "undefined" || !navigator.geolocation) {
+    window.alert("Device location not supported.");
+    return;
+  }
+  stopGsDynamicUpdates();
+  gsWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const lat = Number(pos?.coords?.latitude);
+      const lng = Number(pos?.coords?.longitude);
+      const alt = Number(pos?.coords?.altitude);
+      if (!isFinite(lat) || !isFinite(lng)) return;
+      gs.updatePosition({ lat, lng, alt: isFinite(alt) ? alt : gs.alt });
+      forceRedraw();
+    },
+    (err) => {
+      stopGsDynamicUpdates();
+      const msg =
+        err && err.code === 1
+          ? "Location permission denied"
+          : err && err.code === 2
+            ? "Location unavailable"
+            : "Location request timed out";
+      window.alert(msg);
+    },
+    { enableHighAccuracy: true, timeout: 12000, maximumAge: 2000 }
+  );
+}
+
+function renderGroundStationMenu() {
+  if (!gsMenuEl) return;
+  const gs = groundStations.find((g) => g.id === activeGroundStationId);
+  if (!gs) return;
+  const isUser = userGroundStationId !== null && Number(userGroundStationId) === Number(gs.id);
+  const relocating = gsRelocate && Number(gsRelocate.stationId) === Number(gs.id);
+  const isDynamic = !!gs.isDynamic;
+
+  if (relocating) {
+    gsMenuEl.innerHTML = `
+      <div class="menu-head">
+        <span class="menu-eta" style="display:block;">Tap map to place</span>
+      </div>
+    `;
+    return;
+  }
+
+  const name = (gs.name || `Home #${gs.id + 1}`).trim();
+  gsMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>${name}</h4>
+      <span class="menu-eta">Ground Station</span>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      ${isUser ? `<button class="cmd-chip cmd-action" data-action="gs-rename" type="button">Change name</button>` : ""}
+      ${
+        isUser
+          ? `<button class="cmd-chip cmd-action" data-action="gs-move" type="button" ${
+              isDynamic ? "disabled" : ""
+            } style="${isDynamic ? "opacity:0.45; cursor:not-allowed;" : ""}">Change location</button>`
+          : ""
+      }
+    </div>
+    ${
+      isUser
+        ? `<div class="seg-wrap" style="margin-top:10px;">
+            <div class="seg">
+              <button class="seg-btn${!isDynamic ? " is-active" : ""}" data-gs-mode="static" type="button">Static</button>
+              <button class="seg-btn${isDynamic ? " is-active" : ""}" data-gs-mode="dynamic" type="button">Dynamic</button>
+            </div>
+          </div>`
+        : `<div class="status-mission" style="line-height:1.35; opacity:0.85; margin-top:10px;">Read-only.</div>`
+    }
+  `;
+
+  const rename = gsMenuEl.querySelector("[data-action='gs-rename']");
+  if (rename) {
+    rename.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openGroundStationNameMenu(gs.id);
+    });
+  }
+
+  const move = gsMenuEl.querySelector("[data-action='gs-move']");
+  if (move) {
+    move.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (isDynamic) return;
+      gsRelocate = { stationId: gs.id };
+      renderGroundStationMenu();
+      forceRedraw();
+    });
+  }
+
+  gsMenuEl.querySelectorAll("[data-gs-mode]").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const mode = btn.dataset.gsMode === "dynamic" ? "dynamic" : "static";
+      const g2 = groundStations.find((g) => g.id === gs.id);
+      if (!g2) return;
+      if (mode === "dynamic") {
+        g2.isDynamic = true;
+        startGsDynamicUpdates(g2.id);
+      } else {
+        g2.isDynamic = false;
+        stopGsDynamicUpdates();
+      }
+      renderGroundStationMenu();
+      forceRedraw();
+    });
+  });
+}
+
+function openGroundStationMenu(station, containerPoint) {
+  if (!map || !station || !containerPoint) return;
+  const host = document.getElementById("app") || document.body;
+  closeGroundStationMenu();
+  closeGroundStationNameMenu();
+  closeUserHomePrompt();
+  closeWaypointMenu(false, true);
+  closeOrbitMenu(false, true);
+  closeHomeMenu(false);
+  closeFollowMenu(false);
+  closeRelationMenu(false);
+  closeSequenceMenu();
+
+  activeGroundStationId = station.id;
+  gsRelocate = null;
+
+  gsMenuEl = document.createElement("div");
+  gsMenuEl.className = "relative-menu";
+  host.appendChild(gsMenuEl);
+  gsMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  enableMenuDrag(gsMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  gsMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  gsMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  renderGroundStationMenu();
+  document.addEventListener("pointerdown", handleGsMenuOutsideClick, true);
+  updateCommandSequencePanel();
+  forceRedraw();
+}
+
 function addUserHomeAtLatLng(latlng, alt = 0) {
   if (!latlng) return;
   const lat = Number(latlng.lat);
   const lng = Number(latlng.lng);
   if (!isFinite(lat) || !isFinite(lng)) return;
-  const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
-  groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0));
+  if (userGroundStationId !== null && userGroundStationId !== undefined) {
+    const existing = groundStations.find((g) => g.id === userGroundStationId);
+    if (existing) {
+      existing.updatePosition({ lat, lng, alt: isFinite(Number(alt)) ? Number(alt) : existing.alt });
+    }
+  } else {
+    const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
+    userGroundStationId = nextId;
+    groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0, null));
+  }
   pendingUserHomePlacement = false;
   closeUserHomePrompt();
+  const gs = groundStations.find((g) => g.id === userGroundStationId);
+  if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
   forceRedraw();
 }
 
@@ -580,11 +906,12 @@ class Drone {
 }
 
 class GroundStation {
-  constructor(id, lat, lng, alt = 0) {
+  constructor(id, lat, lng, alt = 0, name = null) {
     this.id = id;
     this.lat = lat;
     this.lng = lng;
     this.alt = alt;
+    this.name = name || null;
   }
 
   updatePosition({ lat, lng, alt }) {
@@ -1841,6 +2168,42 @@ function updateCommandSequencePanel() {
   const playBtn = document.getElementById("seqPlayBtn");
   if (!list || !addBtn || !playBtn) return;
 
+  const titleBtn = document.querySelector("aside.panel.left .panel-title");
+  const labelEl = document.querySelector("aside.panel.left .label");
+  const panel = document.querySelector("aside.panel.left");
+  const transportEl = panel ? panel.querySelector(".sequence-transport") : null;
+  const commsGs =
+    activeGroundStationId !== null &&
+    activeGroundStationId !== undefined &&
+    (userGroundStationId === null || Number(activeGroundStationId) !== Number(userGroundStationId)) &&
+    pinnedDroneId === null &&
+    pinnedTeamId === null;
+  if (commsGs) {
+    const gs = groundStations.find((g) => g.id === Number(activeGroundStationId));
+    const name = gs ? (gs.name || `Home #${gs.id + 1}`).trim() : "Unknown";
+    if (titleBtn) titleBtn.textContent = `Comms: ${name}`;
+    if (labelEl) labelEl.textContent = "COMMS";
+    addBtn.disabled = true;
+    addBtn.style.opacity = "0.45";
+    addBtn.style.display = "none";
+    if (transportEl) transportEl.style.display = "none";
+    updateSequenceTransport(null);
+    closeSequenceMenu();
+    closeSequenceGotoWpMenu();
+    closeSequenceGotoWpEditMenu();
+    renderCommsPanel(gs, list);
+    return;
+  } else {
+    if (titleBtn) titleBtn.textContent = "Commands Sequence";
+    if (labelEl) labelEl.textContent = "SEQUENCE";
+    addBtn.style.display = "";
+    if (transportEl) transportEl.style.display = "";
+    if (commsComposerEl && commsComposerEl.parentNode) {
+      commsComposerEl.parentNode.removeChild(commsComposerEl);
+    }
+    commsComposerEl = null;
+  }
+
   const sel = getSelectedEntity();
   const key = getSelectionKey(sel);
   list.innerHTML = "";
@@ -2431,6 +2794,7 @@ function setupHoverHandlers() {
   });
 
   map.on("click", handleMapClick);
+  map.on("dblclick", handleMapDoubleClick);
 
   map.on("mouseout", () => {
     if (pinnedDroneId === null) {
@@ -2605,6 +2969,40 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  if (pendingEmptyMapClickTimer) {
+    clearTimeout(pendingEmptyMapClickTimer);
+    pendingEmptyMapClickTimer = null;
+  }
+  // If we're currently relocating a waypoint ("Change WP"), the next click places it.
+  if (waypointMenuEl && waypointMenuEl.dataset.mode === "edit" && waypointRelocate && pendingWaypoint && pendingWaypoint.wpId !== null && pendingWaypoint.wpId !== undefined) {
+    const wpId = pendingWaypoint.wpId;
+    if (Number(waypointRelocate.wpId) === Number(wpId)) {
+      updateWaypointPosition(wpId, e.latlng.lat, e.latlng.lng);
+      pendingWaypoint.lat = e.latlng.lat;
+      pendingWaypoint.lng = e.latlng.lng;
+      waypointRelocate = null;
+      // After placing a new WP location, close the menu and deselect the WP.
+      closeWaypointMenu(true, true);
+      updateTooltip();
+      draw();
+      return;
+    }
+  }
+  // If we're currently relocating a ground station, the next click places it.
+  if (gsMenuEl && gsRelocate && activeGroundStationId !== null && activeGroundStationId !== undefined) {
+    const stationId = Number(activeGroundStationId);
+    if (Number(gsRelocate.stationId) === stationId) {
+      const gs = groundStations.find((g) => g.id === stationId);
+      if (gs) {
+        gs.updatePosition({ lat: e.latlng.lat, lng: e.latlng.lng });
+      }
+      gsRelocate = null;
+      closeGroundStationMenu();
+      updateTooltip();
+      draw();
+      return;
+    }
+  }
   // If we're asking the user to place their Home, the next click places it.
   if (pendingUserHomePlacement) {
     addUserHomeAtLatLng(e.latlng);
@@ -2669,13 +3067,48 @@ function handleMapClick(e) {
     closeWaypointMenu();
     if (pinnedDroneId !== null || pinnedTeamId !== null) {
       openHomeMenu(e.latlng, e.containerPoint, nearGs);
+    } else {
+      // When nothing is selected, allow selecting a GS (for GS menu).
+      openGroundStationMenu(nearGs, e.containerPoint);
     }
     return;
   }
 
-  setPinnedDrone(null);
-  closeWaypointMenu();
-  updateCommandSequencePanel();
+  // Empty-map single click: delay slightly to allow double-click zoom without deselecting/closing menus.
+  pendingEmptyMapClickTimer = setTimeout(() => {
+    pendingEmptyMapClickTimer = null;
+    closeSequenceMenu();
+    closeRelationMenu(false);
+    if (followMenuEl) closeFollowMenu();
+    if (homeMenuEl) closeHomeMenu();
+    if (gsMenuEl) closeGroundStationMenu(true);
+    closeWaypointMenu();
+    activeGroundStationId = null;
+    setPinnedDrone(null);
+    updateCommandSequencePanel();
+    updateTooltip();
+    draw();
+  }, 240);
+}
+
+function handleMapDoubleClick(e) {
+  // Cancel any pending "empty map click" action so double-click is pure zoom.
+  if (pendingEmptyMapClickTimer) {
+    clearTimeout(pendingEmptyMapClickTimer);
+    pendingEmptyMapClickTimer = null;
+  }
+  suppressMapClickUntil = performance.now() + 450;
+  longPressSuppressUntil = performance.now() + 450;
+  try {
+    e.originalEvent?.preventDefault?.();
+    e.originalEvent?.stopPropagation?.();
+  } catch (_) {
+    // ignore
+  }
+  if (!map || !e || !e.latlng) return;
+  const nextZoom = Math.min(map.getMaxZoom ? map.getMaxZoom() : 19, (map.getZoom() || 0) + 1);
+  // Center and zoom exactly at the double-clicked location.
+  map.setView(e.latlng, nextZoom, { animate: true });
 }
 
 function formatDuration(seconds) {
@@ -2692,6 +3125,121 @@ function formatMinutes(mins) {
   if (mins === null || mins === undefined || !isFinite(mins)) return "N/A";
   if (mins < 1) return `${mins.toFixed(1)}m`;
   return `${Math.round(mins)}m`;
+}
+
+function getCommsLog(stationId) {
+  const id = Number(stationId);
+  if (!commsLogsByStationId.has(id)) {
+    commsLogsByStationId.set(id, { messages: [] });
+  }
+  return commsLogsByStationId.get(id);
+}
+
+function renderCommsPanel(gs, listEl) {
+  if (!gs || !listEl) return;
+  const log = getCommsLog(gs.id);
+  listEl.innerHTML = "";
+  listEl.style.paddingBottom = "8px";
+
+  const thread = document.createElement("div");
+  thread.className = "comms-thread";
+  listEl.appendChild(thread);
+
+  if (!log.messages.length) {
+    const empty = document.createElement("div");
+    empty.className = "sequence-empty";
+    empty.textContent = `No comms messages with ${(gs.name || `Home #${gs.id + 1}`).trim()} yet.`;
+    thread.appendChild(empty);
+  } else {
+    log.messages.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = `comms-msg ${m.from === "us" ? "from-us" : "from-gs"}`;
+      row.textContent = m.text;
+      thread.appendChild(row);
+    });
+  }
+
+  const host = document.getElementById("app") || document.body;
+  const panelContent = document.querySelector("aside.panel.left .panel-content");
+  if (!panelContent) return;
+
+  if (!commsComposerEl) {
+    commsComposerEl = document.createElement("div");
+    commsComposerEl.className = "comms-composer";
+    commsComposerEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  }
+
+  if (!commsComposerEl.parentNode) {
+    // Place composer at the bottom of the left panel, under the list.
+    panelContent.appendChild(commsComposerEl);
+  }
+
+  commsComposerEl.innerHTML = `
+    <input class="comms-input" type="text" placeholder="Type message…" data-comms-input>
+    <button class="cmd-chip cmd-action comms-send" type="button" data-comms-send aria-label="Send">
+      <svg class="paper-plane" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path
+          fill="currentColor"
+          fill-rule="evenodd"
+          d="M3 4 L21 12 L3 20 Z M3 9 L11.5 12 L3 15 Z"
+          clip-rule="evenodd"
+        />
+      </svg>
+    </button>
+  `;
+
+  const input = commsComposerEl.querySelector("[data-comms-input]");
+  const send = commsComposerEl.querySelector("[data-comms-send]");
+
+  const sendMsg = () => {
+    const text = (input && input.value ? input.value : "").trim();
+    if (!text) return;
+    log.messages.push({ from: "us", text, ts: Date.now() });
+    if (input) input.value = "";
+    renderCommsPanel(gs, listEl);
+    // Optional lightweight simulated acknowledgement
+    setTimeout(() => {
+      const ack = `ACK: ${text.slice(0, 28)}${text.length > 28 ? "…" : ""}`;
+      const log2 = getCommsLog(gs.id);
+      log2.messages.push({ from: "gs", text: ack, ts: Date.now() });
+      if (
+        activeGroundStationId !== null &&
+        Number(activeGroundStationId) === Number(gs.id) &&
+        (userGroundStationId === null || Number(gs.id) !== Number(userGroundStationId))
+      ) {
+        updateCommandSequencePanel();
+      }
+    }, 650);
+  };
+
+  if (send) {
+    send.addEventListener("click", (e) => {
+      e.stopPropagation();
+      sendMsg();
+    });
+  }
+  if (input) {
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        sendMsg();
+      }
+    });
+    setTimeout(() => {
+      try {
+        input.focus();
+      } catch {
+        // ignore
+      }
+    }, 0);
+  }
+
+  // Scroll to bottom
+  try {
+    listEl.scrollTop = listEl.scrollHeight;
+  } catch {
+    // ignore
+  }
 }
 
 function isInAir(latest) {
@@ -2916,6 +3464,8 @@ function closeWaypointMenu(suppressNextOpen = false, keepSelection = false) {
   pendingWaypoint = null;
   waypointDroneId = null;
   waypointTeamId = null;
+  waypointRelocate = null;
+  activeWaypointId = null;
   closeSequenceMenu();
   document.removeEventListener("pointerdown", handleWaypointOutsideClick, true);
   // Clear hover so tooltip doesn't resurrect automatically after suppression expires.
@@ -3915,6 +4465,10 @@ function handleContextMenu(e) {
   const point = e.containerPoint;
   const near = findNearestDrone(point, getHoverRadius());
   const nearGs = findNearestGroundStation(point, getHoverRadius());
+  if (nearGs && pinnedDroneId === null && pinnedTeamId === null) {
+    openGroundStationMenu(nearGs, point);
+    return;
+  }
   if (nearGs && (pinnedDroneId !== null || pinnedTeamId !== null)) {
     openHomeMenu(e.latlng, point, nearGs);
     return;
@@ -3938,9 +4492,9 @@ function attemptActionLongPress(containerPoint) {
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
 
-  // Long-press on a waypoint with no selection: open "Edit waypoint".
+  // Long-press on a waypoint with no selection: open WP change/delete directly (and allow dragging immediately).
   if (hitWp && pinnedDroneId === null && pinnedTeamId === null) {
-    openEditWaypointMenu(hitWp, containerPoint);
+    openWaypointEditModeMenu(hitWp.wpId, containerPoint);
     return;
   }
 
@@ -3986,6 +4540,11 @@ function attemptActionLongPress(containerPoint) {
   if (nearGs && (pinnedDroneId !== null || pinnedTeamId !== null)) {
     const latlng = map.containerPointToLatLng(containerPoint);
     openHomeMenu(latlng, containerPoint, nearGs);
+    return;
+  }
+  // Long-press on a GS with no selection: open GS menu.
+  if (nearGs && pinnedDroneId === null && pinnedTeamId === null) {
+    openGroundStationMenu(nearGs, containerPoint);
     return;
   }
   // Team creation/merge via long-press moved into the relation menu.
@@ -4040,6 +4599,7 @@ function closeEditWaypointMenu() {
   }
   editWaypointMenuEl = null;
   pendingEditWaypoint = null;
+  activeWaypointId = null;
   document.removeEventListener("pointerdown", handleEditWaypointOutsideClick, true);
 }
 
@@ -4102,10 +4662,11 @@ function openCreateWaypointMenu(latlng, containerPoint) {
       e.stopPropagation();
       const p = pendingCreateWaypoint;
       if (!p) return;
-      const wp = createWaypoint(p.lat, p.lng);
+      createWaypoint(p.lat, p.lng);
       closeCreateWaypointMenu();
-      // Immediately allow repositioning the new WP by opening edit mode.
-      openWaypointEditModeMenu(wp.id, containerPoint);
+      // No auto-select/menu after creation; just add the WP and return to the map.
+      activeWaypointId = null;
+      draw();
     });
   }
 
@@ -4125,6 +4686,7 @@ function openEditWaypointMenu(hitWp, containerPoint) {
   closeSequenceMenu();
 
   pendingEditWaypoint = { wpId: hitWp.wpId };
+  activeWaypointId = hitWp.wpId;
 
   editWaypointMenuEl = document.createElement("div");
   editWaypointMenuEl.className = "relative-menu";
@@ -4161,6 +4723,61 @@ function openEditWaypointMenu(hitWp, containerPoint) {
   document.addEventListener("pointerdown", handleEditWaypointOutsideClick, true);
 }
 
+function renderWaypointEditModeMenu() {
+  if (!waypointMenuEl || !pendingWaypoint || waypointMenuEl.dataset.mode !== "edit") return;
+  const id = pendingWaypoint.wpId;
+  if (id === null || id === undefined) return;
+  const relocating = waypointRelocate && Number(waypointRelocate.wpId) === Number(id);
+  if (relocating) {
+    waypointMenuEl.innerHTML = `
+      <div class="menu-head">
+        <span class="menu-eta" style="display:block;">Tap map to place</span>
+      </div>
+    `;
+    return;
+  }
+
+  waypointMenuEl.innerHTML = `
+      <div class="menu-head">
+        <h4>WP #${id}</h4>
+        <span class="menu-eta">Drag to move</span>
+      </div>
+      <div class="command-list cmd-action-list column" style="margin-top:2px;">
+        <button class="cmd-chip cmd-action" data-action="wp-change" type="button">Change WP</button>
+        <button class="cmd-chip cmd-action" data-action="wp-delete" type="button">Delete WP</button>
+      </div>
+    `;
+
+  const change = waypointMenuEl.querySelector("[data-action='wp-change']");
+  if (change) {
+    change.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wpId = pendingWaypoint && pendingWaypoint.wpId;
+      if (wpId === null || wpId === undefined) return;
+      waypointRelocate = { wpId: Number(wpId) };
+      renderWaypointEditModeMenu();
+      draw();
+    });
+  }
+
+  const del = waypointMenuEl.querySelector("[data-action='wp-delete']");
+  if (del) {
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const wpId = pendingWaypoint && pendingWaypoint.wpId;
+      if (wpId === null || wpId === undefined) return;
+      // Remove the waypoint and clear any drone relationships pointing to it.
+      waypoints.delete(Number(wpId));
+      for (const [droneId, t0] of waypointTargets.entries()) {
+        const t = normalizeWaypointTarget(droneId);
+        if (t && Number(t.wpId) === Number(wpId)) waypointTargets.delete(droneId);
+      }
+      closeWaypointMenu(true);
+      draw();
+    });
+  }
+}
+
 function openWaypointEditModeMenu(wpId, containerPoint) {
   if (!map || wpId === null || wpId === undefined || !containerPoint) return;
   const wp = getWaypointById(wpId);
@@ -4184,33 +4801,10 @@ function openWaypointEditModeMenu(wpId, containerPoint) {
   waypointTeamId = null;
   pendingWaypoint = { wpId: wp.id, lat: wp.lat, lng: wp.lng };
   waypointMenuEl.dataset.mode = "edit";
+  activeWaypointId = wp.id;
+  waypointRelocate = null;
 
-  waypointMenuEl.innerHTML = `
-    <div class="menu-head">
-      <h4>WP #${wp.id}</h4>
-      <span class="menu-eta">Drag to move</span>
-    </div>
-    <div class="command-list cmd-action-list column" style="margin-top:2px;">
-      <button class="cmd-chip cmd-action" data-action="wp-delete" type="button">Delete WP</button>
-    </div>
-  `;
-
-  const del = waypointMenuEl.querySelector("[data-action='wp-delete']");
-  if (del) {
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const id = pendingWaypoint && pendingWaypoint.wpId;
-      if (id === null || id === undefined) return;
-      // Remove the waypoint and clear any drone relationships pointing to it.
-      waypoints.delete(Number(id));
-      for (const [droneId, t0] of waypointTargets.entries()) {
-        const t = normalizeWaypointTarget(droneId);
-        if (t && Number(t.wpId) === Number(id)) waypointTargets.delete(droneId);
-      }
-      closeWaypointMenu(true);
-      draw();
-    });
-  }
+  renderWaypointEditModeMenu();
 
   document.addEventListener("pointerdown", handleWaypointOutsideClick, true);
   draw();
@@ -4219,6 +4813,10 @@ function openWaypointEditModeMenu(wpId, containerPoint) {
 function handleWaypointOutsideClick(e) {
   if (!waypointMenuEl) return;
   if (waypointMenuEl.contains(e.target)) return;
+  // While "Change WP" is active, allow a map click to place the WP without closing the menu.
+  if (waypointMenuEl.dataset.mode === "edit" && waypointRelocate && pendingWaypoint && pendingWaypoint.wpId !== null && pendingWaypoint.wpId !== undefined) {
+    if (Number(waypointRelocate.wpId) === Number(pendingWaypoint.wpId)) return;
+  }
   // Allow dragging the pending WP pin without the menu auto-closing.
   if (map && pendingWaypoint && ["goto", "edit"].includes(waypointMenuEl.dataset.mode)) {
     try {
@@ -4250,6 +4848,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, o
   if (tooltipEl) tooltipEl.style.display = "none";
   closeCreateWaypointMenu();
   closeEditWaypointMenu();
+  closeGroundStationMenu(true);
   closeFollowMenu();
   closeHomeMenu();
   closeOrbitMenu(false, true);
@@ -4261,6 +4860,8 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, o
   const wpLat = existingWp ? existingWp.lat : latlng.lat;
   const wpLng = existingWp ? existingWp.lng : latlng.lng;
   pendingWaypoint = { wpId: existingWp ? existingWp.id : null, lat: wpLat, lng: wpLng, speedKmh: 60, altM: initialAlt };
+  activeWaypointId = existingWp ? existingWp.id : null;
+  waypointRelocate = null;
   const distKm = latest ? haversine2dMeters(latest.lat, latest.lng, wpLat, wpLng) / 1000 : null;
   const distLabel = distKm !== null && isFinite(distKm) ? `${distKm.toFixed(2)} km` : "Waypoint";
   const syncDroneId = existingWp ? getAnyDroneTargetingWaypoint(existingWp.id, { excludeDroneId: drone ? drone.id : null }) : null;
@@ -4547,7 +5148,7 @@ function setTimestampNow() {
 
 function initMapOnline() {
   // Tel Aviv coordinates: 32.0853°N, 34.7818°E
-  map = L.map("map", { zoomControl: false }).setView([32.0853, 34.7818], 11);
+  map = L.map("map", { zoomControl: false, doubleClickZoom: false }).setView([32.0853, 34.7818], 11);
 
   // Dynamic scale bar (updates automatically with zoom). Click to change units.
   setScaleUnits("metric");
@@ -4998,8 +5599,9 @@ function makeMockSwarm() {
 
 function initGroundStations() {
   // Single Tel Aviv anchor (e.g., HQ/helipad). Can be extended later.
+  userGroundStationId = null;
   groundStations = [
-    new GroundStation(0, 32.0853, 34.7818, 20), // Tel Aviv center-ish
+    new GroundStation(0, 32.0853, 34.7818, 20, "Tel-Aviv"), // Tel Aviv center-ish
   ];
 }
 
@@ -5010,8 +5612,18 @@ function tryAddUserHomeFromDevice() {
   }
 
   const addHome = (lat, lng, alt = 0) => {
-    const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
-    groundStations.push(new GroundStation(nextId, lat, lng, alt));
+    if (userGroundStationId !== null && userGroundStationId !== undefined) {
+      const existing = groundStations.find((g) => g.id === userGroundStationId);
+      if (existing) {
+        existing.updatePosition({ lat, lng, alt });
+      }
+    } else {
+      const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
+      userGroundStationId = nextId;
+      groundStations.push(new GroundStation(nextId, lat, lng, alt, null));
+    }
+    const gs = groundStations.find((g) => g.id === userGroundStationId);
+    if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
     forceRedraw();
   };
 
@@ -5036,12 +5648,20 @@ function tryAddUserHomeFromDevice() {
   );
 }
 
-function drawGroundStationIcon(x, y, size = 18) {
+function drawGroundStationIcon(x, y, size = 18, { active = false } = {}) {
   ctx.save();
   ctx.translate(x, y);
 
   // Larger perimeter ring; keep H compact.
   const radius = size * 0.95;
+
+  // Selection glow (cyan) when active.
+  if (active) {
+    ctx.shadowColor = SETTINGS.SELECTION_GLOW_COLOR;
+    ctx.shadowBlur = Math.max(12, size * 1.35);
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 0;
+  }
 
   // Outer ring
   ctx.lineWidth = Math.max(2, size * 0.12);
@@ -5074,6 +5694,23 @@ function drawGroundStationIcon(x, y, size = 18) {
   ctx.lineTo(hHalfWidth, 0);
   ctx.stroke();
 
+  ctx.restore();
+}
+
+function drawGroundStationLabel(x, y, text, size = 18) {
+  if (!text) return;
+  ctx.save();
+  const zoom = map && map.getZoom ? map.getZoom() : 12;
+  const fontPx = Math.max(10, Math.min(14, (zoom * 0.9)));
+  ctx.font = `600 ${fontPx}px system-ui, -apple-system, Segoe UI, Roboto, Arial`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "top";
+  ctx.shadowColor = "rgba(0,0,0,0.95)";
+  ctx.shadowBlur = 6;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 2;
+  ctx.fillStyle = "rgba(255,255,255,0.95)";
+  ctx.fillText(String(text), x, y + size * 0.95 + 2);
   ctx.restore();
 }
 
@@ -5204,7 +5841,7 @@ function drawSelectionHighlight(x, y, size = 10, headingDeg = 0) {
   ctx.restore();
 }
 
-function drawWaypointPin(x, y) {
+function drawWaypointPin(x, y, { active = false } = {}) {
   ctx.save();
   ctx.translate(x, y);
   const z = map && map.getZoom ? map.getZoom() : 12;
@@ -5224,17 +5861,18 @@ function drawWaypointPin(x, y) {
   // No transparency/blur; keep the marker fully solid.
   ctx.shadowBlur = 0;
 
-  // White glow (strong, noticeable) behind the marker
+  // Glow behind the marker (white by default, cyan when the WP is selected)
   {
     const overlap = Math.max(lineW * 1.2, ringOuterR * 0.35);
     const baseY = ringCy + ringOuterR - overlap;
     ctx.save();
-    ctx.shadowColor = "rgba(255,255,255,1)";
+    const glow = active ? SETTINGS.SELECTION_GLOW_COLOR : "rgba(255,255,255,1)";
+    ctx.shadowColor = glow;
     ctx.shadowBlur = Math.max(18, ringOuterR * 2.2);
     ctx.lineWidth = lineW + 3.2;
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
-    ctx.strokeStyle = "rgba(255,255,255,0.90)";
+    ctx.strokeStyle = active ? "rgba(120,220,255,0.92)" : "rgba(255,255,255,0.90)";
 
     const strokeGlow = () => {
       ctx.beginPath();
@@ -5252,7 +5890,7 @@ function drawWaypointPin(x, y) {
     strokeGlow();
     ctx.shadowBlur = Math.max(10, ringOuterR * 1.4);
     ctx.lineWidth = lineW + 1.6;
-    ctx.strokeStyle = "rgba(255,255,255,0.75)";
+    ctx.strokeStyle = active ? "rgba(120,220,255,0.72)" : "rgba(255,255,255,0.75)";
     strokeGlow();
     ctx.restore();
   }
@@ -5335,7 +5973,8 @@ function draw() {
   const gsSize = Math.max(14, Math.min(26, zoom * 1.45)) * 0.75;
   groundStations.forEach((gs) => {
     const p = latLngToScreen(gs.lat, gs.lng);
-    drawGroundStationIcon(p.x, p.y, gsSize);
+    drawGroundStationIcon(p.x, p.y, gsSize, { active: activeGroundStationId === gs.id });
+    drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, gsSize);
   });
 
   // Follow links (dashed line from follower to target)
@@ -5426,9 +6065,16 @@ function draw() {
   // Waypoints (independent map entities)
   waypoints.forEach((wp, wpId) => {
     // If a WP is being moved via a menu, draw it only once (in the preview section below).
-    if (pendingWaypoint && pendingWaypoint.wpId === wpId && waypointMenuEl) return;
+    // In the root "pick an action" menu, we are *not* moving the WP, so keep it visible.
+    if (
+      pendingWaypoint &&
+      pendingWaypoint.wpId === wpId &&
+      waypointMenuEl &&
+      ["goto", "edit"].includes(waypointMenuEl.dataset.mode)
+    )
+      return;
     const p = latLngToScreen(wp.lat, wp.lng);
-    drawWaypointPin(p.x, p.y);
+    drawWaypointPin(p.x, p.y, { active: activeWaypointId === wpId });
   });
 
   // Goto-WP links (dashed line from drone to a waypoint)
@@ -5474,13 +6120,13 @@ function draw() {
       ctx.stroke();
       ctx.restore();
     }
-    drawWaypointPin(to.x, to.y);
+    drawWaypointPin(to.x, to.y, { active: true });
   }
 
   // Waypoint edit preview (no dashed line; just the movable pin)
   if (waypointMenuEl && pendingWaypoint && waypointMenuEl.dataset.mode === "edit") {
     const to = latLngToScreen(pendingWaypoint.lat, pendingWaypoint.lng);
-    drawWaypointPin(to.x, to.y);
+    drawWaypointPin(to.x, to.y, { active: true });
   }
 
   // Orbit visualization (only for the current selection)
