@@ -118,6 +118,9 @@ let gsRelocate = null; // { stationId } while user is placing a GS on the map
 let gsWatchId = null;
 let commsLogsByStationId = new Map(); // stationId -> { messages: {from,text,ts}[] }
 let commsComposerEl = null;
+let commsDraftByStationId = new Map(); // stationId -> string
+let commsComposerInputEl = null;
+let commsComposerSendEl = null;
 
 function forceRedraw() {
   draw();
@@ -3138,6 +3141,9 @@ function getCommsLog(stationId) {
 function renderCommsPanel(gs, listEl) {
   if (!gs || !listEl) return;
   const log = getCommsLog(gs.id);
+  const prevInput = commsComposerEl ? commsComposerEl.querySelector("[data-comms-input]") : null;
+  const prevValue = prevInput ? prevInput.value : "";
+  const restoreFocus = !!(prevInput && document.activeElement === prevInput);
   listEl.innerHTML = "";
   listEl.style.paddingBottom = "8px";
 
@@ -3190,6 +3196,17 @@ function renderCommsPanel(gs, listEl) {
 
   const input = commsComposerEl.querySelector("[data-comms-input]");
   const send = commsComposerEl.querySelector("[data-comms-send]");
+  if (input) input.placeholder = "Type message...";
+  if (input) input.value = prevValue;
+  if (restoreFocus && input) {
+    try {
+      input.focus();
+      const end = input.value.length;
+      input.setSelectionRange(end, end);
+    } catch {
+      // ignore
+    }
+  }
 
   const sendMsg = () => {
     const text = (input && input.value ? input.value : "").trim();
@@ -3225,13 +3242,6 @@ function renderCommsPanel(gs, listEl) {
         sendMsg();
       }
     });
-    setTimeout(() => {
-      try {
-        input.focus();
-      } catch {
-        // ignore
-      }
-    }, 0);
   }
 
   // Scroll to bottom
