@@ -82,6 +82,9 @@ let orbitCloseSuppressUntil = 0;
 let orbitDroneId = null;
 let orbitTeamId = null;
 let orbitPreview = null; // { key, orbit }
+let flankMenuEl = null;
+let pendingFlank = null;
+let flankCloseSuppressUntil = 0;
 let longPressTimer = null;
 let longPressSuppressUntil = 0;
 let suppressMapClickUntil = 0;
@@ -259,7 +262,7 @@ function enableMenuDrag(el, { handleSelector = null, onMove = null } = {}) {
 
   const isInteractive = (t) => {
     if (!t || !(t instanceof Element)) return false;
-    return !!t.closest("button, input, select, textarea, a, label");
+    return !!t.closest("button, input, select, textarea, a, label, [data-no-drag]");
   };
 
   el.style.touchAction = "none";
@@ -772,6 +775,32 @@ function haversine2dMeters(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
+function bearingDeg(lat1, lon1, lat2, lon2) {
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const y = Math.sin(toRad(lon2 - lon1)) * Math.cos(toRad(lat2));
+  const x =
+    Math.cos(toRad(lat1)) * Math.sin(toRad(lat2)) -
+    Math.sin(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.cos(toRad(lon2 - lon1));
+  const brng = toDeg(Math.atan2(y, x));
+  return (brng + 360) % 360;
+}
+
+function destinationLatLng(lat, lon, bearingDegVal, distanceM) {
+  const R = 6371000;
+  const toRad = (d) => (d * Math.PI) / 180;
+  const toDeg = (r) => (r * 180) / Math.PI;
+  const brng = toRad(bearingDegVal);
+  const lat1 = toRad(lat);
+  const lon1 = toRad(lon);
+  const dr = distanceM / R;
+  const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr) + Math.cos(lat1) * Math.sin(dr) * Math.cos(brng));
+  const lon2 =
+    lon1 +
+    Math.atan2(Math.sin(brng) * Math.sin(dr) * Math.cos(lat1), Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2));
+  return { lat: toDeg(lat2), lng: toDeg(lon2) };
+}
+
 class Drone {
   constructor(id, options = {}) {
     this.id = id;
@@ -1204,6 +1233,7 @@ function setPinnedDrone(id) {
   tooltipMode = "info";
   closeSequenceMenu();
   closeOrbitMenu(false, true);
+  closeFlankMenu(false, true);
   // Only close waypoint menu if selecting a different drone; keep it if it's for the same drone.
   if (waypointDroneId === null || waypointDroneId !== id) {
     closeWaypointMenu();
@@ -1229,6 +1259,7 @@ function setPinnedTeam(id, suppressTooltip = false) {
   tooltipMode = "info";
   closeSequenceMenu();
   closeOrbitMenu(false, true);
+  closeFlankMenu(false, true);
   closeWaypointMenu();
   closeFollowMenu(false);
   closeHomeMenu(false);
@@ -1402,6 +1433,177 @@ function resolveOrbitCenter(anchor) {
     if (l) return { lat: l.lat, lng: l.lng };
   }
   return null;
+}
+
+function resolveFlankAnchor(anchor) {
+  if (!anchor) return null;
+  if (anchor.type === "wp") {
+    if (anchor.wpId !== null && anchor.wpId !== undefined) {
+      const wp = getWaypointById(anchor.wpId);
+      if (wp) return { lat: wp.lat, lng: wp.lng };
+    }
+    return { lat: anchor.lat, lng: anchor.lng };
+  }
+  if (anchor.type === "home") {
+    const gs = groundStations.find((g) => g.id === anchor.stationId);
+    if (gs) return { lat: gs.lat, lng: gs.lng };
+  }
+  return null;
+}
+
+function computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatLng) {
+  if (!anchorLatLng || !isFinite(approachBearing) || !isFinite(diameterM)) return null;
+  if (!fromLatLng || !isFinite(fromLatLng.lat) || !isFinite(fromLatLng.lng)) return null;
+  const d = Math.max(20, Number(diameterM) || 0);
+  const radius = d / 2;
+  const baseBearing = bearingDeg(anchorLatLng.lat, anchorLatLng.lng, fromLatLng.lat, fromLatLng.lng);
+  const secondBearingA = (baseBearing + 90 + 360) % 360;
+  const secondBearingB = (baseBearing - 90 + 360) % 360;
+  const secondPointA = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingA, radius);
+  const secondPointB = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingB, radius);
+
+  // Compute circle center from: target T, second point S, and tangent direction at T (approachBearing).
+  const toRad = (v) => (v * Math.PI) / 180;
+  const R = 6371000;
+  const lat0 = anchorLatLng.lat;
+  const lng0 = anchorLatLng.lng;
+  const cosLat = Math.cos(toRad(lat0));
+  const toXY = (p) => ({
+    x: (toRad(p.lng - lng0) * R) * cosLat,
+    y: toRad(p.lat - lat0) * R,
+  });
+  const toLL = (p) => ({
+    lat: lat0 + (p.y / R) * (180 / Math.PI),
+    lng: lng0 + (p.x / (R * cosLat)) * (180 / Math.PI),
+  });
+
+  const T = { x: 0, y: 0 };
+  const theta = toRad(approachBearing);
+  const n = { x: Math.cos(theta), y: -Math.sin(theta) }; // normal to tangent (bearing 0 = +y)
+
+  const buildGeom = (centerXY, secondPoint) => {
+    const center = toLL(centerXY);
+    const radiusM = radius;
+    const droneXY = toXY(fromLatLng);
+    const v = { x: droneXY.x - centerXY.x, y: droneXY.y - centerXY.y };
+    const vLen = Math.hypot(v.x, v.y);
+    const entryXY =
+      vLen > 1e-6
+        ? { x: centerXY.x + (v.x / vLen) * radiusM, y: centerXY.y + (v.y / vLen) * radiusM }
+        : { x: centerXY.x + radiusM, y: centerXY.y };
+    const entryPoint = toLL(entryXY);
+    const aEntry = Math.atan2(entryXY.y - centerXY.y, entryXY.x - centerXY.x);
+    const aTarget = Math.atan2(T.y - centerXY.y, T.x - centerXY.x);
+    return { center, radiusM, entryPoint, aEntry, aTarget, secondPoint };
+  };
+
+  const centerAXY = { x: n.x * radius, y: n.y * radius };
+  const centerBXY = { x: -n.x * radius, y: -n.y * radius };
+  const geomA = buildGeom(centerAXY, secondPointA);
+  const geomB = buildGeom(centerBXY, secondPointB);
+
+  const toBearingDeg = (rad) => ((90 - (rad * 180) / Math.PI + 360) % 360);
+  const bearingError = (bearingA, bearingB) => {
+    const diff = ((bearingA - bearingB + 540) % 360) - 180;
+    return Math.abs(diff);
+  };
+
+  const options = [];
+  [geomA, geomB].forEach((geom) => {
+    const distToEntry = haversine2dMeters(fromLatLng.lat, fromLatLng.lng, geom.entryPoint.lat, geom.entryPoint.lng);
+    ["CW", "CCW"].forEach((direction) => {
+      const arcLen = arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, direction);
+      const totalDistM = distToEntry + arcLen;
+      const tangentAngle = geom.aTarget + (direction === "CCW" ? Math.PI / 2 : -Math.PI / 2);
+      const tangentBearing = toBearingDeg(tangentAngle);
+      const alignErr = bearingError(tangentBearing, approachBearing);
+      options.push({ ...geom, direction, totalDistM, alignErr, tangentBearing });
+    });
+  });
+
+  options.sort((a, b) => {
+    if (a.alignErr !== b.alignErr) return a.alignErr - b.alignErr;
+    return a.totalDistM - b.totalDistM;
+  });
+  return options[0] || null;
+}
+
+function arcLengthForDirection(radiusM, aStart, aEnd, direction) {
+  if (!isFinite(radiusM) || radiusM <= 0) return 0;
+  const twoPi = Math.PI * 2;
+  const normalize = (v) => ((v % twoPi) + twoPi) % twoPi;
+  const delta = direction === "CCW" ? normalize(aEnd - aStart) : normalize(aStart - aEnd);
+  return delta * radiusM;
+}
+
+function drawFlankVisualization(anchorLatLng, approachBearing, diameterM, direction, approachSpeedKmh, fromLatLng) {
+  if (!anchorLatLng || !map) return;
+  const geom = computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatLng);
+  if (!geom) return;
+
+  const { center, entryPoint, radiusM } = geom;
+  const chosenDir = geom.direction || direction || "CW";
+  const c = latLngToScreen(center.lat, center.lng);
+  const t = latLngToScreen(anchorLatLng.lat, anchorLatLng.lng);
+  const s = latLngToScreen(entryPoint.lat, entryPoint.lng);
+  if (!c || !t || !s) return;
+
+  // Line from drone to the entry point
+  if (fromLatLng) {
+    const f = latLngToScreen(fromLatLng.lat, fromLatLng.lng);
+    if (f) {
+      ctx.save();
+      ctx.setLineDash([6, 6]);
+      ctx.lineWidth = 1.6;
+      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      ctx.beginPath();
+      ctx.moveTo(f.x, f.y);
+      ctx.lineTo(s.x, s.y);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  const rPx = Math.hypot(t.x - c.x, t.y - c.y);
+  const aStart = Math.atan2(s.y - c.y, s.x - c.x);
+  const aEnd = Math.atan2(t.y - c.y, t.x - c.x);
+  const ccw = chosenDir === "CCW";
+
+  // Arc path
+  ctx.save();
+  ctx.setLineDash([4, 6]);
+  ctx.lineWidth = 2.0;
+  ctx.strokeStyle = "rgba(120,220,255,0.8)";
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, rPx, aStart, aEnd, ccw);
+  ctx.stroke();
+  ctx.restore();
+
+  // Arrow head at target indicating direction
+  const tangentAngle = aEnd + (ccw ? -Math.PI / 2 : Math.PI / 2);
+  const arrowLen = Math.max(10, Math.min(18, rPx * 0.08));
+  const arrowW = arrowLen * 0.6;
+  const ax = t.x;
+  const ay = t.y;
+  ctx.save();
+  ctx.translate(ax, ay);
+  ctx.rotate(tangentAngle);
+  ctx.fillStyle = "rgba(120,220,255,0.9)";
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(-arrowLen, arrowW / 2);
+  ctx.lineTo(-arrowLen, -arrowW / 2);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  // Mark the entry point
+  ctx.save();
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, Math.max(3, rPx * 0.04), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 }
 
 function drawOrbitVisualization(centerLatLng, radiusM, direction, orbitSpeedKmh = null, orbitPeriodMin = null, fromLatLng = null) {
@@ -2607,7 +2809,7 @@ function ensureTooltipEl() {
 function updateTooltip() {
   if (!map) return;
   // If a relative menu (e.g., Goto WP) is open, keep the drone tooltip hidden.
-  if (waypointMenuEl || followMenuEl || homeMenuEl || relationMenuEl || orbitMenuEl || performance.now() < tooltipSuppressUntil) {
+  if (waypointMenuEl || followMenuEl || homeMenuEl || relationMenuEl || orbitMenuEl || flankMenuEl || performance.now() < tooltipSuppressUntil) {
     if (tooltipEl) tooltipEl.style.display = "none";
     return;
   }
@@ -2787,6 +2989,7 @@ function setupHoverHandlers() {
 
   map.on("mousemove", (e) => {
     lastPointer = e.containerPoint;
+    // Bearing is controlled only by the flank knob (no hover updates).
     if (pinnedDroneId !== null) {
       updateTooltip();
       return;
@@ -2931,6 +3134,7 @@ function setupHoverHandlers() {
     const point = map.mouseEventToContainerPoint(ev);
     longPressPointerId = ev.pointerId ?? null;
     longPressStartClient = { x: ev.clientX, y: ev.clientY };
+    const delayMs = flankMenuEl ? 500 : 220;
     longPressTimer = setTimeout(() => {
       longPressTimer = null;
       longPressPointerId = null;
@@ -2938,7 +3142,7 @@ function setupHoverHandlers() {
       attemptActionLongPress(point);
       suppressNextMapClick = true;
       longPressSuppressUntil = performance.now() + 500;
-    }, 220);
+    }, delayMs);
   };
   const clearLongPress = () => {
     if (longPressTimer) {
@@ -3006,6 +3210,7 @@ function handleMapClick(e) {
       return;
     }
   }
+  // Flank bearing is controlled only by the knob (no map click behavior).
   // If we're asking the user to place their Home, the next click places it.
   if (pendingUserHomePlacement) {
     addUserHomeAtLatLng(e.latlng);
@@ -3085,6 +3290,7 @@ function handleMapClick(e) {
     if (followMenuEl) closeFollowMenu();
     if (homeMenuEl) closeHomeMenu();
     if (gsMenuEl) closeGroundStationMenu(true);
+    if (flankMenuEl) closeFlankMenu(true);
     closeWaypointMenu();
     activeGroundStationId = null;
     setPinnedDrone(null);
@@ -3520,6 +3726,29 @@ function closeOrbitMenu(suppressNextOpen = false, keepSelection = false) {
   }
 }
 
+function closeFlankMenu(suppressNextOpen = false, keepSelection = false) {
+  const hadMenu = !!flankMenuEl;
+  if (flankMenuEl && flankMenuEl.parentNode) {
+    flankMenuEl.parentNode.removeChild(flankMenuEl);
+  }
+  flankMenuEl = null;
+  pendingFlank = null;
+  closeSequenceMenu();
+  document.removeEventListener("pointerdown", handleFlankOutsideClick, true);
+  hoveredDroneId = null;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  if (hadMenu && !keepSelection) {
+    pinnedDroneId = null;
+    pinnedTeamId = null;
+    updateCommandSequencePanel();
+  }
+  if (suppressNextOpen) {
+    const now = performance.now();
+    flankCloseSuppressUntil = now + 550;
+    tooltipSuppressUntil = now + 550;
+  }
+}
+
 function closeFollowMenu(suppress = true) {
   if (followMenuEl && followMenuEl.parentNode) {
     followMenuEl.parentNode.removeChild(followMenuEl);
@@ -3535,6 +3764,13 @@ function handleOrbitOutsideClick(e) {
   if (!orbitMenuEl) return;
   if (orbitMenuEl.contains(e.target)) return;
   closeOrbitMenu(true);
+}
+
+function handleFlankOutsideClick(e) {
+  if (!flankMenuEl) return;
+  if (flankMenuEl.contains(e.target)) return;
+  // Outside clicks should not close the flank menu; use Cancel or long-press to exit.
+  return;
 }
 
 function openOrbitMenu(anchor, containerPoint) {
@@ -3805,6 +4041,346 @@ function openOrbitMenu(anchor, containerPoint) {
   document.addEventListener("pointerdown", handleOrbitOutsideClick, true);
   // Ensure orbit is visible right after the menu is shown.
   draw();
+}
+
+function openFlankMenu(anchor, containerPoint) {
+  if (!map) return;
+  if (!anchor || !containerPoint) return;
+
+  const sel = getSelectedEntity();
+  const key = getSelectionKey(sel);
+  if (!sel || !key) return;
+  if (performance.now() < flankCloseSuppressUntil) return;
+
+  tooltipMode = "info";
+  tooltipSuppressUntil = performance.now() + 550;
+  if (tooltipEl) tooltipEl.style.display = "none";
+  closeWaypointMenu(false, true);
+  closeFollowMenu(false);
+  closeHomeMenu(false);
+  closeRelationMenu(false);
+  closeOrbitMenu(false, true);
+
+  const selectedTeam = sel.type === "team" ? getTeamById(sel.id) : null;
+  const drone = sel.type === "drone" ? getDroneById(sel.id) : null;
+  if (!selectedTeam && !drone) return;
+
+  if (selectedTeam) {
+    pinnedTeamId = selectedTeam.id;
+    pinnedDroneId = null;
+  } else {
+    pinnedDroneId = drone.id;
+    pinnedTeamId = null;
+  }
+
+  const anchorLatLng = resolveFlankAnchor(anchor);
+  if (!anchorLatLng) return;
+
+  const altNow = Number(sel.latest && sel.latest.alt);
+  const fromLatLng = sel && sel.latest ? { lat: sel.latest.lat, lng: sel.latest.lng } : null;
+  const approachBearing =
+    sel && sel.latest ? bearingDeg(anchorLatLng.lat, anchorLatLng.lng, sel.latest.lat, sel.latest.lng) : 0;
+  const initialSolution = fromLatLng ? computeFlankSolution(anchorLatLng, approachBearing, 500, fromLatLng) : null;
+  const autoDir = initialSolution && initialSolution.direction ? initialSolution.direction : "CW";
+
+  pendingFlank = {
+    ...(selectedTeam ? { teamId: selectedTeam.id } : { droneId: drone.id }),
+    anchor,
+    approachSpeedKmh: 60,
+    diameterM: 500,
+    altitudeM: isFinite(altNow) ? Math.max(0, Math.round(altNow)) : 30,
+    direction: autoDir,
+    approachBearingDeg: approachBearing,
+    directionLocked: false,
+  };
+
+  const host = document.getElementById("app") || document.body;
+  if (flankMenuEl && flankMenuEl.parentNode) {
+    flankMenuEl.parentNode.removeChild(flankMenuEl);
+  }
+  flankMenuEl = document.createElement("div");
+  flankMenuEl.className = "relative-menu flank-menu";
+  flankMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
+  host.appendChild(flankMenuEl);
+  enableMenuDrag(flankMenuEl);
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  flankMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  flankMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const formatEta = (sec) => {
+    if (!isFinite(sec) || sec <= 0) return "";
+    const m = Math.floor(sec / 60);
+    const s = Math.max(0, Math.round(sec - m * 60));
+    return `${m}m ${s.toString().padStart(2, "0")}s`;
+  };
+
+  const calcEtaSec = () => {
+    if (!sel || !sel.latest) return null;
+    const from = { lat: sel.latest.lat, lng: sel.latest.lng };
+    let dir = pendingFlank.direction;
+    const geom = computeFlankSolution(anchorLatLng, pendingFlank.approachBearingDeg, pendingFlank.diameterM, from);
+    if (!geom) return null;
+    dir = geom.direction || dir;
+    pendingFlank.direction = dir;
+    const distToEntry = haversine2dMeters(sel.latest.lat, sel.latest.lng, geom.entryPoint.lat, geom.entryPoint.lng);
+    const arcLen = arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, dir);
+    const speedMps = Math.max(1, (pendingFlank.approachSpeedKmh / 3.6));
+    return (distToEntry + arcLen) / speedMps;
+  };
+
+  const updateEta = () => {
+    const etaEl = flankMenuEl.querySelector(".menu-eta");
+    if (!etaEl) return;
+    const sec = calcEtaSec();
+    etaEl.textContent = formatEta(sec);
+  };
+
+  flankMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Flank</h4>
+      <span class="menu-eta">${formatEta(calcEtaSec())}</span>
+    </div>
+    <div class="label" style="margin-top:8px;">Distance (diameter)</div>
+    <div class="speed-row">
+      <input type="range" min="100" max="2000" value="${pendingFlank.diameterM}" step="10" data-flank-diameter>
+      <span data-flank-diameter-label>${pendingFlank.diameterM} m</span>
+    </div>
+    <div class="label" style="margin-top:8px;">Approach speed</div>
+    <div class="speed-row">
+      <input type="range" min="10" max="100" value="${pendingFlank.approachSpeedKmh}" step="1" data-flank-speed>
+      <span data-flank-speed-label>${pendingFlank.approachSpeedKmh} km/h</span>
+    </div>
+    <div class="label" style="margin-top:8px;">Altitude</div>
+    <div class="speed-row">
+      <input type="range" min="0" max="200" value="${pendingFlank.altitudeM}" step="1" data-flank-alt>
+      <span data-flank-alt-label>${pendingFlank.altitudeM} m</span>
+    </div>
+    <div class="label" style="margin-top:8px;">Bearing</div>
+    <div class="flank-knob-wrap">
+      <div class="flank-knob" data-flank-knob data-no-drag="1">
+        <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+          <circle class="flank-knob-ring" cx="50" cy="50" r="40" />
+          <line class="flank-knob-tick" x1="50" y1="10" x2="50" y2="20" />
+          <line class="flank-knob-handle" x1="50" y1="50" x2="50" y2="14" />
+          <circle class="flank-knob-dot" cx="50" cy="50" r="4" />
+        </svg>
+        <div class="flank-knob-value" data-flank-bearing-label>${Math.round(pendingFlank.approachBearingDeg)}°</div>
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:8px;">
+      <button class="cmd-chip cmd-action" type="button" data-action="flank-cancel" style="flex:1;">Cancel</button>
+      <button class="cmd-chip cmd-action" type="button" data-action="flank-add" style="flex:1;">Add Flank</button>
+    </div>
+  `;
+
+  const setLbl = (selQ, val) => {
+    const el = flankMenuEl.querySelector(selQ);
+    if (el) el.textContent = val;
+  };
+
+  const diam = flankMenuEl.querySelector("[data-flank-diameter]");
+  if (diam) {
+    diam.addEventListener("input", (e) => {
+      const v = Math.max(100, Math.min(2000, Number(e.target.value) || 500));
+      pendingFlank.diameterM = Math.round(v / 10) * 10;
+      setLbl("[data-flank-diameter-label]", `${pendingFlank.diameterM} m`);
+      updateEta();
+      draw();
+    });
+  }
+
+  const spd = flankMenuEl.querySelector("[data-flank-speed]");
+  if (spd) {
+    spd.addEventListener("input", (e) => {
+      const v = Math.max(10, Math.min(100, Number(e.target.value) || 60));
+      pendingFlank.approachSpeedKmh = Math.round(v);
+      setLbl("[data-flank-speed-label]", `${pendingFlank.approachSpeedKmh} km/h`);
+      updateEta();
+      draw();
+    });
+  }
+
+  const alt = flankMenuEl.querySelector("[data-flank-alt]");
+  if (alt) {
+    alt.addEventListener("input", (e) => {
+      const v = Math.max(0, Math.min(200, Number(e.target.value) || 0));
+      pendingFlank.altitudeM = Math.round(v);
+      setLbl("[data-flank-alt-label]", `${pendingFlank.altitudeM} m`);
+    });
+  }
+
+  const knob = flankMenuEl.querySelector("[data-flank-knob]");
+  if (knob) {
+    const getClientPoint = (ev) => {
+      if (ev.touches && ev.touches[0]) {
+        return { x: ev.touches[0].clientX, y: ev.touches[0].clientY };
+      }
+      return { x: ev.clientX ?? 0, y: ev.clientY ?? 0 };
+    };
+    const getBearingFromPointer = (ev) => {
+      const p = getClientPoint(ev);
+      const rect = knob.getBoundingClientRect();
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const dx = p.x - cx;
+      const dy = p.y - cy;
+      // Bearing: 0° = North, 90° = East
+      const rad = Math.atan2(dx, -dy);
+      const deg = (rad * 180) / Math.PI;
+      return (deg + 360) % 360;
+    };
+
+    const setBearing = (deg) => {
+      pendingFlank.approachBearingDeg = Math.round(deg);
+      updateFlankBearingUI();
+      updateFlankEtaDisplay();
+      draw();
+    };
+
+    const onMove = (ev) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      setBearing(getBearingFromPointer(ev));
+    };
+
+    knob.addEventListener("pointerdown", (ev) => {
+      if (typeof ev.button === "number" && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      try {
+        knob.setPointerCapture(ev.pointerId);
+      } catch {
+        // ignore
+      }
+      onMove(ev);
+      const move = (e) => onMove(e);
+      const up = (e) => {
+        try {
+          knob.releasePointerCapture(ev.pointerId);
+        } catch {
+          // ignore
+        }
+        window.removeEventListener("pointermove", move, true);
+        window.removeEventListener("pointerup", up, true);
+        window.removeEventListener("pointercancel", up, true);
+      };
+      window.addEventListener("pointermove", move, true);
+      window.addEventListener("pointerup", up, true);
+      window.addEventListener("pointercancel", up, true);
+    });
+
+    knob.addEventListener("click", (ev) => {
+      if (typeof ev.button === "number" && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      setBearing(getBearingFromPointer(ev));
+    });
+
+    knob.addEventListener("mousedown", (ev) => {
+      if (typeof ev.button === "number" && ev.button !== 0) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      setBearing(getBearingFromPointer(ev));
+    });
+
+    knob.addEventListener(
+      "touchstart",
+      (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setBearing(getBearingFromPointer(ev));
+      },
+      { passive: false }
+    );
+  }
+
+  const unlock = flankMenuEl.querySelector("[data-action='flank-unlock']");
+  if (unlock) {
+    unlock.addEventListener("click", (e) => {
+      e.stopPropagation();
+      pendingFlank.directionLocked = false;
+      updateFlankDirectionHint();
+      draw();
+    });
+  }
+
+  const add = flankMenuEl.querySelector("[data-action='flank-add']");
+  if (add) {
+    add.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingFlank || !groundControl) return;
+      const key2 = getSelectionKey(getSelectedEntity());
+      if (!key2) return;
+      addFlankToSequence(key2, pendingFlank);
+      closeFlankMenu();
+      tooltipMode = "info";
+      pinnedDroneId = null;
+      pinnedTeamId = null;
+      hoveredDroneId = null;
+      tooltipSuppressUntil = performance.now() + 1200;
+      if (tooltipEl) tooltipEl.style.display = "none";
+      updateStatusList();
+      updateCommandSequencePanel();
+      updateTooltip();
+      draw();
+    });
+  }
+
+  const cancel = flankMenuEl.querySelector("[data-action='flank-cancel']");
+  if (cancel) {
+    cancel.addEventListener("click", (e) => {
+      e.stopPropagation();
+      closeFlankMenu(true);
+      updateStatusList();
+      updateCommandSequencePanel();
+      updateTooltip();
+      draw();
+    });
+  }
+
+  document.addEventListener("pointerdown", handleFlankOutsideClick, true);
+  updateFlankBearingUI();
+  draw();
+}
+
+function updateFlankEtaDisplay() {
+  if (!flankMenuEl || !pendingFlank) return;
+  const sel = getSelectedEntity();
+  if (!sel || !sel.latest) return;
+  const anchor = resolveFlankAnchor(pendingFlank.anchor);
+  if (!anchor) return;
+  const from = { lat: sel.latest.lat, lng: sel.latest.lng };
+  const geom = computeFlankSolution(anchor, pendingFlank.approachBearingDeg, pendingFlank.diameterM, from);
+  if (!geom) return;
+  pendingFlank.direction = geom.direction || pendingFlank.direction;
+  const distToEntry = haversine2dMeters(from.lat, from.lng, geom.entryPoint.lat, geom.entryPoint.lng);
+  const arcLen = arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, geom.direction || "CW");
+  const speedMps = Math.max(1, pendingFlank.approachSpeedKmh / 3.6);
+  const sec = (distToEntry + arcLen) / speedMps;
+  const etaEl = flankMenuEl.querySelector(".menu-eta");
+  if (!etaEl) return;
+  const m = Math.floor(sec / 60);
+  const s = Math.max(0, Math.round(sec - m * 60));
+  etaEl.textContent = `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+function updateFlankDirectionHint() {
+  return;
+}
+
+function updateFlankBearingUI() {
+  if (!flankMenuEl || !pendingFlank) return;
+  const label = flankMenuEl.querySelector("[data-flank-bearing-label]");
+  if (label) label.textContent = `${Math.round(pendingFlank.approachBearingDeg)}°`;
+  const handle = flankMenuEl.querySelector(".flank-knob-handle");
+  const tick = flankMenuEl.querySelector(".flank-knob-tick");
+  if (handle || tick) {
+    const deg = Math.round(pendingFlank.approachBearingDeg) % 360;
+    const rot = `rotate(${deg} 50 50)`;
+    if (handle) handle.setAttribute("transform", rot);
+    if (tick) tick.setAttribute("transform", rot);
+  }
 }
 
 function addOrbitToSequence(key, orbit) {
@@ -4502,6 +5078,16 @@ function attemptActionLongPress(containerPoint) {
   const near = findNearestDrone(containerPoint, getHoverRadius());
   const nearGs = findNearestGroundStation(containerPoint, getHoverRadius());
 
+  // Long-press while flanking: cancel flank and deselect.
+  if (flankMenuEl) {
+    closeFlankMenu(true);
+    updateStatusList();
+    updateCommandSequencePanel();
+    updateTooltip();
+    draw();
+    return;
+  }
+
   // Long-press on a waypoint with no selection: open WP change/delete directly (and allow dragging immediately).
   if (hitWp && pinnedDroneId === null && pinnedTeamId === null) {
     openWaypointEditModeMenu(hitWp.wpId, containerPoint);
@@ -4579,6 +5165,36 @@ function attemptActionLongPress(containerPoint) {
       return;
     }
   }
+}
+
+function addFlankToSequence(key, flank) {
+  if (!key || !flank || !groundControl) return;
+  const a = flank.anchor;
+  if (!a || !a.type) return;
+
+  const speed = Math.max(10, Math.min(100, Math.round(flank.approachSpeedKmh || 60)));
+  const diam = Math.max(100, Math.min(2000, Math.round(flank.diameterM || 500)));
+  const alt = Math.max(0, Math.min(200, Math.round(flank.altitudeM || 0)));
+  const dir = flank.direction === "CCW" ? "CCW" : "CW";
+
+  let around = "Waypoint";
+  let pre = "Flank";
+  if (a.type === "home") {
+    around = `Home #${a.stationId + 1}`;
+  } else if (a.type === "wp") {
+    let wpId = a.wpId;
+    if (wpId === null || wpId === undefined) {
+      const wp = createWaypoint(a.lat, a.lng, { name: "Flank point" });
+      wpId = wp ? wp.id : null;
+    }
+    if (wpId !== null && wpId !== undefined) {
+      around = `WP #${wpId}`;
+      flank.anchor = { type: "wp", wpId };
+    }
+  }
+
+  pre = `Flank (around ${around}, d ${diam} m, alt ${alt} m, spd ${speed} km/h, ${dir})`;
+  groundControl.appendPlanned(key, pre);
 }
 
 function getWaypointPinGeometryPx() {
@@ -4862,6 +5478,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, o
   closeFollowMenu();
   closeHomeMenu();
   closeOrbitMenu(false, true);
+  closeFlankMenu(false, true);
 
   const latest = selectedTeam ? getTeamSnapshot(selectedTeam) : drone.getLatest && drone.getLatest();
   const defaultAlt = latest && isFinite(Number(latest.alt)) ? Math.round(Number(latest.alt)) : 30;
@@ -4951,6 +5568,7 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, o
     <div class="command-list cmd-action-list column" data-root-actions style="margin-top:2px;">
       <button class="cmd-chip cmd-action" data-action="goto-wp" type="button">Goto WP</button>
       <button class="cmd-chip cmd-action" data-action="orbit" type="button">Orbit</button>
+      <button class="cmd-chip cmd-action" data-action="flank" type="button">Flank</button>
     </div>
     <div class="speed-row" data-goto-details>
       <span class="slider-label">Speed</span>
@@ -5065,6 +5683,18 @@ function openWaypointMenu(latlng, containerPoint, droneId = null, wpId = null, o
       const anchor = { type: "wp", wpId: pendingWaypoint.wpId ?? null, lat: pendingWaypoint.lat, lng: pendingWaypoint.lng };
       closeWaypointMenu(false, true);
       openOrbitMenu(anchor, containerPoint);
+    });
+  }
+
+  const flankBtn = waypointMenuEl.querySelector("[data-action='flank']");
+  if (flankBtn) {
+    flankBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!pendingWaypoint) return;
+      closeEditWaypointMenu();
+      const anchor = { type: "wp", wpId: pendingWaypoint.wpId ?? null, lat: pendingWaypoint.lat, lng: pendingWaypoint.lng };
+      closeWaypointMenu(false, true);
+      openFlankMenu(anchor, containerPoint);
     });
   }
 
@@ -6149,6 +6779,22 @@ function draw() {
 
   const sel = getSelectedEntity();
   const key = getSelectionKey(sel);
+
+  // Flank visualization (only while the flank menu is open)
+  if (flankMenuEl && pendingFlank && pendingFlank.anchor) {
+    const anchor = resolveFlankAnchor(pendingFlank.anchor);
+    if (anchor) {
+      const from = sel && sel.latest ? { lat: sel.latest.lat, lng: sel.latest.lng } : null;
+      drawFlankVisualization(
+        anchor,
+        pendingFlank.approachBearingDeg,
+        pendingFlank.diameterM,
+        pendingFlank.direction,
+        pendingFlank.approachSpeedKmh,
+        from
+      );
+    }
+  }
 
   // When the orbit menu is open, always render the live preview from its pending values.
   // (Selection snapshots can be transient during interaction; the preview should still animate.)
