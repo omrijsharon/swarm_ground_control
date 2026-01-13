@@ -124,6 +124,8 @@ let commsComposerEl = null;
 let commsDraftByStationId = new Map(); // stationId -> string
 let commsComposerInputEl = null;
 let commsComposerSendEl = null;
+let commsKeyboardActive = false;
+let commsKeyboardTracking = false;
 
 function forceRedraw() {
   draw();
@@ -2403,6 +2405,7 @@ function updateCommandSequencePanel() {
     if (labelEl) labelEl.textContent = "SEQUENCE";
     addBtn.style.display = "";
     if (transportEl) transportEl.style.display = "";
+    disableCommsKeyboardTracking();
     if (commsComposerEl && commsComposerEl.parentNode) {
       commsComposerEl.parentNode.removeChild(commsComposerEl);
     }
@@ -3336,6 +3339,51 @@ function formatMinutes(mins) {
   return `${Math.round(mins)}m`;
 }
 
+function getCommsKeyboardInset() {
+  if (typeof window === "undefined") return 0;
+  const vv = window.visualViewport;
+  if (!vv) return 0;
+  const inset = window.innerHeight - vv.height - vv.offsetTop;
+  return Math.max(0, inset);
+}
+
+function updateCommsKeyboardInset() {
+  if (!commsKeyboardActive) return;
+  const inset = getCommsKeyboardInset();
+  document.documentElement.style.setProperty("--comms-keyboard-inset", `${inset}px`);
+}
+
+function setCommsKeyboardActive(active) {
+  commsKeyboardActive = !!active;
+  if (!commsKeyboardActive) {
+    document.documentElement.style.setProperty("--comms-keyboard-inset", "0px");
+    return;
+  }
+  updateCommsKeyboardInset();
+}
+
+function enableCommsKeyboardTracking() {
+  if (commsKeyboardTracking) return;
+  const vv = window.visualViewport;
+  if (!vv) return;
+  commsKeyboardTracking = true;
+  vv.addEventListener("resize", updateCommsKeyboardInset);
+  vv.addEventListener("scroll", updateCommsKeyboardInset);
+  updateCommsKeyboardInset();
+}
+
+function disableCommsKeyboardTracking() {
+  if (!commsKeyboardTracking) return;
+  const vv = window.visualViewport;
+  if (vv) {
+    vv.removeEventListener("resize", updateCommsKeyboardInset);
+    vv.removeEventListener("scroll", updateCommsKeyboardInset);
+  }
+  commsKeyboardTracking = false;
+  commsKeyboardActive = false;
+  document.documentElement.style.setProperty("--comms-keyboard-inset", "0px");
+}
+
 function getCommsLog(stationId) {
   const id = Number(stationId);
   if (!commsLogsByStationId.has(id)) {
@@ -3413,6 +3461,7 @@ function renderCommsPanel(gs, listEl) {
       // ignore
     }
   }
+  enableCommsKeyboardTracking();
 
   const sendMsg = () => {
     const text = (input && input.value ? input.value : "").trim();
@@ -3447,6 +3496,12 @@ function renderCommsPanel(gs, listEl) {
         e.preventDefault();
         sendMsg();
       }
+    });
+    input.addEventListener("focus", () => {
+      setCommsKeyboardActive(true);
+    });
+    input.addEventListener("blur", () => {
+      setCommsKeyboardActive(false);
     });
   }
 

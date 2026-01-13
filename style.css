@@ -1,4 +1,4 @@
-:root{
+  :root{
   --glass: rgba(210, 210, 210, 0.12);
   --glass-strong: rgba(210, 210, 210, 0.18);
   --stroke: rgba(255, 255, 255, 0.25);
@@ -15,8 +15,9 @@
   --ui-panel-w: clamp(170px, 15vw, 260px);
   --ui-panel-w-right: clamp(190px, 16vw, 290px);
 
-  --ui-panel-top: clamp(44px, 6vh, 72px);
-  --ui-panel-bottom: clamp(44px, 6vh, 72px);
+    --ui-panel-top: clamp(44px, 6vh, 72px);
+    --ui-panel-bottom: clamp(44px, 6vh, 72px);
+    --comms-keyboard-inset: 0px;
 
   --ui-pad: clamp(10px, 1.0vw, 16px);
 
@@ -73,7 +74,10 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   overflow: hidden;
   z-index: 10;
 }
-.panel.left { left: var(--ui-gap); }
+.panel.left {
+  left: var(--ui-gap);
+  bottom: calc(var(--ui-panel-bottom) + var(--comms-keyboard-inset, 0px));
+}
 .panel.right { right: var(--ui-gap); width: var(--ui-panel-w-right); }
 
 .panel-blur{
