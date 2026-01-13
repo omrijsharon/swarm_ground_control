@@ -65,7 +65,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 .panel{
   position: absolute;
   top: var(--ui-panel-top);
-  bottom: var(--ui-panel-bottom);
+  bottom: calc(var(--ui-panel-bottom) + var(--comms-keyboard-inset, 0px));
   width: var(--ui-panel-w);
   border-radius: var(--ui-radius);
   border: 1px solid var(--stroke);
@@ -74,10 +74,7 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   overflow: hidden;
   z-index: 10;
 }
-.panel.left {
-  left: var(--ui-gap);
-  bottom: calc(var(--ui-panel-bottom) + var(--comms-keyboard-inset, 0px));
-}
+.panel.left { left: var(--ui-gap); }
 .panel.right { right: var(--ui-gap); width: var(--ui-panel-w-right); }
 
 .panel-blur{
@@ -297,10 +294,12 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   display: flex;
   gap: 8px;
   align-items: center;
+  width: 100%;
 }
 
 .comms-input{
   flex: 1;
+  min-width: 0;
   background: rgba(0,0,0,0.35);
   border: 1px solid rgba(255,255,255,0.18);
   color: #fff;
@@ -315,12 +314,14 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
 
 .comms-send{
   white-space: nowrap;
-  width: 42px;
-  height: 38px;
+  width: clamp(32px, 6vw, 40px);
+  height: clamp(32px, 6vw, 40px);
+  border-radius: 999px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   padding: 0;
+  flex: 0 0 auto;
 }
 
 .paper-plane{
