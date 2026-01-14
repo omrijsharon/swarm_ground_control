@@ -126,6 +126,7 @@ let commsComposerInputEl = null;
 let commsComposerSendEl = null;
 let commsKeyboardActive = false;
 let commsKeyboardTracking = false;
+let pageScrollLock = { active: false, x: 0, y: 0 };
 
 function forceRedraw() {
   draw();
@@ -3417,6 +3418,34 @@ function updateVisualViewportVars() {
   root.style.setProperty("--vv-height", `${Math.max(0, vv.height)}px`);
 }
 
+function lockPageScroll() {
+  if (pageScrollLock.active) return;
+  if (typeof window === "undefined") return;
+  const body = document && document.body ? document.body : null;
+  if (!body) return;
+  pageScrollLock = { active: true, x: window.scrollX || 0, y: window.scrollY || 0 };
+  body.style.position = "fixed";
+  body.style.left = "0";
+  body.style.right = "0";
+  body.style.top = `-${pageScrollLock.y}px`;
+  body.style.width = "100%";
+}
+
+function unlockPageScroll() {
+  if (!pageScrollLock.active) return;
+  if (typeof window === "undefined") return;
+  const body = document && document.body ? document.body : null;
+  if (!body) return;
+  const { x, y } = pageScrollLock;
+  pageScrollLock = { active: false, x: 0, y: 0 };
+  body.style.position = "";
+  body.style.left = "";
+  body.style.right = "";
+  body.style.top = "";
+  body.style.width = "";
+  window.scrollTo(x, y);
+}
+
 function updateCommsKeyboardInset() {
   if (!commsKeyboardActive) return;
   const inset = getCommsKeyboardInset();
@@ -3427,8 +3456,13 @@ function setCommsKeyboardActive(active) {
   commsKeyboardActive = !!active;
   if (!commsKeyboardActive) {
     document.documentElement.style.setProperty("--comms-keyboard-inset", "0px");
+    // Restore normal page behavior when the keyboard closes.
+    unlockPageScroll();
     return;
   }
+  // Prevent mobile browsers from scrolling the entire page to keep the input visible
+  // (which makes the whole app appear to "shift up").
+  if (isMobileLike()) lockPageScroll();
   updateCommsKeyboardInset();
 }
 
