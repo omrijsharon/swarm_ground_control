@@ -3589,6 +3589,18 @@ function renderCommsPanel(gs, listEl) {
     log.messages.push({ from: "us", text, ts: Date.now() });
     if (input) input.value = "";
     renderCommsPanel(gs, listEl);
+    // Keep the composer focused so the mobile keyboard stays open.
+    if (input) {
+      setTimeout(() => {
+        try {
+          input.focus();
+          const end = input.value.length;
+          input.setSelectionRange(end, end);
+        } catch {
+          // ignore
+        }
+      }, 0);
+    }
     // Optional lightweight simulated acknowledgement
     setTimeout(() => {
       const ack = `ACK: ${text.slice(0, 28)}${text.length > 28 ? "…" : ""}`;
@@ -3605,6 +3617,10 @@ function renderCommsPanel(gs, listEl) {
   };
 
   if (send) {
+    // Prevent the send button from stealing focus (keeps keyboard open on mobile).
+    send.onpointerdown = (e) => {
+      e.preventDefault();
+    };
     send.onclick = (e) => {
       e.stopPropagation();
       sendMsg();
