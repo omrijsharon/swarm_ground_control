@@ -3412,8 +3412,13 @@ function updateVisualViewportVars() {
     root.style.setProperty("--vv-height", "100vh");
     return;
   }
-  root.style.setProperty("--vv-top", `${Math.max(0, vv.offsetTop)}px`);
-  root.style.setProperty("--vv-left", `${Math.max(0, vv.offsetLeft)}px`);
+  // Some mobile browsers "pan" the visual viewport after the keyboard opens (offsetTop changes),
+  // which makes the whole app look like it shifts. When the keyboard is open, keep the app pinned
+  // to the top-left and only adapt its size.
+  const kbInset = getCommsKeyboardInset();
+  const keyboardOpen = kbInset > 40 || commsKeyboardActive;
+  root.style.setProperty("--vv-top", keyboardOpen ? "0px" : `${Math.max(0, vv.offsetTop)}px`);
+  root.style.setProperty("--vv-left", keyboardOpen ? "0px" : `${Math.max(0, vv.offsetLeft)}px`);
   root.style.setProperty("--vv-width", `${Math.max(0, vv.width)}px`);
   root.style.setProperty("--vv-height", `${Math.max(0, vv.height)}px`);
 }
@@ -3464,6 +3469,7 @@ function setCommsKeyboardActive(active) {
   // (which makes the whole app appear to "shift up").
   if (isMobileLike()) lockPageScroll();
   updateCommsKeyboardInset();
+  updateVisualViewportVars();
 }
 
 function enableCommsKeyboardTracking() {
@@ -3543,22 +3549,27 @@ function renderCommsPanel(gs, listEl) {
     panelContent.appendChild(commsComposerEl);
   }
 
-  commsComposerEl.innerHTML = `
-    <input class="comms-input" type="text" placeholder="Type message…" data-comms-input>
-    <button class="cmd-chip cmd-action comms-send" type="button" data-comms-send aria-label="Send">
-      <svg class="paper-plane" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <path
-          fill="currentColor"
-          fill-rule="evenodd"
-          d="M3 4 L21 12 L3 20 Z M3 9 L11.5 12 L3 15 Z"
-          clip-rule="evenodd"
-        />
-      </svg>
-    </button>
-  `;
+  // Keep the composer DOM stable (avoid recreating the input on each render).
+  if (!commsComposerInputEl || !commsComposerSendEl) {
+    commsComposerEl.innerHTML = `
+      <input class="comms-input" type="text" placeholder="Type message…" data-comms-input>
+      <button class="cmd-chip cmd-action comms-send" type="button" data-comms-send aria-label="Send">
+        <svg class="paper-plane" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path
+            fill="currentColor"
+            fill-rule="evenodd"
+            d="M3 4 L21 12 L3 20 Z M3 9 L11.5 12 L3 15 Z"
+            clip-rule="evenodd"
+          />
+        </svg>
+      </button>
+    `;
+    commsComposerInputEl = commsComposerEl.querySelector("[data-comms-input]");
+    commsComposerSendEl = commsComposerEl.querySelector("[data-comms-send]");
+  }
 
-  const input = commsComposerEl.querySelector("[data-comms-input]");
-  const send = commsComposerEl.querySelector("[data-comms-send]");
+  const input = commsComposerInputEl || commsComposerEl.querySelector("[data-comms-input]");
+  const send = commsComposerSendEl || commsComposerEl.querySelector("[data-comms-send]");
   if (input) input.placeholder = "Type message...";
   if (input) input.value = prevValue;
   if (restoreFocus && input) {
@@ -3594,24 +3605,29 @@ function renderCommsPanel(gs, listEl) {
   };
 
   if (send) {
-    send.addEventListener("click", (e) => {
+    send.onclick = (e) => {
       e.stopPropagation();
       sendMsg();
-    });
+    };
   }
   if (input) {
-    input.addEventListener("keydown", (e) => {
+    input.onkeydown = (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         sendMsg();
       }
-    });
-    input.addEventListener("focus", () => {
+    };
+    input.onfocus = () => {
       setCommsKeyboardActive(true);
-    });
-    input.addEventListener("blur", () => {
-      setCommsKeyboardActive(false);
-    });
+    };
+    input.onblur = () => {
+      // Blur can happen briefly during UI refresh; don't unlock immediately.
+      setTimeout(() => {
+        const stillOpen = getCommsKeyboardInset() > 40;
+        const stillFocused = document.activeElement === input;
+        if (!stillOpen && !stillFocused) setCommsKeyboardActive(false);
+      }, 180);
+    };
   }
 
   // Scroll to bottom
