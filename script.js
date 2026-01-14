@@ -127,6 +127,7 @@ let commsComposerSendEl = null;
 let commsKeyboardActive = false;
 let commsKeyboardTracking = false;
 let pageScrollLock = { active: false, x: 0, y: 0 };
+let globalKeyboardActive = false;
 
 function forceRedraw() {
   draw();
@@ -3416,7 +3417,7 @@ function updateVisualViewportVars() {
   // which makes the whole app look like it shifts. When the keyboard is open, keep the app pinned
   // to the top-left and only adapt its size.
   const kbInset = getCommsKeyboardInset();
-  const keyboardOpen = kbInset > 40 || commsKeyboardActive;
+  const keyboardOpen = kbInset > 40 || commsKeyboardActive || globalKeyboardActive;
   root.style.setProperty("--vv-top", keyboardOpen ? "0px" : `${Math.max(0, vv.offsetTop)}px`);
   root.style.setProperty("--vv-left", keyboardOpen ? "0px" : `${Math.max(0, vv.offsetLeft)}px`);
   root.style.setProperty("--vv-width", `${Math.max(0, vv.width)}px`);
@@ -3451,6 +3452,29 @@ function unlockPageScroll() {
   window.scrollTo(x, y);
 }
 
+function isTextInputElement(el) {
+  if (!el || !(el instanceof Element)) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName ? el.tagName.toLowerCase() : "";
+  if (tag === "textarea") return true;
+  if (tag !== "input") return false;
+  const type = (el.getAttribute("type") || "text").toLowerCase();
+  // Treat most "typing" inputs as keyboard-triggering; exclude sliders.
+  if (type === "range" || type === "checkbox" || type === "radio" || type === "button" || type === "submit") return false;
+  return true;
+}
+
+function setGlobalKeyboardActive(active) {
+  globalKeyboardActive = !!active;
+  if (!globalKeyboardActive) {
+    unlockPageScroll();
+    updateVisualViewportVars();
+    return;
+  }
+  if (isMobileLike()) lockPageScroll();
+  updateVisualViewportVars();
+}
+
 function updateCommsKeyboardInset() {
   if (!commsKeyboardActive) return;
   const inset = getCommsKeyboardInset();
@@ -3461,13 +3485,10 @@ function setCommsKeyboardActive(active) {
   commsKeyboardActive = !!active;
   if (!commsKeyboardActive) {
     document.documentElement.style.setProperty("--comms-keyboard-inset", "0px");
-    // Restore normal page behavior when the keyboard closes.
-    unlockPageScroll();
+    setGlobalKeyboardActive(false);
     return;
   }
-  // Prevent mobile browsers from scrolling the entire page to keep the input visible
-  // (which makes the whole app appear to "shift up").
-  if (isMobileLike()) lockPageScroll();
+  setGlobalKeyboardActive(true);
   updateCommsKeyboardInset();
   updateVisualViewportVars();
 }
@@ -7131,6 +7152,26 @@ window.addEventListener("DOMContentLoaded", () => {
   setTimestampNow();
   setInterval(setTimestampNow, 1000 * 15);
   updateVisualViewportVars();
+  document.addEventListener(
+    "focusin",
+    (e) => {
+      const t = e.target;
+      if (isTextInputElement(t)) setGlobalKeyboardActive(true);
+    },
+    true
+  );
+  document.addEventListener(
+    "focusout",
+    () => {
+      // Delay to allow focus to move to another input without toggling.
+      setTimeout(() => {
+        const active = document.activeElement;
+        const stillOpen = getCommsKeyboardInset() > 40;
+        if (!isTextInputElement(active) && !stillOpen) setGlobalKeyboardActive(false);
+      }, 120);
+    },
+    true
+  );
   if (window.visualViewport) {
     window.visualViewport.addEventListener("resize", () => {
       updateVisualViewportVars();
