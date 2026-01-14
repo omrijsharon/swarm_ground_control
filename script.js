@@ -3399,6 +3399,24 @@ function getCommsKeyboardInset() {
   return Math.max(0, inset);
 }
 
+function updateVisualViewportVars() {
+  if (typeof window === "undefined") return;
+  const root = document && document.documentElement ? document.documentElement : null;
+  if (!root) return;
+  const vv = window.visualViewport;
+  if (!vv) {
+    root.style.setProperty("--vv-top", "0px");
+    root.style.setProperty("--vv-left", "0px");
+    root.style.setProperty("--vv-width", "100vw");
+    root.style.setProperty("--vv-height", "100vh");
+    return;
+  }
+  root.style.setProperty("--vv-top", `${Math.max(0, vv.offsetTop)}px`);
+  root.style.setProperty("--vv-left", `${Math.max(0, vv.offsetLeft)}px`);
+  root.style.setProperty("--vv-width", `${Math.max(0, vv.width)}px`);
+  root.style.setProperty("--vv-height", `${Math.max(0, vv.height)}px`);
+}
+
 function updateCommsKeyboardInset() {
   if (!commsKeyboardActive) return;
   const inset = getCommsKeyboardInset();
@@ -3421,7 +3439,10 @@ function enableCommsKeyboardTracking() {
   commsKeyboardTracking = true;
   vv.addEventListener("resize", updateCommsKeyboardInset);
   vv.addEventListener("scroll", updateCommsKeyboardInset);
+  vv.addEventListener("resize", updateVisualViewportVars);
+  vv.addEventListener("scroll", updateVisualViewportVars);
   updateCommsKeyboardInset();
+  updateVisualViewportVars();
 }
 
 function disableCommsKeyboardTracking() {
@@ -3430,6 +3451,8 @@ function disableCommsKeyboardTracking() {
   if (vv) {
     vv.removeEventListener("resize", updateCommsKeyboardInset);
     vv.removeEventListener("scroll", updateCommsKeyboardInset);
+    vv.removeEventListener("resize", updateVisualViewportVars);
+    vv.removeEventListener("scroll", updateVisualViewportVars);
   }
   commsKeyboardTracking = false;
   commsKeyboardActive = false;
@@ -6509,6 +6532,7 @@ function drawGroundStationLabel(x, y, text, size = 18) {
 function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   // Concave triangle (chevron/arrow) with a cheap, high-contrast outline.
   const isStale = options.isStale || false;
+  const isLanded = options.isLanded || false;
 
   ctx.save();
   ctx.translate(x, y);
@@ -6533,7 +6557,7 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
 
   const outlineW = Math.max(2.2, size * 0.26);
 
-  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.strokeStyle = isLanded ? "rgba(255,255,255,0.92)" : "rgba(0,0,0,0.85)";
   ctx.lineWidth = outlineW;
 
   const offs = Math.max(1.0, outlineW * 0.45);
@@ -6554,16 +6578,26 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   path();
   ctx.stroke();
 
-  ctx.fillStyle = isStale ? "rgba(255, 180, 180, 0.82)" : "rgba(255,255,255,0.92)";
+  ctx.fillStyle = isStale ? "rgba(255, 180, 180, 0.82)" : isLanded ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.92)";
   path();
   ctx.fill();
 
   ctx.lineWidth = Math.max(1.2, size * 0.10);
-  ctx.strokeStyle = "rgba(255,255,255,0.95)";
+  ctx.strokeStyle = isLanded ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.95)";
   path();
   ctx.stroke();
 
   ctx.restore();
+}
+
+function isTelemetryLanded(latest) {
+  if (!latest) return false;
+  // Primary: explicit state machine phase from Betaflight rescue.
+  if (latest.rescuePhase === "RESCUE_COMPLETE") return true;
+  // Fallback when phase isn't available yet: use altitude threshold.
+  const alt = Number(latest.alt);
+  if (isFinite(alt) && alt <= 2) return true;
+  return false;
 }
 
 function drawStaleLabel(x, y, ageSec) {
@@ -7004,15 +7038,16 @@ function draw() {
     if (!latest) return;
 
     const p = latLngToScreen(latest.lat, latest.lng);
-    const isStale = typeof d.isStale === "function" ? d.isStale(now) : false;
-    const isHighlighted =
-      (pinnedDroneId !== null && d.id === pinnedDroneId) || (selMembers && selMembers.has(d.id));
+      const isStale = typeof d.isStale === "function" ? d.isStale(now) : false;
+      const isLanded = isTelemetryLanded(latest);
+      const isHighlighted =
+        (pinnedDroneId !== null && d.id === pinnedDroneId) || (selMembers && selMembers.has(d.id));
 
     if (isHighlighted) {
       drawSelectionHighlight(p.x, p.y, droneSize, latest.heading || 0);
     }
 
-    drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, { isStale });
+      drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, { isStale, isLanded });
 
     if (isStale) {
       const age = typeof d.getSecondsSinceLastUpdate === "function" ? d.getSecondsSinceLastUpdate(now) : null;
@@ -7029,6 +7064,23 @@ function draw() {
 window.addEventListener("DOMContentLoaded", () => {
   setTimestampNow();
   setInterval(setTimestampNow, 1000 * 15);
+  updateVisualViewportVars();
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener("resize", () => {
+      updateVisualViewportVars();
+      if (map && typeof map.invalidateSize === "function") {
+        map.invalidateSize({ pan: false });
+      }
+      forceRedraw();
+    });
+    window.visualViewport.addEventListener("scroll", () => {
+      updateVisualViewportVars();
+      if (map && typeof map.invalidateSize === "function") {
+        map.invalidateSize({ pan: false });
+      }
+      forceRedraw();
+    });
+  }
 
   // Collapsible panels
   document.querySelectorAll("aside.panel[data-collapsible='1'] .panel-title").forEach((btn) => {
