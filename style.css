@@ -345,15 +345,15 @@ html, body { height: 100%; margin: 0; font-family: 'Inter', ui-sans-serif, syste
   pointer-events: auto;
 }
 
-.flank-knob svg,
-.flank-knob .flank-knob-value{
-  pointer-events: none;
-}
-
 .flank-knob svg{
   width: 100%;
   height: 100%;
   display: block;
+  pointer-events: auto;
+}
+
+.flank-knob .flank-knob-value{
+  pointer-events: none;
 }
 
 .flank-knob-ring{

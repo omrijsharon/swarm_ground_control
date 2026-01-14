@@ -1456,13 +1456,13 @@ function resolveFlankAnchor(anchor) {
 function computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatLng) {
   if (!anchorLatLng || !isFinite(approachBearing) || !isFinite(diameterM)) return null;
   if (!fromLatLng || !isFinite(fromLatLng.lat) || !isFinite(fromLatLng.lng)) return null;
+  const bearing = ((approachBearing % 360) + 360) % 360;
   const d = Math.max(20, Number(diameterM) || 0);
-  const radius = d / 2;
   const baseBearing = bearingDeg(anchorLatLng.lat, anchorLatLng.lng, fromLatLng.lat, fromLatLng.lng);
   const secondBearingA = (baseBearing + 90 + 360) % 360;
   const secondBearingB = (baseBearing - 90 + 360) % 360;
-  const secondPointA = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingA, radius);
-  const secondPointB = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingB, radius);
+  const secondPointA = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingA, d);
+  const secondPointB = destinationLatLng(anchorLatLng.lat, anchorLatLng.lng, secondBearingB, d);
 
   // Compute circle center from: target T, second point S, and tangent direction at T (approachBearing).
   const toRad = (v) => (v * Math.PI) / 180;
@@ -1480,29 +1480,51 @@ function computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatL
   });
 
   const T = { x: 0, y: 0 };
-  const theta = toRad(approachBearing);
+  const theta = toRad(bearing);
   const n = { x: Math.cos(theta), y: -Math.sin(theta) }; // normal to tangent (bearing 0 = +y)
+  const bearingVec = { x: Math.sin(theta), y: Math.cos(theta) };
+  const droneXY = toXY(fromLatLng);
+  const dot = droneXY.x * bearingVec.x + droneXY.y * bearingVec.y;
 
-  const buildGeom = (centerXY, secondPoint) => {
+  if (dot <= 0) {
+    const offsetXY = { x: -bearingVec.x * d, y: -bearingVec.y * d };
+    const entryPoint = toLL(offsetXY);
+    const distToEntry = haversine2dMeters(fromLatLng.lat, fromLatLng.lng, entryPoint.lat, entryPoint.lng);
+    const distToTarget = haversine2dMeters(entryPoint.lat, entryPoint.lng, anchorLatLng.lat, anchorLatLng.lng);
+    return {
+      pathType: "line",
+      entryPoint,
+      secondPoint: entryPoint,
+      totalDistM: distToEntry + distToTarget,
+      distToEntry,
+      segmentLenM: distToTarget,
+      direction: null,
+    };
+  }
+
+  const buildGeom = (secondPoint) => {
+    const S = toXY(secondPoint);
+    const mid = { x: S.x / 2, y: S.y / 2 };
+    const dVec = { x: -S.y, y: S.x }; // perpendicular to TS
+    const det = n.x * dVec.y - n.y * dVec.x;
+    let centerXY = null;
+    if (Math.abs(det) > 1e-6) {
+      const t = ((mid.x - T.x) * dVec.y - (mid.y - T.y) * dVec.x) / det;
+      centerXY = { x: T.x + n.x * t, y: T.y + n.y * t };
+    } else {
+      centerXY = { x: n.x * (d / 2), y: n.y * (d / 2) };
+    }
+
     const center = toLL(centerXY);
-    const radiusM = radius;
-    const droneXY = toXY(fromLatLng);
-    const v = { x: droneXY.x - centerXY.x, y: droneXY.y - centerXY.y };
-    const vLen = Math.hypot(v.x, v.y);
-    const entryXY =
-      vLen > 1e-6
-        ? { x: centerXY.x + (v.x / vLen) * radiusM, y: centerXY.y + (v.y / vLen) * radiusM }
-        : { x: centerXY.x + radiusM, y: centerXY.y };
-    const entryPoint = toLL(entryXY);
-    const aEntry = Math.atan2(entryXY.y - centerXY.y, entryXY.x - centerXY.x);
+    const radiusM = Math.hypot(centerXY.x - T.x, centerXY.y - T.y);
+    const entryPoint = secondPoint;
+    const aEntry = Math.atan2(S.y - centerXY.y, S.x - centerXY.x);
     const aTarget = Math.atan2(T.y - centerXY.y, T.x - centerXY.x);
     return { center, radiusM, entryPoint, aEntry, aTarget, secondPoint };
   };
 
-  const centerAXY = { x: n.x * radius, y: n.y * radius };
-  const centerBXY = { x: -n.x * radius, y: -n.y * radius };
-  const geomA = buildGeom(centerAXY, secondPointA);
-  const geomB = buildGeom(centerBXY, secondPointB);
+  const geomA = buildGeom(secondPointA);
+  const geomB = buildGeom(secondPointB);
 
   const toBearingDeg = (rad) => ((90 - (rad * 180) / Math.PI + 360) % 360);
   const bearingError = (bearingA, bearingB) => {
@@ -1519,7 +1541,7 @@ function computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatL
       const tangentAngle = geom.aTarget + (direction === "CCW" ? Math.PI / 2 : -Math.PI / 2);
       const tangentBearing = toBearingDeg(tangentAngle);
       const alignErr = bearingError(tangentBearing, approachBearing);
-      options.push({ ...geom, direction, totalDistM, alignErr, tangentBearing });
+      options.push({ ...geom, direction, totalDistM, distToEntry, arcLen, alignErr, tangentBearing });
     });
   });
 
@@ -1527,7 +1549,8 @@ function computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatL
     if (a.alignErr !== b.alignErr) return a.alignErr - b.alignErr;
     return a.totalDistM - b.totalDistM;
   });
-  return options[0] || null;
+  if (!options[0]) return null;
+  return { ...options[0], pathType: "arc" };
 }
 
 function arcLengthForDirection(radiusM, aStart, aEnd, direction) {
@@ -1543,12 +1566,10 @@ function drawFlankVisualization(anchorLatLng, approachBearing, diameterM, direct
   const geom = computeFlankSolution(anchorLatLng, approachBearing, diameterM, fromLatLng);
   if (!geom) return;
 
-  const { center, entryPoint, radiusM } = geom;
   const chosenDir = geom.direction || direction || "CW";
-  const c = latLngToScreen(center.lat, center.lng);
   const t = latLngToScreen(anchorLatLng.lat, anchorLatLng.lng);
-  const s = latLngToScreen(entryPoint.lat, entryPoint.lng);
-  if (!c || !t || !s) return;
+  const s = latLngToScreen(geom.entryPoint.lat, geom.entryPoint.lng);
+  if (!t || !s) return;
 
   // Line from drone to the entry point
   if (fromLatLng) {
@@ -1566,44 +1587,75 @@ function drawFlankVisualization(anchorLatLng, approachBearing, diameterM, direct
     }
   }
 
-  const rPx = Math.hypot(t.x - c.x, t.y - c.y);
-  const aStart = Math.atan2(s.y - c.y, s.x - c.x);
-  const aEnd = Math.atan2(t.y - c.y, t.x - c.x);
-  const ccw = chosenDir === "CCW";
+  if (geom.pathType === "line") {
+    ctx.save();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 2.2;
+    ctx.strokeStyle = "rgba(120,220,255,0.8)";
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(t.x, t.y);
+    ctx.stroke();
+    ctx.restore();
 
-  // Arc path
-  ctx.save();
-  ctx.setLineDash([4, 6]);
-  ctx.lineWidth = 2.0;
-  ctx.strokeStyle = "rgba(120,220,255,0.8)";
-  ctx.beginPath();
-  ctx.arc(c.x, c.y, rPx, aStart, aEnd, ccw);
-  ctx.stroke();
-  ctx.restore();
+    // Arrow head at target indicating approach bearing
+      const tangentAngle = ((approachBearing - 90) * Math.PI) / 180;
+    const arrowLen = Math.max(10, Math.min(18, Math.hypot(t.x - s.x, t.y - s.y) * 0.2));
+    const arrowW = arrowLen * 0.6;
+    ctx.save();
+    ctx.translate(t.x, t.y);
+    ctx.rotate(tangentAngle);
+    ctx.fillStyle = "rgba(120,220,255,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-arrowLen, arrowW / 2);
+    ctx.lineTo(-arrowLen, -arrowW / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  } else {
+    const c = geom.center ? latLngToScreen(geom.center.lat, geom.center.lng) : null;
+    if (!c) return;
+    const rPx = Math.hypot(t.x - c.x, t.y - c.y);
+    const aStart = Math.atan2(s.y - c.y, s.x - c.x);
+    const aEnd = Math.atan2(t.y - c.y, t.x - c.x);
+    const ccw = chosenDir === "CCW";
 
-  // Arrow head at target indicating direction
-  const tangentAngle = aEnd + (ccw ? -Math.PI / 2 : Math.PI / 2);
-  const arrowLen = Math.max(10, Math.min(18, rPx * 0.08));
-  const arrowW = arrowLen * 0.6;
-  const ax = t.x;
-  const ay = t.y;
-  ctx.save();
-  ctx.translate(ax, ay);
-  ctx.rotate(tangentAngle);
-  ctx.fillStyle = "rgba(120,220,255,0.9)";
-  ctx.beginPath();
-  ctx.moveTo(0, 0);
-  ctx.lineTo(-arrowLen, arrowW / 2);
-  ctx.lineTo(-arrowLen, -arrowW / 2);
-  ctx.closePath();
-  ctx.fill();
-  ctx.restore();
+    // Arc path
+    ctx.save();
+    ctx.setLineDash([4, 6]);
+    ctx.lineWidth = 2.0;
+    ctx.strokeStyle = "rgba(120,220,255,0.8)";
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, rPx, aStart, aEnd, ccw);
+    ctx.stroke();
+    ctx.restore();
+
+    // Arrow head at target indicating direction
+    const tangentAngle = aEnd + (ccw ? -Math.PI / 2 : Math.PI / 2);
+    const arrowLen = Math.max(10, Math.min(18, rPx * 0.08));
+    const arrowW = arrowLen * 0.6;
+    const ax = t.x;
+    const ay = t.y;
+    ctx.save();
+    ctx.translate(ax, ay);
+    ctx.rotate(tangentAngle);
+    ctx.fillStyle = "rgba(120,220,255,0.9)";
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(-arrowLen, arrowW / 2);
+    ctx.lineTo(-arrowLen, -arrowW / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
 
   // Mark the entry point
   ctx.save();
   ctx.fillStyle = "rgba(255,255,255,0.9)";
+  const markR = geom.pathType === "line" ? 4 : Math.max(3, Math.min(10, (map.getZoom ? map.getZoom() : 12) * 0.35));
   ctx.beginPath();
-  ctx.arc(s.x, s.y, Math.max(3, rPx * 0.04), 0, Math.PI * 2);
+  ctx.arc(s.x, s.y, markR, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
 }
@@ -4170,7 +4222,7 @@ function openFlankMenu(anchor, containerPoint) {
     return `${m}m ${s.toString().padStart(2, "0")}s`;
   };
 
-  const calcEtaSec = () => {
+  const calcPathMeters = () => {
     if (!sel || !sel.latest) return null;
     const from = { lat: sel.latest.lat, lng: sel.latest.lng };
     let dir = pendingFlank.direction;
@@ -4178,22 +4230,46 @@ function openFlankMenu(anchor, containerPoint) {
     if (!geom) return null;
     dir = geom.direction || dir;
     pendingFlank.direction = dir;
-    const distToEntry = haversine2dMeters(sel.latest.lat, sel.latest.lng, geom.entryPoint.lat, geom.entryPoint.lng);
-    const arcLen = arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, dir);
-    const speedMps = Math.max(1, (pendingFlank.approachSpeedKmh / 3.6));
-    return (distToEntry + arcLen) / speedMps;
+    const distToEntry =
+      geom.distToEntry ?? haversine2dMeters(sel.latest.lat, sel.latest.lng, geom.entryPoint.lat, geom.entryPoint.lng);
+    const arcLen =
+      geom.pathType === "line"
+        ? geom.segmentLenM ?? haversine2dMeters(geom.entryPoint.lat, geom.entryPoint.lng, anchorLatLng.lat, anchorLatLng.lng)
+        : arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, dir);
+    return distToEntry + arcLen;
+  };
+
+  const calcEtaSec = () => {
+    const distM = calcPathMeters();
+    if (!isFinite(distM) || distM <= 0) return null;
+    const speedMps = Math.max(1, pendingFlank.approachSpeedKmh / 3.6);
+    return distM / speedMps;
   };
 
   const updateEta = () => {
     const etaEl = flankMenuEl.querySelector(".menu-eta");
-    if (!etaEl) return;
+    const titleEl = flankMenuEl.querySelector(".menu-head h4");
+    if (!etaEl || !titleEl) return;
+    const distM = calcPathMeters();
+    if (!isFinite(distM)) {
+      etaEl.textContent = "";
+      titleEl.textContent = "Flank";
+      return;
+    }
+    const km = distM / 1000;
+    titleEl.textContent = `${km.toFixed(km >= 10 ? 1 : 2)} km`;
     const sec = calcEtaSec();
     etaEl.textContent = formatEta(sec);
   };
 
   flankMenuEl.innerHTML = `
     <div class="menu-head">
-      <h4>Flank</h4>
+      <h4>${(() => {
+        const distM = calcPathMeters();
+        if (!isFinite(distM)) return "Flank";
+        const km = distM / 1000;
+        return `${km.toFixed(km >= 10 ? 1 : 2)} km`;
+      })()}</h4>
       <span class="menu-eta">${formatEta(calcEtaSec())}</span>
     </div>
     <div class="label" style="margin-top:8px;">Distance (diameter)</div>
@@ -4224,7 +4300,6 @@ function openFlankMenu(anchor, containerPoint) {
       </div>
     </div>
     <div style="display:flex; gap:8px; margin-top:8px;">
-      <button class="cmd-chip cmd-action" type="button" data-action="flank-cancel" style="flex:1;">Cancel</button>
       <button class="cmd-chip cmd-action" type="button" data-action="flank-add" style="flex:1;">Add Flank</button>
     </div>
   `;
@@ -4287,9 +4362,10 @@ function openFlankMenu(anchor, containerPoint) {
     };
 
     const setBearing = (deg) => {
-      pendingFlank.approachBearingDeg = Math.round(deg);
+      const norm = ((deg % 360) + 360) % 360;
+      pendingFlank.approachBearingDeg = norm;
       updateFlankBearingUI();
-      updateFlankEtaDisplay();
+      updateEta();
       draw();
     };
 
@@ -4345,6 +4421,30 @@ function openFlankMenu(anchor, containerPoint) {
         ev.preventDefault();
         ev.stopPropagation();
         setBearing(getBearingFromPointer(ev));
+        const move = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          setBearing(getBearingFromPointer(e));
+        };
+        const up = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          window.removeEventListener("touchmove", move, true);
+          window.removeEventListener("touchend", up, true);
+          window.removeEventListener("touchcancel", up, true);
+        };
+        window.addEventListener("touchmove", move, { passive: false, capture: true });
+        window.addEventListener("touchend", up, { capture: true });
+        window.addEventListener("touchcancel", up, { capture: true });
+      },
+      { passive: false }
+    );
+    knob.addEventListener(
+      "touchmove",
+      (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        setBearing(getBearingFromPointer(ev));
       },
       { passive: false }
     );
@@ -4382,18 +4482,6 @@ function openFlankMenu(anchor, containerPoint) {
     });
   }
 
-  const cancel = flankMenuEl.querySelector("[data-action='flank-cancel']");
-  if (cancel) {
-    cancel.addEventListener("click", (e) => {
-      e.stopPropagation();
-      closeFlankMenu(true);
-      updateStatusList();
-      updateCommandSequencePanel();
-      updateTooltip();
-      draw();
-    });
-  }
-
   document.addEventListener("pointerdown", handleFlankOutsideClick, true);
   updateFlankBearingUI();
   draw();
@@ -4409,15 +4497,24 @@ function updateFlankEtaDisplay() {
   const geom = computeFlankSolution(anchor, pendingFlank.approachBearingDeg, pendingFlank.diameterM, from);
   if (!geom) return;
   pendingFlank.direction = geom.direction || pendingFlank.direction;
-  const distToEntry = haversine2dMeters(from.lat, from.lng, geom.entryPoint.lat, geom.entryPoint.lng);
-  const arcLen = arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, geom.direction || "CW");
-  const speedMps = Math.max(1, pendingFlank.approachSpeedKmh / 3.6);
-  const sec = (distToEntry + arcLen) / speedMps;
+  const distToEntry =
+    geom.distToEntry ?? haversine2dMeters(from.lat, from.lng, geom.entryPoint.lat, geom.entryPoint.lng);
+  const arcLen =
+    geom.pathType === "line"
+      ? geom.segmentLenM ?? haversine2dMeters(geom.entryPoint.lat, geom.entryPoint.lng, anchor.lat, anchor.lng)
+      : arcLengthForDirection(geom.radiusM, geom.aEntry, geom.aTarget, geom.direction || "CW");
+  const totalM = distToEntry + arcLen;
   const etaEl = flankMenuEl.querySelector(".menu-eta");
-  if (!etaEl) return;
-  const m = Math.floor(sec / 60);
-  const s = Math.max(0, Math.round(sec - m * 60));
-  etaEl.textContent = `${m}m ${s.toString().padStart(2, "0")}s`;
+  const titleEl = flankMenuEl.querySelector(".menu-head h4");
+  if (etaEl) {
+    const speedMps = Math.max(1, pendingFlank.approachSpeedKmh / 3.6);
+    const sec = totalM / speedMps;
+    etaEl.textContent = formatEta(sec);
+  }
+  if (titleEl) {
+    const km = totalM / 1000;
+    titleEl.textContent = `${km.toFixed(km >= 10 ? 1 : 2)} km`;
+  }
 }
 
 function updateFlankDirectionHint() {
