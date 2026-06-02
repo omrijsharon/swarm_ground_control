@@ -59,18 +59,20 @@ This checklist behavior is part of the desired workflow for this branch.
 
 ## Current Repo Reality
 
-At the time this guide was updated, the checked-in SGC app is still mostly the older UI-only prototype:
+At the time this guide was updated, the checked-in SGC app defaults to the live-position branch UI while retaining the older C2 prototype code:
 
 - Static web app: `index.html`, `style.css`, `config.js`, and monolithic `script.js`.
 - Leaflet map centered around Tel Aviv.
-- Canvas overlay for drones, ground stations, waypoints, route links, selection glow, stale labels, orbit previews, and flank previews.
-- Deterministic mock swarm of 104 drones.
-- Simulated local telemetry.
-- Right-side `Drones` panel.
-- Left-side `Commands Sequence` panel.
+- Canvas overlay for live drones, heading arrows, freshness labels, and ground stations in live-position mode.
+- Compact USB serial control panel in the right-side `Live Drones` panel.
+- Web Serial ingestion for newline-delimited JSON from the GC ESP32.
+- Live telemetry creates/updates drones by real `nodeId`.
+- Live-position mock mode simulates about five drones for development without hardware.
+- GC/radio status display shows serial state, shared frequency, SF/BW/CR, TX power, airtime, channel counts, and recent assignment events.
+- The older deterministic 104-drone mock and command UI still exist in code for non-live/prototype paths.
+- The left-side `Commands Sequence` panel is hidden in live-position mode.
 - In-memory teams, waypoints, ground stations, command sequences, and command labels.
 - No backend.
-- No real serial/radio link yet.
 - No WebSocket telemetry path.
 - No real command transport.
 

@@ -1,4 +1,4 @@
-// UI-only mock. No serial, no backend. Just visuals.
+// Live-position branch: browser UI with Web Serial telemetry ingress and retained C2 prototype paths.
 
 function cfg(key, fallback) {
   if (typeof CONFIG !== "undefined" && CONFIG && CONFIG[key] !== undefined) {
@@ -24,6 +24,15 @@ const SETTINGS = {
   SELECTION_GLOW_INNER_ALPHA: cfg("SELECTION_GLOW_INNER_ALPHA", 1.0),
   SELECTION_OUTLINE_WIDTH_FACTOR: cfg("SELECTION_OUTLINE_WIDTH_FACTOR", 0.35),
   SELECTION_OUTLINE_ALPHA: cfg("SELECTION_OUTLINE_ALPHA", 0.95),
+};
+
+const APP_MODE = cfg("APP_MODE", "live-position");
+const LIVE_POSITION_MODE = APP_MODE === "live-position";
+const LIVE_POSITION_MOCK_DEFAULT = cfg("LIVE_POSITION_MOCK_DEFAULT", true);
+const LIVE_FRESHNESS_MS = {
+  fresh: 500,
+  late: 1500,
+  stale: 5000,
 };
 
 let map;
@@ -78,6 +87,26 @@ let relationMenuEl = null;
 let pendingRelation = null;
 let orbitMenuEl = null;
 let pendingOrbit = null;
+
+const liveState = {
+  port: null,
+  reader: null,
+  keepReading: false,
+  lineBuffer: "",
+  baudRate: 115200,
+  connected: false,
+  portLabel: "None",
+  lastMessageAt: null,
+  lastJsonAt: null,
+  parseErrors: [],
+  gcStatus: null,
+  channelTable: null,
+  assignmentEvents: [],
+  mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
+  mockActive: false,
+  mockTimers: [],
+  serialTelemetrySeen: false,
+};
 let orbitCloseSuppressUntil = 0;
 let orbitDroneId = null;
 let orbitTeamId = null;
@@ -824,6 +853,15 @@ class Drone {
       lng: packet.lng,
       alt: packet.alt ?? 0,
       heading: packet.heading ?? 0,
+      headingSource: packet.headingSource ?? packet.heading_source ?? null,
+      courseOverGround: packet.courseOverGround ?? packet.course_over_ground ?? null,
+      yaw: packet.yaw ?? null,
+      groundSpeed: packet.groundSpeed ?? packet.ground_speed ?? null,
+      satelliteCount: packet.satelliteCount ?? packet.satellite_count ?? null,
+      snr: packet.snr ?? null,
+      frequencyMhz: packet.frequencyMhz ?? packet.frequency_mhz ?? null,
+      sequenceId: packet.sequenceId ?? packet.sequence_id ?? null,
+      gcMillis: packet.gcMillis ?? packet.gc_millis ?? null,
       battery: packet.battery ?? 0,
       rssi: packet.rssi ?? null,
       command: packet.command || null,
@@ -2428,6 +2466,16 @@ function updateCommandSequencePanel() {
   const addBtn = document.getElementById("sequenceAddBtn");
   const playBtn = document.getElementById("seqPlayBtn");
   if (!list || !addBtn || !playBtn) return;
+  if (LIVE_POSITION_MODE) {
+    list.innerHTML = "";
+    addBtn.disabled = true;
+    addBtn.style.display = "none";
+    const panel = document.querySelector("aside.panel.left");
+    const transportEl = panel ? panel.querySelector(".sequence-transport") : null;
+    if (transportEl) transportEl.style.display = "none";
+    closeSequenceMenu();
+    return;
+  }
 
   const titleBtn = document.querySelector("aside.panel.left .panel-title");
   const labelEl = document.querySelector("aside.panel.left .label");
@@ -2623,9 +2671,645 @@ function updateCommandSequencePanel() {
   });
 }
 
+function applyRuntimeModeUi() {
+  document.body.classList.toggle("live-position-mode", LIVE_POSITION_MODE);
+  const rightTitle = document.querySelector("aside.panel.right .panel-title");
+  if (rightTitle && LIVE_POSITION_MODE) {
+    rightTitle.textContent = "Live Drones";
+  }
+}
+
+function setLiveSerialState(kind, label, detail) {
+  const stateEl = document.getElementById("liveSerialState");
+  const dotEl = document.getElementById("liveSerialDot");
+  if (stateEl) stateEl.textContent = label;
+  if (dotEl) {
+    dotEl.classList.toggle("connected", kind === "connected");
+    dotEl.classList.toggle("waiting", kind === "waiting");
+  }
+  if (detail) appendLiveDebug(detail, { replace: true });
+}
+
+function appendLiveDebug(message, { replace = false } = {}) {
+  const debugEl = document.getElementById("liveSerialDebug");
+  if (!debugEl) return;
+  const line = `[${new Date().toLocaleTimeString()}] ${message}`;
+  if (replace) {
+    debugEl.textContent = line;
+    return;
+  }
+  liveState.parseErrors.push(line);
+  while (liveState.parseErrors.length > 5) liveState.parseErrors.shift();
+  debugEl.textContent = liveState.parseErrors.join("\n");
+  debugEl.scrollTop = debugEl.scrollHeight;
+}
+
+function formatLiveAge(receivedAt = null, now = Date.now()) {
+  if (!receivedAt) return "never";
+  const ageMs = Math.max(0, now - receivedAt);
+  if (ageMs < 1000) return `${Math.round(ageMs)} ms`;
+  return `${(ageMs / 1000).toFixed(1)} s`;
+}
+
+function getLiveFreshnessState(drone, now = Date.now()) {
+  if (!drone || !drone.lastReceivedAt) return "offline";
+  const ageMs = Math.max(0, now - drone.lastReceivedAt);
+  if (ageMs < LIVE_FRESHNESS_MS.fresh) return "fresh";
+  if (ageMs < LIVE_FRESHNESS_MS.late) return "late";
+  if (ageMs < LIVE_FRESHNESS_MS.stale) return "stale";
+  return "offline";
+}
+
+function freshnessLedClass(freshness) {
+  if (freshness === "fresh") return "green";
+  if (freshness === "late") return "yellow";
+  if (freshness === "stale") return "red";
+  return "gray";
+}
+
+function getLiveBaudRate() {
+  const input = document.getElementById("liveSerialBaud");
+  const value = Number.parseInt(input ? input.value : "", 10);
+  if (Number.isFinite(value) && value > 0) {
+    liveState.baudRate = value;
+    return value;
+  }
+  liveState.baudRate = 115200;
+  if (input) input.value = "115200";
+  return liveState.baudRate;
+}
+
+function renderLiveControls() {
+  const openBtn = document.getElementById("liveSerialOpenBtn");
+  const closeBtn = document.getElementById("liveSerialCloseBtn");
+  const baudInput = document.getElementById("liveSerialBaud");
+  const mockBtn = document.getElementById("liveMockToggleBtn");
+  const metaEl = document.getElementById("liveSerialMeta");
+  if (openBtn) openBtn.disabled = liveState.connected;
+  if (closeBtn) closeBtn.disabled = !liveState.connected;
+  if (baudInput) baudInput.disabled = liveState.connected;
+  if (mockBtn) {
+    mockBtn.textContent = liveState.mockActive ? "Mock Off" : "Mock On";
+    mockBtn.classList.toggle("live-btn-primary", liveState.mockActive);
+  }
+  if (metaEl) {
+    const last = liveState.lastMessageAt ? formatLiveAge(liveState.lastMessageAt) : "never";
+    metaEl.textContent = `Port ${liveState.portLabel} | Baud ${liveState.baudRate} | Last message: ${last}`;
+  }
+}
+
+function describeLiveSerialPort(port) {
+  if (!port || typeof port.getInfo !== "function") return "Selected";
+  const info = port.getInfo();
+  const parts = [];
+  if (info.usbVendorId !== undefined) parts.push(`VID 0x${info.usbVendorId.toString(16).padStart(4, "0")}`);
+  if (info.usbProductId !== undefined) parts.push(`PID 0x${info.usbProductId.toString(16).padStart(4, "0")}`);
+  return parts.length ? parts.join(" / ") : "Selected";
+}
+
+function renderLiveGcStatus() {
+  const host = document.getElementById("liveGcStatus");
+  if (!host) return;
+  host.innerHTML = "";
+  const status = liveState.gcStatus || {};
+  const table = liveState.channelTable || {};
+  const noisy = Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz.length : 0;
+  const clear = Number.isFinite(Number(status.clearChannels))
+    ? Number(status.clearChannels)
+    : Array.isArray(table.clearFrequencyMhz)
+      ? table.clearFrequencyMhz.length
+      : null;
+  const buffer =
+    Number.isFinite(Number(status.txPeriodMs)) && Number.isFinite(Number(status.telemetryAirtimeMs))
+      ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
+      : null;
+  const items = [
+    ["Serial", liveState.connected ? "Connected" : "Disconnected"],
+    ["Shared", status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A"],
+    ["Profile", status.spreadingFactor ? `SF${status.spreadingFactor} / BW${Math.round(Number(status.bandwidthHz || 0) / 1000)} / CR4/${status.codingRate}` : "N/A"],
+    ["TX Power", status.txPowerDbm !== undefined ? `${status.txPowerDbm} dBm` : "22 dBm"],
+    ["Airtime", status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A"],
+    ["Buffer", buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A"],
+    ["Assigned", status.assignedDrones !== undefined ? String(status.assignedDrones) : String(drones.length)],
+    ["Channels", clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A"],
+  ];
+
+  const grid = document.createElement("div");
+  grid.className = "live-gc-grid";
+  items.forEach(([label, value]) => {
+    const item = document.createElement("div");
+    item.className = "live-gc-item";
+    const labelEl = document.createElement("div");
+    labelEl.className = "live-gc-label";
+    labelEl.textContent = label;
+    const valueEl = document.createElement("div");
+    valueEl.className = "live-gc-value";
+    valueEl.textContent = value;
+    item.appendChild(labelEl);
+    item.appendChild(valueEl);
+    grid.appendChild(item);
+  });
+  host.appendChild(grid);
+
+  if (liveState.assignmentEvents.length) {
+    const event = liveState.assignmentEvents[liveState.assignmentEvents.length - 1];
+    const eventEl = document.createElement("div");
+    eventEl.className = "live-meta";
+    eventEl.textContent = `Last assignment: ${event.event || "event"}${event.nodeId !== undefined ? ` node ${event.nodeId}` : ""}`;
+    host.appendChild(eventEl);
+  }
+}
+
+function isFiniteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isIntegerNumber(value) {
+  return Number.isInteger(value);
+}
+
+const liveProtocolSchemas = {
+  drone_telemetry: {
+    type: "string",
+    nodeId: "integer",
+    lat: "number",
+    lng: "number",
+    alt: "number",
+    heading: "number",
+    headingSource: "string",
+    courseOverGround: "number",
+    yaw: "number",
+    groundSpeed: "number",
+    satelliteCount: "integer",
+    rssi: "number",
+    snr: "number",
+    frequencyMhz: "number",
+    sequenceId: "integer",
+    gcMillis: "integer",
+  },
+  gc_status: {
+    type: "string",
+    nodeId: "integer",
+    sharedFrequencyMhz: "number",
+    spreadingFactor: "integer",
+    bandwidthHz: "integer",
+    codingRate: "integer",
+    txPowerDbm: "number",
+    telemetryAirtimeMs: "number",
+    txPeriodMs: "number",
+    assignedDrones: "integer",
+    clearChannels: "integer",
+    scanMode: "string",
+    gcMillis: "integer",
+  },
+  assignment_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  channel_table: {
+    type: "string",
+    sharedFrequencyMhz: "number",
+    reservedFrequencyMhz: "array",
+    candidateFrequencyMhz: "array",
+    clearFrequencyMhz: "array",
+    noisyFrequencyMhz: "array",
+    assignments: "array",
+    gcMillis: "integer",
+  },
+};
+
+function matchesLiveType(value, type) {
+  if (type === "array") return Array.isArray(value);
+  if (type === "integer") return isIntegerNumber(value);
+  if (type === "number") return isFiniteNumber(value);
+  return typeof value === type;
+}
+
+function validateLiveProtocolMessage(message) {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return ["JSON root must be an object."];
+  }
+  const type = message.type;
+  if (typeof type !== "string") return ["Field type must be a string."];
+  const schema = liveProtocolSchemas[type];
+  if (!schema) return [];
+  const issues = [];
+  Object.entries(schema).forEach(([field, fieldType]) => {
+    if (!(field in message)) {
+      issues.push(`Missing ${field}.`);
+      return;
+    }
+    if (!matchesLiveType(message[field], fieldType)) {
+      issues.push(`${field} must be ${fieldType}.`);
+    }
+  });
+  return issues;
+}
+
+function getOrCreateLiveDrone(nodeId) {
+  let drone = getDroneById(nodeId);
+  if (drone) return drone;
+  drone = new Drone(nodeId, { type: "live" });
+  drones.push(drone);
+  drones.sort((a, b) => a.id - b.id);
+  return drone;
+}
+
+function applyLiveTelemetry(message, source = "serial") {
+  if (source === "serial" && liveState.mockActive) {
+    stopLivePositionMock({ clearDrones: true });
+  }
+  if (source === "serial") {
+    liveState.serialTelemetrySeen = true;
+  }
+
+  const drone = getOrCreateLiveDrone(message.nodeId);
+  drone.updateTelemetry(
+    {
+      uptimeSec: message.gcMillis ? message.gcMillis / 1000 : 0,
+      lat: message.lat,
+      lng: message.lng,
+      alt: message.alt,
+      heading: message.heading,
+      headingSource: message.headingSource,
+      courseOverGround: message.courseOverGround,
+      yaw: message.yaw,
+      groundSpeed: message.groundSpeed,
+      satelliteCount: message.satelliteCount,
+      rssi: message.rssi,
+      snr: message.snr,
+      frequencyMhz: message.frequencyMhz,
+      sequenceId: message.sequenceId,
+      gcMillis: message.gcMillis,
+      command: "Live telemetry",
+      armed: true,
+    },
+    Date.now()
+  );
+  updateStatusList();
+  renderLiveGcStatus();
+  draw();
+}
+
+function handleLiveProtocolMessage(message, source = "serial") {
+  const issues = validateLiveProtocolMessage(message);
+  if (issues.length) {
+    appendLiveDebug(`protocol invalid: ${issues.join(" ")}`);
+    return;
+  }
+  liveState.lastJsonAt = Date.now();
+  if (message.type === "drone_telemetry") {
+    applyLiveTelemetry(message, source);
+  } else if (message.type === "gc_status") {
+    liveState.gcStatus = message;
+    renderLiveGcStatus();
+  } else if (message.type === "assignment_event") {
+    liveState.assignmentEvents.push(message);
+    while (liveState.assignmentEvents.length > 8) liveState.assignmentEvents.shift();
+    renderLiveGcStatus();
+  } else if (message.type === "channel_table") {
+    liveState.channelTable = message;
+    renderLiveGcStatus();
+  } else if (message.type === "warning" || message.type === "error") {
+    appendLiveDebug(`${message.type}: ${message.code || "unknown"} ${message.message || ""}`);
+  }
+}
+
+function processLiveSerialLine(line) {
+  const trimmed = String(line || "").trim();
+  if (!trimmed) return;
+  liveState.lastMessageAt = Date.now();
+  renderLiveControls();
+
+  if (!trimmed.startsWith("{")) {
+    return;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    handleLiveProtocolMessage(parsed, "serial");
+  } catch (err) {
+    appendLiveDebug(`parse error: ${err.message}`);
+  }
+}
+
+function processLiveSerialChunk(chunk) {
+  liveState.lineBuffer += chunk;
+  const lines = liveState.lineBuffer.split(/\r\n|\n|\r/);
+  liveState.lineBuffer = lines.pop() ?? "";
+  lines.forEach(processLiveSerialLine);
+}
+
+async function readLiveSerialLoop() {
+  const decoder = new TextDecoder();
+  while (liveState.port?.readable && liveState.keepReading) {
+    liveState.reader = liveState.port.readable.getReader();
+    try {
+      while (liveState.keepReading) {
+        const { value, done } = await liveState.reader.read();
+        if (done) break;
+        if (value) processLiveSerialChunk(decoder.decode(value, { stream: true }));
+      }
+    } catch (err) {
+      if (liveState.keepReading) {
+        appendLiveDebug(`reader error: ${err.message}`);
+        markLiveSerialDisconnected("Serial reader stopped.");
+      }
+    } finally {
+      try {
+        liveState.reader?.releaseLock();
+      } catch {
+        // ignore
+      }
+      liveState.reader = null;
+    }
+  }
+}
+
+function markLiveSerialDisconnected(reason) {
+  liveState.keepReading = false;
+  liveState.connected = false;
+  liveState.port = null;
+  liveState.reader = null;
+  liveState.lineBuffer = "";
+  liveState.portLabel = "None";
+  setLiveSerialState("error", "Disconnected", reason);
+  renderLiveControls();
+  renderLiveGcStatus();
+}
+
+async function openLiveSerialPort() {
+  if (!("serial" in navigator)) {
+    setLiveSerialState("error", "Unsupported", "Web Serial is unavailable in this browser.");
+    return;
+  }
+  try {
+    const baudRate = getLiveBaudRate();
+    setLiveSerialState("waiting", "Selecting", "Choose the GC ESP32 serial port.");
+    const port = await navigator.serial.requestPort();
+    liveState.portLabel = describeLiveSerialPort(port);
+    setLiveSerialState("waiting", "Opening", `Opening at ${baudRate} baud.`);
+    await port.open({ baudRate });
+    liveState.port = port;
+    liveState.connected = true;
+    liveState.keepReading = true;
+    liveState.lineBuffer = "";
+    liveState.baudRate = baudRate;
+    setLiveSerialState("connected", "Connected", `Reading USB serial at ${baudRate} baud.`);
+    renderLiveControls();
+    readLiveSerialLoop();
+  } catch (err) {
+    liveState.connected = false;
+    liveState.keepReading = false;
+    const detail = err.message && err.message.includes("Failed to open serial port")
+      ? "Failed to open serial port. Another app may already own it."
+      : err.message || "Serial open failed.";
+    setLiveSerialState("error", "Disconnected", detail);
+    renderLiveControls();
+  }
+}
+
+async function closeLiveSerialPort() {
+  liveState.keepReading = false;
+  try {
+    if (liveState.reader) await liveState.reader.cancel();
+  } catch (err) {
+    appendLiveDebug(`reader cancel warning: ${err.message}`);
+  }
+  try {
+    if (liveState.port) await liveState.port.close();
+  } catch (err) {
+    appendLiveDebug(`close warning: ${err.message}`);
+  }
+  liveState.port = null;
+  liveState.reader = null;
+  liveState.connected = false;
+  liveState.portLabel = "None";
+  liveState.lineBuffer = "";
+  setLiveSerialState("waiting", "Disconnected", "Ready to open the GC ESP32 serial port.");
+  renderLiveControls();
+  renderLiveGcStatus();
+}
+
+function stopLivePositionMock({ clearDrones = false } = {}) {
+  liveState.mockTimers.forEach((timerId) => clearTimeout(timerId));
+  liveState.mockTimers = [];
+  liveState.mockActive = false;
+  if (clearDrones) {
+    drones = [];
+    pinnedDroneId = null;
+    hoveredDroneId = null;
+  }
+  renderLiveControls();
+  updateStatusList();
+  draw();
+}
+
+function scheduleLiveMockTick(drone, rng) {
+  const timerId = setTimeout(() => {
+    liveState.mockTimers = liveState.mockTimers.filter((id) => id !== timerId);
+    if (!liveState.mockActive) return;
+    const latest = drone.getLatest();
+    if (!latest) return;
+    const delayHint = rng();
+    const speed = Math.max(1.5, (latest.groundSpeed || 4.2) + (rng() - 0.5) * 0.8);
+    const heading = (latest.heading + (rng() - 0.5) * 14 + 360) % 360;
+    const moved = destinationLatLng(latest.lat, latest.lng, heading, speed * 0.32);
+    const yaw = (heading - 3 + (rng() - 0.5) * 2 + 360) % 360;
+    drone.updateTelemetry({
+      uptimeSec: (latest.uptimeSec || 0) + 0.32,
+      lat: moved.lat,
+      lng: moved.lng,
+      alt: Math.max(0, latest.alt + (rng() - 0.5) * 0.5),
+      heading,
+      headingSource: "course_over_ground",
+      courseOverGround: heading,
+      yaw,
+      groundSpeed: speed,
+      satelliteCount: Math.max(7, Math.min(18, Math.round((latest.satelliteCount || 12) + (rng() - 0.5) * 2))),
+      rssi: Math.max(-118, Math.min(-55, (latest.rssi || -82) + (rng() - 0.5) * 2)),
+      snr: Math.max(-6, Math.min(14, (latest.snr || 9) + (rng() - 0.5) * 0.8)),
+      frequencyMhz: latest.frequencyMhz,
+      sequenceId: (latest.sequenceId || 0) + 1,
+      gcMillis: Math.round((latest.gcMillis || 0) + 320),
+      command: "Mock live telemetry",
+      armed: true,
+    });
+    updateStatusList();
+    draw();
+    const nextDelay = delayHint < 0.03 ? 5600 : delayHint < 0.12 ? 1800 : 220 + rng() * 260;
+    scheduleLiveMockTick(drone, rng);
+  }, 220 + rng() * 260);
+  liveState.mockTimers.push(timerId);
+}
+
+function startLivePositionMock() {
+  stopLivePositionMock({ clearDrones: true });
+  liveState.mockActive = true;
+  liveState.mockEnabled = true;
+  liveState.serialTelemetrySeen = false;
+  liveState.gcStatus = {
+    type: "gc_status",
+    nodeId: 0,
+    sharedFrequencyMhz: 915.0,
+    spreadingFactor: 8,
+    bandwidthHz: 500000,
+    codingRate: 5,
+    txPowerDbm: 22,
+    telemetryAirtimeMs: 25.7,
+    txPeriodMs: 27,
+    assignedDrones: 5,
+    clearChannels: 48,
+    scanMode: "mock_live_position",
+    gcMillis: 0,
+  };
+
+  const rng = makeRng(0x51A7E11);
+  const center = { lat: 32.0596637, lng: 34.8503487 };
+  for (let i = 1; i <= 5; i++) {
+    const d = new Drone(i, { type: "live-mock" });
+    const heading = (70 + i * 37) % 360;
+    d.updateTelemetry({
+      uptimeSec: 0,
+      lat: center.lat + (rng() - 0.5) * 0.006,
+      lng: center.lng + (rng() - 0.5) * 0.006,
+      alt: 10 + i * 2,
+      heading,
+      headingSource: "course_over_ground",
+      courseOverGround: heading,
+      yaw: (heading - 3 + 360) % 360,
+      groundSpeed: 3.4 + i * 0.35,
+      satelliteCount: 10 + i,
+      rssi: -78 - i * 2,
+      snr: 10.5 - i * 0.4,
+      frequencyMhz: 916.0 + i * 0.5,
+      sequenceId: 1,
+      gcMillis: 0,
+      command: "Mock live telemetry",
+      armed: true,
+    });
+    drones.push(d);
+    scheduleLiveMockTick(d, rng);
+  }
+  renderLiveControls();
+  renderLiveGcStatus();
+  updateStatusList();
+  if (map && drones.length) {
+    const bounds = L.latLngBounds(drones.map((d) => [d.current.lat, d.current.lng]));
+    map.fitBounds(bounds, { padding: [80, 80], maxZoom: 15, animate: false });
+  }
+  draw();
+}
+
+function toggleLiveMock() {
+  if (liveState.mockActive) {
+    liveState.mockEnabled = false;
+    stopLivePositionMock({ clearDrones: true });
+  } else {
+    startLivePositionMock();
+  }
+}
+
+function initLivePositionUi() {
+  if (!LIVE_POSITION_MODE) return;
+  const openBtn = document.getElementById("liveSerialOpenBtn");
+  const closeBtn = document.getElementById("liveSerialCloseBtn");
+  const mockBtn = document.getElementById("liveMockToggleBtn");
+  openBtn?.addEventListener("click", openLiveSerialPort);
+  closeBtn?.addEventListener("click", closeLiveSerialPort);
+  mockBtn?.addEventListener("click", toggleLiveMock);
+  if ("serial" in navigator) {
+    setLiveSerialState("waiting", "Disconnected", "Web Serial is available.");
+  } else {
+    setLiveSerialState("error", "Unsupported", "Use desktop Chrome or Edge for USB serial.");
+    if (openBtn) openBtn.disabled = true;
+  }
+  renderLiveControls();
+  renderLiveGcStatus();
+}
+
+function renderLiveStatusList() {
+  const host = document.getElementById("statusList");
+  if (!host) return;
+  host.innerHTML = "";
+  const now = Date.now();
+  const sorted = [...drones].sort((a, b) => a.id - b.id);
+
+  if (!sorted.length) {
+    const empty = document.createElement("div");
+    empty.className = "status-entry live-entry";
+    empty.textContent = liveState.connected ? "Waiting for drone telemetry." : "Open USB serial or enable mock mode.";
+    host.appendChild(empty);
+    return;
+  }
+
+  sorted.forEach((d) => {
+    const latest = d.getLatest();
+    if (!latest) return;
+    const freshness = getLiveFreshnessState(d, now);
+    const row = document.createElement("div");
+    row.className = `status-entry live-entry ${freshness}`;
+    row.dataset.droneId = String(d.id);
+    if (pinnedDroneId === d.id) row.classList.add("is-active");
+
+    const led = document.createElement("div");
+    led.className = `status-led ${freshnessLedClass(freshness)}`;
+    row.appendChild(led);
+
+    const main = document.createElement("div");
+    main.className = "live-entry-main";
+    const label = document.createElement("div");
+    label.className = "status-label";
+    label.textContent = `Drone ${d.id}`;
+    const detail = document.createElement("div");
+    detail.className = "status-mission";
+    const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
+    detail.textContent = `${freq} | ${formatLiveAge(d.lastReceivedAt, now)} ago`;
+    const grid = document.createElement("div");
+    grid.className = "live-entry-grid";
+    const speed = Number(latest.groundSpeed);
+    const fields = [
+      ["Alt", `${Number(latest.alt || 0).toFixed(1)} m`],
+      ["Speed", Number.isFinite(speed) ? `${speed.toFixed(1)} m/s (${(speed * 3.6).toFixed(0)} km/h)` : "N/A"],
+      ["Heading", `${Number(latest.heading || 0).toFixed(0)} deg`],
+      ["RSSI", latest.rssi !== null && latest.rssi !== undefined ? `${Number(latest.rssi).toFixed(0)} dBm` : "N/A"],
+      ["SNR", latest.snr !== null && latest.snr !== undefined ? `${Number(latest.snr).toFixed(1)} dB` : "N/A"],
+      ["Sats", latest.satelliteCount !== null && latest.satelliteCount !== undefined ? String(latest.satelliteCount) : "N/A"],
+    ];
+    fields.forEach(([name, value]) => {
+      const item = document.createElement("div");
+      item.innerHTML = `${name} <strong>${value}</strong>`;
+      grid.appendChild(item);
+    });
+    main.appendChild(label);
+    main.appendChild(detail);
+    main.appendChild(grid);
+    row.appendChild(main);
+
+    const badge = document.createElement("div");
+    badge.className = `live-freshness ${freshness}`;
+    badge.textContent = freshness;
+    row.appendChild(badge);
+
+    row.addEventListener("click", () => {
+      if (pinnedDroneId === d.id) {
+        setPinnedDrone(null);
+      } else {
+        focusDroneById(d.id);
+      }
+    });
+    host.appendChild(row);
+  });
+}
+
 function updateStatusList() {
   const host = document.getElementById("statusList");
   if (!host) return;
+  if (LIVE_POSITION_MODE) {
+    renderLiveStatusList();
+    return;
+  }
   host.innerHTML = "";
   // Keep the "Remove from Team" menu open across status refreshes (we re-render every 1s).
   // Close only if the referenced drone/team is no longer valid.
@@ -2863,6 +3547,27 @@ function ensureTooltipEl() {
   return tooltipEl;
 }
 
+function renderLiveTooltip(el, target, latest) {
+  const now = Date.now();
+  const freshness = getLiveFreshnessState(target, now);
+  const age = formatLiveAge(target.lastReceivedAt, now);
+  const speed = Number(latest.groundSpeed);
+  const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
+  el.innerHTML = `
+    <div class="row battery-row"><strong>Drone ${target.id}</strong><span class="live-freshness ${freshness}">${freshness}</span></div>
+    <div class="row"><span>Age</span><strong>${age}</strong></div>
+    <div class="row"><span>Altitude</span><strong>${Number(latest.alt || 0).toFixed(1)} m</strong></div>
+    <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${speed.toFixed(1)} m/s` : "N/A"}</strong></div>
+    <div class="row"><span>Heading</span><strong>${Number(latest.heading || 0).toFixed(0)} deg</strong></div>
+    <div class="row"><span>CoG / Yaw</span><strong>${latest.courseOverGround !== null && latest.courseOverGround !== undefined ? Number(latest.courseOverGround).toFixed(0) : "N/A"} / ${latest.yaw !== null && latest.yaw !== undefined ? Number(latest.yaw).toFixed(0) : "N/A"}</strong></div>
+    <div class="row"><span>RSSI / SNR</span><strong>${latest.rssi !== null && latest.rssi !== undefined ? Number(latest.rssi).toFixed(0) : "N/A"} / ${latest.snr !== null && latest.snr !== undefined ? Number(latest.snr).toFixed(1) : "N/A"}</strong></div>
+    <div class="row"><span>Sats</span><strong>${latest.satelliteCount ?? "N/A"}</strong></div>
+    <div class="row"><span>Channel</span><strong>${freq}</strong></div>
+    <div class="row"><span>Seq</span><strong>${latest.sequenceId ?? "N/A"}</strong></div>
+  `;
+  el.onclick = null;
+}
+
 function updateTooltip() {
   if (!map) return;
   // If a relative menu (e.g., Goto WP) is open, keep the drone tooltip hidden.
@@ -2891,6 +3596,20 @@ function updateTooltip() {
       : target.getLatest && target.getLatest();
   if (!latest) {
     el.style.display = "none";
+    return;
+  }
+
+  if (LIVE_POSITION_MODE) {
+    if (target.team) {
+      el.style.display = "none";
+      return;
+    }
+    const pt = map.latLngToContainerPoint([latest.lat, latest.lng]);
+    el.style.left = `${pt.x + 14}px`;
+    el.style.top = `${pt.y - 10}px`;
+    el.style.display = "block";
+    tooltipMode = "info";
+    renderLiveTooltip(el, target, latest);
     return;
   }
 
@@ -3233,6 +3952,24 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  if (LIVE_POSITION_MODE) {
+    const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
+    if (nearest) {
+      if (pinnedDroneId === nearest.id) {
+        setPinnedDrone(null);
+        if (tooltipEl) tooltipEl.style.display = "none";
+      } else {
+        focusDroneById(nearest.id);
+      }
+    } else {
+      setPinnedDrone(null);
+      hoveredDroneId = null;
+      if (tooltipEl) tooltipEl.style.display = "none";
+      updateStatusList();
+      draw();
+    }
+    return;
+  }
   if (pendingEmptyMapClickTimer) {
     clearTimeout(pendingEmptyMapClickTimer);
     pendingEmptyMapClickTimer = null;
@@ -5308,6 +6045,7 @@ function attemptFollowMenuFromPoint(containerPoint) {
 }
 
 function handleContextMenu(e) {
+  if (LIVE_POSITION_MODE) return;
   e.originalEvent?.preventDefault?.();
   if (pendingUserHomePlacement) return;
   const point = e.containerPoint;
@@ -5335,6 +6073,7 @@ function handleContextMenu(e) {
 }
 
 function attemptActionLongPress(containerPoint) {
+  if (LIVE_POSITION_MODE) return;
   if (pendingUserHomePlacement) return;
   const hitWp = findNearestWaypoint(containerPoint, 16);
   const near = findNearestDrone(containerPoint, getHoverRadius());
@@ -6620,11 +7359,14 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   // Concave triangle (chevron/arrow) with a cheap, high-contrast outline.
   const isStale = options.isStale || false;
   const isLanded = options.isLanded || false;
+  const freshness = options.freshness || (isStale ? "stale" : "fresh");
 
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
-  if (isStale) ctx.globalAlpha = 0.45;
+  if (freshness === "offline") ctx.globalAlpha = 0.32;
+  else if (freshness === "stale") ctx.globalAlpha = 0.45;
+  else if (freshness === "late") ctx.globalAlpha = 0.72;
 
   const w = size * 1.2;
   const h = size * 1.4;
@@ -6665,7 +7407,13 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   path();
   ctx.stroke();
 
-  ctx.fillStyle = isStale ? "rgba(255, 180, 180, 0.82)" : isLanded ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.92)";
+  const liveFill =
+    freshness === "late"
+      ? "rgba(255, 211, 108, 0.88)"
+      : freshness === "stale" || freshness === "offline"
+        ? "rgba(255, 138, 138, 0.82)"
+        : null;
+  ctx.fillStyle = liveFill || (isStale ? "rgba(255, 180, 180, 0.82)" : isLanded ? "rgba(0,0,0,0.85)" : "rgba(255,255,255,0.92)");
   path();
   ctx.fill();
 
@@ -6855,6 +7603,30 @@ function drawWaypointPin(x, y, { active = false } = {}) {
   ctx.restore();
 }
 
+function drawLivePositionDrones(zoom) {
+  const droneSize = Math.max(7, Math.min(13, zoom * 0.82));
+  const now = Date.now();
+  drones.forEach((d) => {
+    const latest = d && typeof d.getLatest === "function" ? d.getLatest() : null;
+    if (!latest) return;
+    const p = latLngToScreen(latest.lat, latest.lng);
+    const freshness = getLiveFreshnessState(d, now);
+    const isHighlighted = pinnedDroneId !== null && d.id === pinnedDroneId;
+    if (isHighlighted) {
+      drawSelectionHighlight(p.x, p.y, droneSize, latest.heading || 0);
+    }
+    drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, {
+      freshness,
+      isStale: freshness === "stale" || freshness === "offline",
+      isLanded: false,
+    });
+    if (freshness !== "fresh") {
+      const age = d.getSecondsSinceLastUpdate(now);
+      if (age !== null) drawStaleLabel(p.x, p.y - droneSize * 1.25, age);
+    }
+  });
+}
+
 function draw() {
   if (!ctx || !map) return;
 
@@ -6889,6 +7661,12 @@ function draw() {
     drawGroundStationIcon(p.x, p.y, gsSize, { active: activeGroundStationId === gs.id });
     drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, gsSize);
   });
+
+  if (LIVE_POSITION_MODE) {
+    drawLivePositionDrones(zoom);
+    updateTooltip();
+    return;
+  }
 
   // Follow links (dashed line from follower to target)
   followTargets.forEach((targetId, followerId) => {
@@ -7149,6 +7927,7 @@ function draw() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  applyRuntimeModeUi();
   setTimestampNow();
   setInterval(setTimestampNow, 1000 * 15);
   updateVisualViewportVars();
@@ -7201,6 +7980,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   groundControl = new GroundControl();
   updateCommandSequencePanel();
+  initLivePositionUi();
 
   const addBtn = document.getElementById("sequenceAddBtn");
   if (addBtn) {
@@ -7230,9 +8010,15 @@ window.addEventListener("DOMContentLoaded", () => {
   updateCommandSequencePanel();
 
   initMapOnline();
-  makeMockSwarm();
   initGroundStations();
-  tryAddUserHomeFromDevice();
+  if (LIVE_POSITION_MODE) {
+    if (liveState.mockEnabled) {
+      startLivePositionMock();
+    }
+  } else {
+    makeMockSwarm();
+    tryAddUserHomeFromDevice();
+  }
   setupOverlay();
   setupHoverHandlers();
   updateStatusList();
@@ -7240,6 +8026,9 @@ window.addEventListener("DOMContentLoaded", () => {
     updateStatusList();
     updateCommandSequencePanel();
     updateTooltip();
+    renderLiveControls();
+    renderLiveGcStatus();
+    if (LIVE_POSITION_MODE) draw();
   }, 1000);
 
   // Draw once Leaflet has applied initial view & tiles; prevents initial misalignment.

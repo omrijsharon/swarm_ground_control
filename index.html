@@ -70,6 +70,27 @@
         <div class="panel-top panel-top-center">
           <button class="panel-title" type="button" aria-expanded="true">Drones</button>
         </div>
+        <section class="live-control-panel" id="liveControlPanel" aria-label="Live drone position controls">
+          <div class="live-control-header">
+            <div>
+              <div class="live-kicker">USB SERIAL</div>
+              <div class="live-state" id="liveSerialState">Disconnected</div>
+            </div>
+            <span class="live-state-dot" id="liveSerialDot" aria-hidden="true"></span>
+          </div>
+          <div class="live-control-grid">
+            <label class="live-field">
+              <span>Baud</span>
+              <input id="liveSerialBaud" type="number" min="1" step="1" value="115200" inputmode="numeric" />
+            </label>
+            <button class="live-btn live-btn-primary" id="liveSerialOpenBtn" type="button">Open</button>
+            <button class="live-btn" id="liveSerialCloseBtn" type="button" disabled>Close</button>
+            <button class="live-btn" id="liveMockToggleBtn" type="button">Mock On</button>
+          </div>
+          <div class="live-meta" id="liveSerialMeta">Last message: never</div>
+          <div class="live-debug" id="liveSerialDebug" aria-live="polite">Ready.</div>
+        </section>
+        <section class="live-gc-panel" id="liveGcStatus" aria-label="GC radio status"></section>
         <div class="status-list" id="statusList"></div>
       </div>
     </aside>
