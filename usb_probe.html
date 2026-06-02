@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SGC WebUSB Probe</title>
+  <link rel="stylesheet" href="./usb_probe.css" />
+  <script src="./usb_probe.js" defer></script>
+</head>
+<body>
+  <main class="probe-shell">
+    <header class="probe-header">
+      <div>
+        <p class="eyebrow">Swarm Ground Control</p>
+        <h1>WebUSB Probe</h1>
+      </div>
+      <nav class="links" aria-label="Probe links">
+        <a href="./serial_probe.html">Serial Probe</a>
+        <a href="./index.html">Map</a>
+      </nav>
+    </header>
+
+    <section class="status-band" aria-label="WebUSB status">
+      <div class="status-state">
+        <span class="state-dot" id="stateDot" aria-hidden="true"></span>
+        <div>
+          <div class="state-label" id="stateLabel">Checking support</div>
+          <div class="state-detail" id="stateDetail">Waiting for browser capability check.</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="requestEspressifBtn" type="button">Find ESP32</button>
+        <button id="requestAnyBtn" type="button">Find Any USB</button>
+        <button id="openDeviceBtn" type="button" disabled>Open</button>
+        <button id="closeDeviceBtn" type="button" disabled>Close</button>
+        <button id="clearLogBtn" type="button">Clear</button>
+      </div>
+    </section>
+
+    <section class="metrics-grid" aria-label="USB device metrics">
+      <div class="metric">
+        <span class="metric-label">Device</span>
+        <strong id="deviceName">None</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Vendor ID</span>
+        <strong id="vendorId">None</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Product ID</span>
+        <strong id="productId">None</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Opened</span>
+        <strong id="openedState">No</strong>
+      </div>
+    </section>
+
+    <section class="details-grid" aria-label="USB details">
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Device Info</h2>
+          <span id="infoStatus">Ready</span>
+        </div>
+        <pre id="deviceInfo" class="output"></pre>
+      </article>
+
+      <article class="panel">
+        <div class="panel-header">
+          <h2>Event Log</h2>
+          <span id="logStatus">Ready</span>
+        </div>
+        <pre id="eventLog" class="output"></pre>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
