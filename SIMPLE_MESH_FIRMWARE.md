@@ -212,6 +212,30 @@ Core follow-me behavior:
 
 Current caveat: although the code has `follow_mode_active` and `follow_target_node_id`, `updateNodeLocation()` currently updates FC home for any remote GPS sender, not only the configured follow target.
 
+Heading/yaw support already exists in the MSP helper:
+
+- MSP command: `MSP_ATTITUDE = 108`.
+- Data type: `msp_attitude_t` in `include/BetaflightMSP.h`.
+- Function: `bool BetaflightMSP::getAttitude(msp_attitude_t &data)` in `src/BetaflightMSP.cpp`.
+- Returned fields: `roll` and `pitch` are decidegrees; `yaw` is degrees.
+- `yaw` is the FC attitude heading/nose direction. For map arrows in SGC, this is usually the better heading source than GPS movement course when the FC reports it reliably.
+- `MSP_RAW_GPS.groundCourse` is still available through `getRawGPS()` as movement course over ground, and can be used as a fallback or compared against attitude yaw.
+
+Example use inside firmware code that already has a connected `BetaflightMSP` instance:
+
+```cpp
+msp_attitude_t attitude;
+if (msp.getAttitude(attitude)) {
+    int16_t headingDeg = attitude.yaw;
+    while (headingDeg < 0) {
+        headingDeg += 360;
+    }
+    headingDeg %= 360;
+
+    // Send headingDeg toward SGC as the drone's map heading.
+}
+```
+
 ## Ground Station Features
 
 Ground-station GPS is managed by `GroundStationGpsManager`.

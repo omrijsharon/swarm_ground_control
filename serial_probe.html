@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>SGC Serial Probe</title>
+  <link rel="stylesheet" href="./serial_probe.css" />
+  <script src="./serial_probe.js" defer></script>
+</head>
+<body>
+  <main class="probe-shell">
+    <header class="probe-header">
+      <div>
+        <p class="eyebrow">Swarm Ground Control</p>
+        <h1>USB Serial Probe</h1>
+      </div>
+      <a class="map-link" href="./index.html">Map</a>
+    </header>
+
+    <section class="connection-band" aria-label="Serial connection">
+      <div class="connection-state">
+        <span class="state-dot" id="stateDot" aria-hidden="true"></span>
+        <div>
+          <div class="state-label" id="stateLabel">Checking support</div>
+          <div class="state-detail" id="stateDetail">Waiting for browser capability check.</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <label class="baud-label" for="baudRate">Baud</label>
+        <input id="baudRate" class="baud-input" type="number" inputmode="numeric" min="300" step="1" value="115200" />
+        <label class="toggle-label" for="autoReconnect">
+          <input id="autoReconnect" type="checkbox" checked />
+          Auto reconnect
+        </label>
+        <button id="openPortBtn" type="button">Open Port</button>
+        <button id="closePortBtn" type="button" disabled>Close Port</button>
+      </div>
+    </section>
+
+    <section class="metrics-grid" aria-label="Serial metrics">
+      <div class="metric">
+        <span class="metric-label">Port</span>
+        <strong id="portInfo">None</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">JSON</span>
+        <strong id="jsonCount">0</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Raw</span>
+        <strong id="rawCount">0</strong>
+      </div>
+      <div class="metric">
+        <span class="metric-label">Last Line</span>
+        <strong id="lastLineAt">Never</strong>
+      </div>
+    </section>
+
+    <section class="test-band" aria-label="Parser tests">
+      <button id="injectTelemetryBtn" type="button">Telemetry JSON</button>
+      <button id="injectStatusBtn" type="button">GC Status JSON</button>
+      <button id="injectLogBtn" type="button">Firmware Log</button>
+      <button id="clearLogsBtn" type="button">Clear</button>
+    </section>
+
+    <section class="logs-grid" aria-label="Serial logs">
+      <article class="log-panel">
+        <div class="log-header">
+          <h2>Parsed JSON</h2>
+          <span id="jsonStatus">Ready</span>
+        </div>
+        <pre id="jsonLog" class="log-output" aria-live="polite"></pre>
+      </article>
+
+      <article class="log-panel">
+        <div class="log-header">
+          <h2>Raw / Non-JSON</h2>
+          <span id="rawStatus">Ready</span>
+        </div>
+        <pre id="rawLog" class="log-output" aria-live="polite"></pre>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
