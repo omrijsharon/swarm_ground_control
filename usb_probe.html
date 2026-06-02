@@ -74,6 +74,24 @@
         <pre id="eventLog" class="output"></pre>
       </article>
     </section>
+
+    <section class="console-panel" aria-label="WebUSB console">
+      <div class="panel-header">
+        <h2>WebUSB Console</h2>
+        <span id="consoleStatus">Not claimed</span>
+      </div>
+      <div class="console-controls">
+        <label for="interfaceSelect">Interface</label>
+        <select id="interfaceSelect"></select>
+        <label for="endpointSelect">IN endpoint</label>
+        <select id="endpointSelect"></select>
+        <button id="claimInterfaceBtn" type="button" disabled>Claim</button>
+        <button id="startReadBtn" type="button" disabled>Start Read</button>
+        <button id="stopReadBtn" type="button" disabled>Stop Read</button>
+        <button id="clearConsoleBtn" type="button">Clear Console</button>
+      </div>
+      <pre id="consoleOutput" class="console-output" aria-live="polite"></pre>
+    </section>
   </main>
 </body>
 </html>
