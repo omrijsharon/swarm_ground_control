@@ -76,19 +76,29 @@ The firmware has two runtime roles in this branch:
     - `COM18` reported one supported radio profile, default profile `0`, `telemetryAirtimeMs = 25.728`, `txPeriodMs = 27`, and `assignedDrones = 0` before join flow exists.
 
 - [ ] Milestone 6: Implement GC assignment persistence
-  - [ ] Store `node_id -> frequencyMhz/channelIndex` assignments in flash.
-  - [ ] Persist the assigned `radio_profile_id` with each channel assignment.
-  - [ ] Persist the assigned `tx_period_ms` or recompute it from `radio_profile_id` at boot.
-  - [ ] Reload assignments at boot.
-  - [ ] Validate reloaded channels against the clear channel scan.
-  - [ ] Validate reloaded profiles against the supported radio profile table.
+  - [x] Store `node_id -> frequencyMhz/channelIndex` assignments in flash.
+    - Persistence format stores `nodeId` and `channelIndex`; frequency is recomputed from the BW500 channel table.
+  - [x] Persist the assigned `radio_profile_id` with each channel assignment.
+  - [x] Persist the assigned `tx_period_ms` or recompute it from `radio_profile_id` at boot.
+    - TX period and airtime are recomputed at boot from `radio_profile_id`.
+  - [x] Reload assignments at boot.
+  - [x] Validate reloaded channels against the clear channel scan.
+    - Assignments on noisy, reserved, shared, guard, or invalid channels are dropped during boot load.
+  - [x] Validate reloaded profiles against the supported radio profile table.
   - [ ] Reassign drones if a persisted channel is now noisy.
+    - Current narrow slice drops invalid/noisy persisted assignments; automatic reassignment belongs with allocator/join handling.
   - [ ] Reassign drones if a persisted profile is no longer supported.
+    - Current narrow slice drops unsupported profiles; automatic reassignment belongs with allocator/join handling.
   - [ ] Allocate new channels by uniform random selection from the clear candidate set.
   - [ ] Choose the radio profile for each new assignment.
     - Start with profile `0` for all drones unless a later field test proves a need for per-drone profile variation.
-  - [ ] Avoid assigning the same channel to multiple active drones.
-  - [ ] Add a way to clear assignments during development.
+  - [x] Avoid assigning the same channel to multiple active drones.
+    - Duplicate persisted channels are dropped during boot load.
+  - [x] Add a way to clear assignments during development.
+    - `CLEAR_LIVE_ASSIGNMENTS_ON_BOOT=1` removes `/live_assignments.json` during GC boot.
+  - [x] Bench-verify assignment persistence load path on connected GC.
+    - With no file, GC logs `no persisted assignment file` and emits an empty `assignments` array.
+    - With a temporary `/live_assignments.json` containing node `2`, channel index `27`, profile `0`, GC loaded `1` assignment and emitted `frequencyMhz = 916`, `txPeriodMs = 27`, `telemetryAirtimeMs = 25.728`, and `persisted = true`.
 
 - [ ] Milestone 7: Implement drone join state machine
   - [ ] Drone starts on shared discovery channel.
