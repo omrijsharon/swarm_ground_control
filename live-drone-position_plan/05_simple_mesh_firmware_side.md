@@ -59,16 +59,21 @@ The firmware has two runtime roles in this branch:
     - `COM18` with `node_id = 0`, `node_role = ground_station` reported `42` clear channels, `6` noisy channels, `48` candidates, and emitted matching `channel_table` plus `gc_status.clearChannels = 42`.
 
 - [ ] Milestone 5: Implement per-drone radio profile and timing model
-  - [ ] Define a radio profile table that the GC can assign by `radio_profile_id`.
-  - [ ] Keep profile `0` as the default `SF8 / BW500 / CR4/5 / preamble 8`.
-  - [ ] Define which profile fields can vary in this branch: spreading factor, bandwidth, coding rate, preamble length, and airtime buffer.
-  - [ ] Keep SX1262 TX power fixed at `22 dBm`; do not assign per-drone TX power in v1.
-  - [ ] Calculate telemetry airtime per profile for the fixed 20-byte telemetry packet.
-  - [ ] Calculate per-profile TX period as `ceil(airtime_ms) + airtime_buffer_ms`.
-  - [ ] Store each assigned drone's `radio_profile_id`, airtime, and TX period in GC runtime state.
-  - [ ] Include `radio_profile_id` and `tx_period_ms` in `JOIN_ASSIGN`.
+  - [x] Define a radio profile table that the GC can assign by `radio_profile_id`.
+  - [x] Keep profile `0` as the default `SF8 / BW500 / CR4/5 / preamble 8`.
+  - [x] Define which profile fields can vary in this branch: spreading factor, bandwidth, coding rate, preamble length, and airtime buffer.
+  - [x] Keep SX1262 TX power fixed at `22 dBm`; do not assign per-drone TX power in v1.
+  - [x] Calculate telemetry airtime per profile for the fixed 20-byte telemetry packet.
+  - [x] Calculate per-profile TX period as `ceil(airtime_ms) + airtime_buffer_ms`.
+  - [x] Store each assigned drone's `radio_profile_id`, airtime, and TX period in GC runtime state.
+  - [x] Include `radio_profile_id` and `tx_period_ms` in `JOIN_ASSIGN`.
+    - Packet fields existed earlier; this slice adds a helper that builds `JOIN_ASSIGN` from GC assignment state.
   - [ ] Do not let a drone invent its own LoRa parameters after assignment; it must use the assigned profile.
-  - [ ] Report each drone's assigned profile and TX period in serial JSON where useful.
+    - This is enforced when the drone join state machine applies the assigned profile in Milestone 7.
+  - [x] Report each drone's assigned profile and TX period in serial JSON where useful.
+    - `channel_table.assignments[]` now supports `radioProfileId`, `txPeriodMs`, and `telemetryAirtimeMs`.
+  - [x] Bench-verify profile/timing JSON on connected GC.
+    - `COM18` reported one supported radio profile, default profile `0`, `telemetryAirtimeMs = 25.728`, `txPeriodMs = 27`, and `assignedDrones = 0` before join flow exists.
 
 - [ ] Milestone 6: Implement GC assignment persistence
   - [ ] Store `node_id -> frequencyMhz/channelIndex` assignments in flash.
