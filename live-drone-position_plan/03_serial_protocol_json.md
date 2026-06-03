@@ -39,6 +39,9 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `yaw`.
   - [x] Include `groundSpeed`.
   - [x] Include `satelliteCount`.
+  - [x] Include `gpsSource`.
+  - [x] Include `gpsSimulated`.
+  - [x] Include `gpsFixQuality`.
   - [x] Include `rssi`.
   - [x] Include `snr`.
   - [x] Include `frequencyMhz`.
@@ -48,7 +51,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":91.0,"headingSource":"course_over_ground","courseOverGround":91.0,"yaw":88.0,"groundSpeed":4.2,"satelliteCount":12,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON

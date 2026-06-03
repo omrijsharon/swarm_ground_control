@@ -98,7 +98,8 @@ Encoding rules:
   - [x] Reserve bit `2` for yaw validity.
   - [x] Reserve bit `3` for course-over-ground validity.
   - [x] Reserve bit `4` for speed validity.
-  - [x] Reserve bits `5-7` for future use.
+  - [x] Reserve bit `5` for simulated GPS fields.
+  - [x] Reserve bits `6-7` for future use.
   - [x] Define how invalid fields should be encoded.
 
 Telemetry flags:
@@ -112,12 +113,17 @@ bits 0-1   gps_fix_quality
 bit 2      yaw_valid
 bit 3      course_over_ground_valid
 bit 4      ground_speed_valid
-bits 5-7   reserved, must be 0 in v1
+bit 5      gps_simulated
+           0 = GPS fields come from FC GPS when gps_fix_quality is nonzero
+           1 = lat/lng/CoG/speed are simulated for bench map visibility
+bits 6-7   reserved, must be 0 in v1
 ```
 
 Invalid-field encoding:
 
-- If `gps_fix_quality == 0`, GC must ignore `lat_e7`, `lng_e7`, and `alt_cm`; drone should encode them as `0`.
+- If `gps_simulated == 1`, GC may display `lat_e7`, `lng_e7`, CoG, and speed for bench visibility, but must mark the serial JSON GPS source as simulated.
+- If `gps_fix_quality == 0` and `gps_simulated == 0`, GC must ignore `lat_e7`, `lng_e7`, CoG, and speed; drone should encode invalid GPS fields as `0` or the field-specific invalid sentinel.
+- `alt_cm` is independent of GPS fix quality because this branch uses `MSP_ALTITUDE` for altitude.
 - If CoG is invalid, clear bit 3 and encode `course_ddeg = 0xFFFF`.
 - If yaw is invalid, clear bit 2 and encode `yaw_deg = -32768`.
 - If speed is invalid, clear bit 4 and encode `ground_speed_cms = 0xFFFF`.

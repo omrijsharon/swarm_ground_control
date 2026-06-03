@@ -141,16 +141,26 @@ The firmware has two runtime roles in this branch:
 
 - [ ] Milestone 9: Implement drone MSP telemetry readout
   - [ ] Read GPS data using existing `BetaflightMSP::getRawGPS`.
+    - Code probes `getRawGPS` with a short timeout and reports `gpsReadOk`; bench run on node `2` currently reports `gpsReadOk=false`, as expected while GPS is inactive.
   - [ ] Read attitude using existing `BetaflightMSP::getAttitude`.
+    - Code probes `getAttitude` with a short timeout and reports `attitudeReadOk`; bench run on node `2` currently reports `attitudeReadOk=false`, so FC MSP wiring/baud/pins still need verification.
   - [ ] Extract latitude and longitude.
+    - Real GPS extraction is implemented for later valid GPS, but bench packets intentionally use simulated lat/lng while GPS is inactive.
   - [ ] Extract altitude.
-  - [ ] Extract GPS course over ground.
-  - [ ] Extract ground speed.
-  - [ ] Extract satellite count.
+    - Code probes `getAltitude` and uses `MSP_ALTITUDE` for `alt_cm` when available; bench run currently reports `altitudeReadOk=false`.
+  - [x] Extract GPS course over ground.
+    - Real CoG is used when FC GPS is valid; simulated CoG is used only while `GPS_SIMULATED` is set.
+  - [x] Extract ground speed.
+    - Real GPS speed is used when FC GPS is valid; simulated speed is used only while `GPS_SIMULATED` is set.
+  - [x] Extract satellite count.
+    - Satellite count comes from `MSP_RAW_GPS` when a GPS response is available; otherwise it is `0`.
   - [ ] Extract yaw.
-  - [ ] Set telemetry validity flags.
-  - [ ] Increment sequence ID for every telemetry packet.
-  - [ ] Pack the 20-byte telemetry packet.
+    - Code path is implemented, but bench MSP attitude reads are not yet succeeding.
+  - [x] Set telemetry validity flags.
+    - Adds `GPS_SIMULATED`; sets yaw/course/speed flags according to available fields.
+  - [x] Increment sequence ID for every telemetry packet.
+  - [x] Pack the 20-byte telemetry packet.
+    - Packet layout remains unchanged at 20 bytes.
 
 - [ ] Milestone 10: Implement drone telemetry TX loop
   - [x] Apply the assigned radio profile before starting assigned-channel telemetry.
@@ -159,12 +169,14 @@ The firmware has two runtime roles in this branch:
   - [x] Locally compute telemetry airtime from the assigned LoRa settings for diagnostics and sanity checks.
   - [x] Confirm computed `ceil(airtime_ms) + airtime_buffer_ms` matches the assigned TX period.
   - [x] Transmit telemetry on the assigned channel.
-    - This slice transmits fake telemetry because the connected FC GPS is inactive.
+    - This slice transmits mixed telemetry: real FC yaw/altitude when MSP reads succeed, simulated GPS fields while FC GPS is inactive.
   - [x] Schedule the next transmission from the previous transmission start time.
   - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
   - [ ] Keep timing stable enough for GC phase tracking.
-  - [ ] Handle missed MSP reads without crashing.
-  - [ ] Encode invalid telemetry fields consistently.
+  - [x] Handle missed MSP reads without crashing.
+    - Bench run continued transmitting while MSP attitude/altitude/GPS reads reported false.
+  - [x] Encode invalid telemetry fields consistently.
+    - Missing yaw uses `INVALID_YAW_DEG`; missing GPS response uses satellite count `0`; simulated GPS is marked with `GPS_SIMULATED`.
 
 - [ ] Milestone 11: Implement GC assigned-channel scanner
   - [ ] Maintain one scan state per assigned drone.
@@ -199,13 +211,16 @@ The firmware has two runtime roles in this branch:
   - [ ] Estimate yaw bias from `CoG - yaw` when speed is above threshold and GPS quality is good.
   - [ ] Update yaw bias slowly rather than replacing it from one sample.
   - [ ] Avoid bias updates during obvious unstable movement if detectable.
-  - [ ] Emit raw CoG, raw yaw, derived heading, and heading source in serial JSON.
+  - [x] Emit raw CoG, raw yaw, derived heading, and heading source in serial JSON.
+    - Current narrow behavior uses CoG only for real GPS packets; simulated GPS packets use yaw when yaw is valid, otherwise `headingSource = unknown`.
 
 - [ ] Milestone 13: Implement GC serial JSON output
   - [x] Emit `drone_telemetry` on every valid received telemetry packet.
     - Physical test confirmed GC emits newline-delimited `drone_telemetry` JSON for node `2`.
   - [x] Emit RSSI/SNR measured by the GC receiver.
   - [x] Emit assigned frequency in MHz.
+  - [x] Emit GPS source fields.
+    - `drone_telemetry` now includes `gpsSource`, `gpsSimulated`, and `gpsFixQuality`.
   - [ ] Emit assigned `radio_profile_id`.
   - [ ] Emit assigned `txPeriodMs` and telemetry airtime where useful for debugging.
   - [x] Emit sequence ID.
@@ -223,12 +238,14 @@ The firmware has two runtime roles in this branch:
   - [ ] Unit-check profile-to-TX-period calculations.
   - [x] Bench-test join flow with one drone.
     - Physical test passed with GC `COM18` and drone node `2` on `COM15`. GC saw request/assign/ACK; drone accepted assignment and switched to `922.5 MHz`.
-  - [x] Bench-test one-drone fake telemetry receive.
+  - [x] Bench-test one-drone fake/mixed telemetry receive.
     - GC received valid 20-byte telemetry from drone node `2` and emitted parsed serial JSON with incrementing `sequenceId`, RSSI/SNR, and assigned frequency.
+    - After the FC-telemetry slice, GC serial capture confirmed mixed telemetry still flows with `gpsSource = simulated`, `gpsSimulated = true`, and `gpsFixQuality = 0`.
   - [ ] Bench-test assignment persistence after GC reboot.
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
   - [ ] Bench-test GC scanner ordering with simulated per-drone next transmit times.
   - [ ] Bench-test MSP telemetry packing with known values.
+    - Bench test confirmed `drone_fc_status` and simulated-GPS telemetry continue flowing, but MSP attitude/altitude reads currently fail on node `2`; verify FC MSP wiring/baud/pins before marking this complete.
   - [ ] Field-test one drone at close range.
   - [ ] Field-test five drones at close range.
   - [ ] Field-test expected `0.5-2 km` range.

@@ -859,6 +859,9 @@ class Drone {
       yaw: packet.yaw ?? null,
       groundSpeed: packet.groundSpeed ?? packet.ground_speed ?? null,
       satelliteCount: packet.satelliteCount ?? packet.satellite_count ?? null,
+      gpsSource: packet.gpsSource ?? packet.gps_source ?? null,
+      gpsSimulated: packet.gpsSimulated ?? packet.gps_simulated ?? false,
+      gpsFixQuality: packet.gpsFixQuality ?? packet.gps_fix_quality ?? null,
       snr: packet.snr ?? null,
       frequencyMhz: packet.frequencyMhz ?? packet.frequency_mhz ?? null,
       sequenceId: packet.sequenceId ?? packet.sequence_id ?? null,
@@ -2818,6 +2821,13 @@ function getLiveAssignedDebug(status = {}, table = {}) {
   };
 }
 
+function formatGpsSourceLabel(latest = {}) {
+  if (latest.gpsSimulated) return "GPS SIM";
+  if (latest.gpsSource === "fc_gps") return "GPS FC";
+  if (latest.gpsSource === "none") return "GPS NONE";
+  return latest.gpsSource ? String(latest.gpsSource).toUpperCase() : "N/A";
+}
+
 function renderLiveGcStatus() {
   const host = document.getElementById("liveGcStatus");
   if (!host) return;
@@ -3001,6 +3011,9 @@ function applyLiveTelemetry(message, source = "serial") {
       yaw: message.yaw,
       groundSpeed: message.groundSpeed,
       satelliteCount: message.satelliteCount,
+      gpsSource: message.gpsSource,
+      gpsSimulated: message.gpsSimulated,
+      gpsFixQuality: message.gpsFixQuality,
       rssi: message.rssi,
       snr: message.snr,
       frequencyMhz: message.frequencyMhz,
@@ -3375,6 +3388,7 @@ function renderLiveStatusList() {
       ["RSSI", latest.rssi !== null && latest.rssi !== undefined ? `${Number(latest.rssi).toFixed(0)} dBm` : "N/A"],
       ["SNR", latest.snr !== null && latest.snr !== undefined ? `${Number(latest.snr).toFixed(1)} dB` : "N/A"],
       ["Sats", latest.satelliteCount !== null && latest.satelliteCount !== undefined ? String(latest.satelliteCount) : "N/A"],
+      ["GPS", formatGpsSourceLabel(latest)],
     ];
     fields.forEach(([name, value]) => {
       const item = document.createElement("div");
@@ -3660,6 +3674,7 @@ function renderLiveTooltip(el, target, latest) {
     <div class="row"><span>Heading</span><strong>${Number(latest.heading || 0).toFixed(0)} deg</strong></div>
     <div class="row"><span>CoG / Yaw</span><strong>${latest.courseOverGround !== null && latest.courseOverGround !== undefined ? Number(latest.courseOverGround).toFixed(0) : "N/A"} / ${latest.yaw !== null && latest.yaw !== undefined ? Number(latest.yaw).toFixed(0) : "N/A"}</strong></div>
     <div class="row"><span>RSSI / SNR</span><strong>${latest.rssi !== null && latest.rssi !== undefined ? Number(latest.rssi).toFixed(0) : "N/A"} / ${latest.snr !== null && latest.snr !== undefined ? Number(latest.snr).toFixed(1) : "N/A"}</strong></div>
+    <div class="row"><span>GPS</span><strong>${formatGpsSourceLabel(latest)}</strong></div>
     <div class="row"><span>Sats</span><strong>${latest.satelliteCount ?? "N/A"}</strong></div>
     <div class="row"><span>Channel</span><strong>${freq}</strong></div>
     <div class="row"><span>Seq</span><strong>${latest.sequenceId ?? "N/A"}</strong></div>
