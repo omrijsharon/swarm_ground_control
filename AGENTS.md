@@ -174,9 +174,9 @@ Live mode should:
 Freshness thresholds:
 
 ```text
-fresh:   < 500 ms
-late:    500-1500 ms
-stale:   1500-5000 ms
+fresh:   < 1000 ms
+late:    1000-2000 ms
+stale:   2000-5000 ms
 offline: > 5000 ms
 ```
 

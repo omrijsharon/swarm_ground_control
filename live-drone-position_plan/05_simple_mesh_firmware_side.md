@@ -10,33 +10,37 @@ The firmware has two runtime roles in this branch:
 ## Milestones And Tasks
 
 - [ ] Milestone 1: Add branch-specific firmware mode
-  - [ ] Decide whether to add a compile flag or runtime config for live-position protocol.
-  - [ ] Keep existing simple-mesh behavior available until the new protocol is proven.
+  - [x] Decide whether to add a compile flag or runtime config for live-position protocol.
+    - Current first slice uses `ENABLE_LIVE_POSITION_PROTOCOL`.
+  - [x] Keep existing simple-mesh behavior available until the new protocol is proven.
+    - Current first slice only adds definitions and boot diagnostics; it does not replace the existing mesh runtime.
   - [ ] Define GC role behavior for `node_id = 0`.
   - [ ] Define drone role behavior for nonzero node IDs.
   - [ ] Ensure old flood-mesh fields are not used in the new air protocol.
 
 - [ ] Milestone 2: Implement binary packet definitions
-  - [ ] Define packet type IDs for shared-channel control packets.
-  - [ ] Define `JOIN_REQUEST` struct.
-  - [ ] Define `SILENCE` struct.
-  - [ ] Define `JOIN_ASSIGN` struct.
-  - [ ] Define `JOIN_ACK` struct.
-  - [ ] Define 20-byte telemetry struct.
-  - [ ] Add compile-time size checks for every packet struct.
-  - [ ] Define endian/scaling rules in comments next to the structs.
+  - [x] Define packet type IDs for shared-channel control packets.
+  - [x] Define `JOIN_REQUEST` struct.
+  - [x] Define `SILENCE` struct.
+  - [x] Define `JOIN_ASSIGN` struct.
+  - [x] Define `JOIN_ACK` struct.
+  - [x] Define 20-byte telemetry struct.
+  - [x] Add compile-time size checks for every packet struct.
+  - [x] Define endian/scaling rules in comments next to the structs.
   - [ ] Enable LoRa PHY CRC.
-  - [ ] Do not add a second payload CRC in v1.
+    - Default live-position radio profile declares PHY CRC enabled; actual RadioLib configuration is still future work.
+  - [x] Do not add a second payload CRC in v1.
 
 - [ ] Milestone 3: Add configurable radio profile
-  - [ ] Store spreading factor.
-  - [ ] Store bandwidth.
-  - [ ] Store coding rate.
-  - [ ] Store preamble length.
-  - [ ] Store airtime buffer milliseconds.
-  - [ ] Keep SX1262 TX power fixed at `22 dBm`.
-  - [ ] Default to `SF8 / BW500 / CR4/5 / preamble 8`.
-  - [ ] Compute airtime for control and telemetry packet sizes.
+  - [x] Store spreading factor.
+  - [x] Store bandwidth.
+  - [x] Store coding rate.
+  - [x] Store preamble length.
+  - [x] Store airtime buffer milliseconds.
+  - [x] Keep SX1262 TX power fixed at `22 dBm`.
+  - [x] Default to `SF8 / BW500 / CR4/5 / preamble 8`.
+  - [x] Compute airtime for control and telemetry packet sizes.
+  - [x] Print boot diagnostics for packet sizes, active radio profile, airtime, and TX period.
   - [ ] Expose active profile in GC serial JSON.
 
 - [ ] Milestone 4: Implement channel table and boot scan on GC
@@ -134,7 +138,7 @@ The firmware has two runtime roles in this branch:
   - [ ] Keep JSON minified and newline-delimited.
 
 - [ ] Milestone 13: Add firmware tests and field checks
-  - [ ] Unit-check packet struct sizes.
+  - [x] Unit-check packet struct sizes.
   - [ ] Bench-test join flow with one drone.
   - [ ] Bench-test assignment persistence after GC reboot.
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
