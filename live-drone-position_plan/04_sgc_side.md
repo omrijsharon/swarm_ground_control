@@ -132,5 +132,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - Existing C2 prototype code remains in `script.js`, but the left command sequence panel is hidden in live mode.
 - The right panel now owns USB serial controls, GC/radio status, and live drone status.
 - When real serial `drone_telemetry` arrives, live mock drones are cleared so hardware telemetry owns the map.
+- Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
+- The GC status panel includes an `Assigned debug` line showing the source used for the `Assigned` value.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.
 - Browser visual verification could not be completed in this session because the in-app browser backend was unavailable.

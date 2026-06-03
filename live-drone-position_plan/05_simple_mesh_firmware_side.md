@@ -9,14 +9,17 @@ The firmware has two runtime roles in this branch:
 
 ## Milestones And Tasks
 
-- [ ] Milestone 1: Add branch-specific firmware mode
+- [x] Milestone 1: Add branch-specific firmware mode
   - [x] Decide whether to add a compile flag or runtime config for live-position protocol.
     - Current first slice uses `ENABLE_LIVE_POSITION_PROTOCOL`.
   - [x] Keep existing simple-mesh behavior available until the new protocol is proven.
     - Current first slice only adds definitions and boot diagnostics; it does not replace the existing mesh runtime.
-  - [ ] Define GC role behavior for `node_id = 0`.
-  - [ ] Define drone role behavior for nonzero node IDs.
-  - [ ] Ensure old flood-mesh fields are not used in the new air protocol.
+  - [x] Define GC role behavior for `node_id = 0`.
+    - GC live mode owns boot scan, assignment persistence, shared-channel join handling, and serial JSON events.
+  - [x] Define drone role behavior for nonzero node IDs.
+    - Drone live mode starts on the shared channel, requests assignment, ACKs the GC, switches to the assigned channel, and sends fake 20-byte telemetry for this slice.
+  - [x] Ensure old flood-mesh fields are not used in the new air protocol.
+    - Live GC and live drone roles use raw type-specific packets; the legacy mesh loop and legacy GPS/test TX paths are skipped in live-position mode.
 
 - [x] Milestone 2: Implement binary packet definitions
   - [x] Define packet type IDs for shared-channel control packets.
@@ -58,7 +61,7 @@ The firmware has two runtime roles in this branch:
   - [x] Bench-verify GC boot scan on connected ESP32.
     - `COM18` with `node_id = 0`, `node_role = ground_station` reported `42` clear channels, `6` noisy channels, `48` candidates, and emitted matching `channel_table` plus `gc_status.clearChannels = 42`.
 
-- [ ] Milestone 5: Implement per-drone radio profile and timing model
+- [x] Milestone 5: Implement per-drone radio profile and timing model
   - [x] Define a radio profile table that the GC can assign by `radio_profile_id`.
   - [x] Keep profile `0` as the default `SF8 / BW500 / CR4/5 / preamble 8`.
   - [x] Define which profile fields can vary in this branch: spreading factor, bandwidth, coding rate, preamble length, and airtime buffer.
@@ -68,8 +71,8 @@ The firmware has two runtime roles in this branch:
   - [x] Store each assigned drone's `radio_profile_id`, airtime, and TX period in GC runtime state.
   - [x] Include `radio_profile_id` and `tx_period_ms` in `JOIN_ASSIGN`.
     - Packet fields existed earlier; this slice adds a helper that builds `JOIN_ASSIGN` from GC assignment state.
-  - [ ] Do not let a drone invent its own LoRa parameters after assignment; it must use the assigned profile.
-    - This is enforced when the drone join state machine applies the assigned profile in Milestone 7.
+  - [x] Do not let a drone invent its own LoRa parameters after assignment; it must use the assigned profile.
+    - Drone join validation rejects unsupported `radio_profile_id` values and rejects a `tx_period_ms` that does not match the assigned profile's computed period.
   - [x] Report each drone's assigned profile and TX period in serial JSON where useful.
     - `channel_table.assignments[]` now supports `radioProfileId`, `txPeriodMs`, and `telemetryAirtimeMs`.
   - [x] Bench-verify profile/timing JSON on connected GC.
@@ -102,19 +105,24 @@ The firmware has two runtime roles in this branch:
     - With a temporary `/live_assignments.json` containing node `2`, channel index `27`, profile `0`, GC loaded `1` assignment and emitted `frequencyMhz = 916`, `txPeriodMs = 27`, `telemetryAirtimeMs = 25.728`, and `persisted = true`.
 
 - [ ] Milestone 7: Implement drone join state machine
-  - [ ] Drone starts on shared discovery channel.
-  - [ ] Drone waits random `25-250 ms` before requesting assignment.
-  - [ ] Drone performs LBT before sending `JOIN_REQUEST`.
-  - [ ] Drone includes node ID and nonce in `JOIN_REQUEST`.
-  - [ ] Drone obeys `SILENCE` messages for the specified duration.
-  - [ ] Drone accepts `JOIN_ASSIGN` only when node ID and nonce match.
-  - [ ] Drone extracts assigned `channel_index`, `radio_profile_id`, and `tx_period_ms` from `JOIN_ASSIGN`.
-  - [ ] Drone sends `JOIN_ACK`.
-  - [ ] Drone switches to the assigned telemetry channel and radio profile after ACK.
+  - [x] Drone starts on shared discovery channel.
+    - Non-GC live nodes call the drone join runtime and tune to `915.0 MHz` at boot.
+  - [x] Drone waits random `25-250 ms` before requesting assignment.
+  - [x] Drone performs LBT before sending `JOIN_REQUEST`.
+  - [x] Drone includes node ID and nonce in `JOIN_REQUEST`.
+  - [x] Drone obeys `SILENCE` messages for the specified duration.
+  - [x] Drone accepts `JOIN_ASSIGN` only when node ID and nonce match.
+  - [x] Drone extracts assigned `channel_index`, `radio_profile_id`, and `tx_period_ms` from `JOIN_ASSIGN`.
+  - [x] Drone sends `JOIN_ACK`.
+  - [x] Drone switches to the assigned telemetry channel and radio profile after ACK.
+  - [x] Drone accelerates retry after another drone completes assignment.
+    - If a waiting drone hears `JOIN_ASSIGN` for another node, it remembers that node/nonce/channel. When it later hears the matching `JOIN_ACK`, it immediately schedules a fresh random join backoff instead of waiting for the full assignment timeout.
   - [ ] Drone returns to join mode if assignment expires or radio config changes.
+    - Assignment lease expiry returns to join mode; explicit radio config-change detection is still future work.
 
 - [ ] Milestone 8: Implement GC shared-channel join handling
-  - [ ] GC periodically returns to shared channel.
+  - [x] GC periodically returns to shared channel.
+    - Current narrow scanner alternates a shared-channel listen window with the first active assigned drone channel.
   - [x] GC receives `JOIN_REQUEST`.
     - Basic handler consumes live raw packets on the shared channel in GC mode.
   - [x] GC sends `SILENCE`.
@@ -125,9 +133,11 @@ The firmware has two runtime roles in this branch:
     - Current implementation waits once for up to `80 ms`.
   - [ ] GC repeats `SILENCE -> JOIN_ASSIGN -> ACK wait` if ACK is missed.
   - [ ] GC marks assignment active only after receiving telemetry on the assigned channel.
+    - Current implementation reuses persisted assignments before telemetry is received; received telemetry updates timing/RSSI/SNR state, but explicit "active after telemetry" semantics are still future work.
   - [x] GC emits assignment events over serial JSON.
   - [x] Bench-verify GC live join handler boot path.
-    - `COM18` GC build boots with raw live join handler enabled, emits `channel_table`, reports `assignedDrones = 0`, and disables legacy GS mesh GPS TX. A real one-drone join exchange is still pending drone-side join implementation.
+    - `COM18` GC build boots with raw live join handler enabled, emits `channel_table`, and disables legacy GS mesh GPS TX.
+    - Physical two-board test passed with GC on `COM18` and drone node `2` on `COM15`: GC received `JOIN_REQUEST`, reused persisted assignment at `922.5 MHz`, sent `SILENCE`, sent `JOIN_ASSIGN`, and received `JOIN_ACK`.
 
 - [ ] Milestone 9: Implement drone MSP telemetry readout
   - [ ] Read GPS data using existing `BetaflightMSP::getRawGPS`.
@@ -143,35 +153,44 @@ The firmware has two runtime roles in this branch:
   - [ ] Pack the 20-byte telemetry packet.
 
 - [ ] Milestone 10: Implement drone telemetry TX loop
-  - [ ] Apply the assigned radio profile before starting assigned-channel telemetry.
-  - [ ] Use the assigned `tx_period_ms` from `JOIN_ASSIGN`.
-  - [ ] Locally compute telemetry airtime from the assigned LoRa settings for diagnostics and sanity checks.
-  - [ ] Confirm computed `ceil(airtime_ms) + airtime_buffer_ms` matches the assigned TX period.
-  - [ ] Transmit telemetry on the assigned channel.
-  - [ ] Schedule the next transmission from the previous transmission start time.
-  - [ ] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
+  - [x] Apply the assigned radio profile before starting assigned-channel telemetry.
+    - Current supported profile table has only profile `0`; the drone validates this profile and switches to the assigned channel.
+  - [x] Use the assigned `tx_period_ms` from `JOIN_ASSIGN`.
+  - [x] Locally compute telemetry airtime from the assigned LoRa settings for diagnostics and sanity checks.
+  - [x] Confirm computed `ceil(airtime_ms) + airtime_buffer_ms` matches the assigned TX period.
+  - [x] Transmit telemetry on the assigned channel.
+    - This slice transmits fake telemetry because the connected FC GPS is inactive.
+  - [x] Schedule the next transmission from the previous transmission start time.
+  - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
   - [ ] Keep timing stable enough for GC phase tracking.
   - [ ] Handle missed MSP reads without crashing.
   - [ ] Encode invalid telemetry fields consistently.
 
 - [ ] Milestone 11: Implement GC assigned-channel scanner
   - [ ] Maintain one scan state per assigned drone.
-  - [ ] Store per-drone channel index, frequency, radio profile, airtime, TX period, last RX done time, estimated TX start time, next predicted TX start time, miss count, RSSI/SNR, and last sequence ID.
-  - [ ] Change GC LoRa frequency and radio parameters before listening to each drone.
-  - [ ] Tune to each assigned channel using that drone's assigned radio profile.
-  - [ ] Receive a valid telemetry packet.
-  - [ ] Record RSSI and SNR for the received packet.
-  - [ ] Estimate packet start time as `rx_done_time - assigned_profile_airtime_ms`.
-  - [ ] Predict the next transmission start time as `estimated_tx_start + tx_period_ms`.
+    - Narrow first-active-assignment scanner is implemented; full per-drone scanner state is still future work.
+  - [x] Store per-drone channel index, frequency, radio profile, airtime, TX period, last RX done time, estimated TX start time, next predicted TX start time, miss count, RSSI/SNR, and last sequence ID.
+    - Runtime receive fields are updated after valid telemetry is received.
+  - [x] Change GC LoRa frequency and radio parameters before listening to each drone.
+    - Current scanner switches frequency between `915.0 MHz` shared channel and the first active assigned channel; only radio profile `0` is currently supported.
+  - [x] Tune to each assigned channel using that drone's assigned radio profile.
+    - Current scanner tunes to the first active assigned channel with profile `0`.
+  - [x] Receive a valid telemetry packet.
+    - Physical test received valid 20-byte fake telemetry from drone node `2`.
+  - [x] Record RSSI and SNR for the received packet.
+  - [x] Estimate packet start time as `rx_done_time - assigned_profile_airtime_ms`.
+  - [x] Predict the next transmission start time as `estimated_tx_start + tx_period_ms`.
   - [ ] Sort assigned drones by nearest predicted listen deadline before every scan pass.
   - [ ] Tune before predicted packet start by a guard interval.
   - [ ] Use an efficient scheduler that listens to the drone with the earliest useful receive window first.
   - [ ] If a predicted receive window is already missed, skip to the next future slot instead of waiting through stale time.
-  - [ ] Correct timing phase on every received packet.
+  - [x] Correct timing phase on every received packet.
+    - The narrow scanner updates estimated and next TX start from each valid packet.
   - [ ] Use longer listen windows after missed packets.
   - [ ] After one miss, listen for up to `2 * tx_period_ms`; after two or more misses, listen for up to `3 * tx_period_ms`.
-  - [ ] Keep the shared discovery channel in the schedule so new drones can join.
-  - [ ] Cycle back to the shared channel regularly for new drones.
+  - [x] Keep the shared discovery channel in the schedule so new drones can join.
+  - [x] Cycle back to the shared channel regularly for new drones.
+    - Current narrow scanner uses fixed listen windows: shared channel for `120 ms`, assigned channel for `160 ms`.
 
 - [ ] Milestone 12: Implement GC heading fusion
   - [ ] Use course over ground when speed is reliable.
@@ -183,23 +202,29 @@ The firmware has two runtime roles in this branch:
   - [ ] Emit raw CoG, raw yaw, derived heading, and heading source in serial JSON.
 
 - [ ] Milestone 13: Implement GC serial JSON output
-  - [ ] Emit `drone_telemetry` on every valid received telemetry packet.
-  - [ ] Emit RSSI/SNR measured by the GC receiver.
-  - [ ] Emit assigned frequency in MHz.
+  - [x] Emit `drone_telemetry` on every valid received telemetry packet.
+    - Physical test confirmed GC emits newline-delimited `drone_telemetry` JSON for node `2`.
+  - [x] Emit RSSI/SNR measured by the GC receiver.
+  - [x] Emit assigned frequency in MHz.
   - [ ] Emit assigned `radio_profile_id`.
   - [ ] Emit assigned `txPeriodMs` and telemetry airtime where useful for debugging.
-  - [ ] Emit sequence ID.
-  - [ ] Emit assignment events.
+  - [x] Emit sequence ID.
+  - [x] Emit assignment events.
   - [ ] Emit GC status.
   - [ ] Emit channel table on request and after boot scan.
     - Boot-scan emission is implemented; command/request handling is still future work.
-  - [ ] Keep JSON minified and newline-delimited.
+  - [x] Keep JSON minified and newline-delimited.
 
 - [ ] Milestone 14: Add firmware tests and field checks
   - [x] Unit-check packet struct sizes.
+  - [x] Build-check drone join and fake telemetry slice.
+    - `pio run -e seeed-xiao-s3` passes after adding the drone join runtime and fake telemetry TX loop.
   - [ ] Unit-check airtime calculations for every supported radio profile.
   - [ ] Unit-check profile-to-TX-period calculations.
-  - [ ] Bench-test join flow with one drone.
+  - [x] Bench-test join flow with one drone.
+    - Physical test passed with GC `COM18` and drone node `2` on `COM15`. GC saw request/assign/ACK; drone accepted assignment and switched to `922.5 MHz`.
+  - [x] Bench-test one-drone fake telemetry receive.
+    - GC received valid 20-byte telemetry from drone node `2` and emitted parsed serial JSON with incrementing `sequenceId`, RSSI/SNR, and assigned frequency.
   - [ ] Bench-test assignment persistence after GC reboot.
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
   - [ ] Bench-test GC scanner ordering with simulated per-drone next transmit times.

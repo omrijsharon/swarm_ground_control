@@ -12,6 +12,10 @@ const CONFIG = {
   // How long (in seconds) without a packet before marking link stale.
   LINK_STALE_THRESHOLD_SEC: 3,
 
+  // Live-position branch defaults.
+  LIVE_POSITION_MOCK_DEFAULT: false,
+  LIVE_POSITION_AUTO_CONNECT: true,
+
   // --- Selection glow tuning ---
   SELECTION_SHAPE_W_SCALE: 1.4, // multiplier for chevron width vs base size
   SELECTION_SHAPE_H_SCALE: 1.7, // multiplier for chevron height vs base size

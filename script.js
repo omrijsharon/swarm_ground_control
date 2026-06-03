@@ -28,7 +28,8 @@ const SETTINGS = {
 
 const APP_MODE = cfg("APP_MODE", "live-position");
 const LIVE_POSITION_MODE = APP_MODE === "live-position";
-const LIVE_POSITION_MOCK_DEFAULT = cfg("LIVE_POSITION_MOCK_DEFAULT", true);
+const LIVE_POSITION_MOCK_DEFAULT = cfg("LIVE_POSITION_MOCK_DEFAULT", false);
+const LIVE_POSITION_AUTO_CONNECT = cfg("LIVE_POSITION_AUTO_CONNECT", true);
 const LIVE_FRESHNESS_MS = {
   fresh: 1000,
   late: 2000,
@@ -2767,17 +2768,68 @@ function describeLiveSerialPort(port) {
   return parts.length ? parts.join(" / ") : "Selected";
 }
 
+function getLiveSerialDroneCount() {
+  return drones.filter((drone) => drone.type === "live").length;
+}
+
+function getLiveAssignedDebug(status = {}, table = {}) {
+  const tableAssignments = Array.isArray(table.assignments) ? table.assignments.length : null;
+  const statusAssigned = Number.isFinite(Number(status.assignedDrones)) ? Number(status.assignedDrones) : null;
+  const liveSerialDrones = getLiveSerialDroneCount();
+  const allDrones = drones.length;
+
+  if (liveState.serialTelemetrySeen) {
+    return {
+      count: liveSerialDrones,
+      source: "serial-live-drones",
+      liveSerialDrones,
+      allDrones,
+      tableAssignments,
+      statusAssigned,
+    };
+  }
+  if (tableAssignments !== null) {
+    return {
+      count: tableAssignments,
+      source: "channel-table",
+      liveSerialDrones,
+      allDrones,
+      tableAssignments,
+      statusAssigned,
+    };
+  }
+  if (statusAssigned !== null) {
+    return {
+      count: statusAssigned,
+      source: "gc-status",
+      liveSerialDrones,
+      allDrones,
+      tableAssignments,
+      statusAssigned,
+    };
+  }
+  return {
+    count: allDrones,
+    source: "local-drones",
+    liveSerialDrones,
+    allDrones,
+    tableAssignments,
+    statusAssigned,
+  };
+}
+
 function renderLiveGcStatus() {
   const host = document.getElementById("liveGcStatus");
   if (!host) return;
   host.innerHTML = "";
   const status = liveState.gcStatus || {};
   const table = liveState.channelTable || {};
+  const assignedDebug = getLiveAssignedDebug(status, table);
   const noisy = Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz.length : 0;
-  const clear = Number.isFinite(Number(status.clearChannels))
-    ? Number(status.clearChannels)
-    : Array.isArray(table.clearFrequencyMhz)
+  const clear = Array.isArray(table.clearFrequencyMhz)
       ? table.clearFrequencyMhz.length
+      : Number.isFinite(Number(status.clearChannels))
+        ? Number(status.clearChannels)
       : null;
   const buffer =
     Number.isFinite(Number(status.txPeriodMs)) && Number.isFinite(Number(status.telemetryAirtimeMs))
@@ -2790,7 +2842,7 @@ function renderLiveGcStatus() {
     ["TX Power", status.txPowerDbm !== undefined ? `${status.txPowerDbm} dBm` : "22 dBm"],
     ["Airtime", status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A"],
     ["Buffer", buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A"],
-    ["Assigned", status.assignedDrones !== undefined ? String(status.assignedDrones) : String(drones.length)],
+    ["Assigned", Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A"],
     ["Channels", clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A"],
   ];
 
@@ -2810,6 +2862,15 @@ function renderLiveGcStatus() {
     grid.appendChild(item);
   });
   host.appendChild(grid);
+
+  const debugEl = document.createElement("div");
+  debugEl.className = "live-meta";
+  debugEl.textContent =
+    `Assigned debug: ${assignedDebug.source}; ` +
+    `live=${assignedDebug.liveSerialDrones}; all=${assignedDebug.allDrones}; ` +
+    `table=${assignedDebug.tableAssignments ?? "none"}; status=${assignedDebug.statusAssigned ?? "none"}; ` +
+    `serial=${liveState.serialTelemetrySeen ? "yes" : "no"}; mock=${liveState.mockActive ? "on" : "off"}`;
+  host.appendChild(debugEl);
 
   if (liveState.assignmentEvents.length) {
     const event = liveState.assignmentEvents[liveState.assignmentEvents.length - 1];
@@ -2909,7 +2970,10 @@ function validateLiveProtocolMessage(message) {
 
 function getOrCreateLiveDrone(nodeId) {
   let drone = getDroneById(nodeId);
-  if (drone) return drone;
+  if (drone) {
+    drone.type = "live";
+    return drone;
+  }
   drone = new Drone(nodeId, { type: "live" });
   drones.push(drone);
   drones.sort((a, b) => a.id - b.id);
@@ -2917,8 +2981,8 @@ function getOrCreateLiveDrone(nodeId) {
 }
 
 function applyLiveTelemetry(message, source = "serial") {
-  if (source === "serial" && liveState.mockActive) {
-    stopLivePositionMock({ clearDrones: true });
+  if (source === "serial" && !liveState.serialTelemetrySeen) {
+    stopLivePositionMock({ clearDrones: true, clearStatus: true });
   }
   if (source === "serial") {
     liveState.serialTelemetrySeen = true;
@@ -3039,24 +3103,30 @@ function markLiveSerialDisconnected(reason) {
   renderLiveGcStatus();
 }
 
-async function openLiveSerialPort() {
+async function openLiveSerialPort({ port = null, auto = false } = {}) {
   if (!("serial" in navigator)) {
     setLiveSerialState("error", "Unsupported", "Web Serial is unavailable in this browser.");
     return;
   }
   try {
     const baudRate = getLiveBaudRate();
-    setLiveSerialState("waiting", "Selecting", "Choose the GC ESP32 serial port.");
-    const port = await navigator.serial.requestPort();
-    liveState.portLabel = describeLiveSerialPort(port);
+    const selectedPort = port || await (async () => {
+      setLiveSerialState("waiting", "Selecting", "Choose the GC ESP32 serial port.");
+      return navigator.serial.requestPort();
+    })();
+    liveState.portLabel = describeLiveSerialPort(selectedPort);
     setLiveSerialState("waiting", "Opening", `Opening at ${baudRate} baud.`);
-    await port.open({ baudRate });
-    liveState.port = port;
+    await selectedPort.open({ baudRate });
+    liveState.port = selectedPort;
     liveState.connected = true;
     liveState.keepReading = true;
     liveState.lineBuffer = "";
     liveState.baudRate = baudRate;
-    setLiveSerialState("connected", "Connected", `Reading USB serial at ${baudRate} baud.`);
+    setLiveSerialState(
+      "connected",
+      "Connected",
+      `${auto ? "Auto-connected. " : ""}Reading USB serial at ${baudRate} baud.`
+    );
     renderLiveControls();
     readLiveSerialLoop();
   } catch (err) {
@@ -3065,8 +3135,33 @@ async function openLiveSerialPort() {
     const detail = err.message && err.message.includes("Failed to open serial port")
       ? "Failed to open serial port. Another app may already own it."
       : err.message || "Serial open failed.";
-    setLiveSerialState("error", "Disconnected", detail);
+    setLiveSerialState("error", "Disconnected", auto ? `Auto-connect failed: ${detail}` : detail);
     renderLiveControls();
+  }
+}
+
+async function autoConnectRememberedLiveSerialPort() {
+  if (!LIVE_POSITION_AUTO_CONNECT || liveState.connected || !("serial" in navigator) || !navigator.serial.getPorts) {
+    return;
+  }
+  try {
+    const ports = await navigator.serial.getPorts();
+    if (!ports.length) {
+      appendLiveDebug("Auto-connect: no remembered serial port. Use Open once to grant COM18.");
+      return;
+    }
+    const espPorts = ports.filter((port) => {
+      const info = typeof port.getInfo === "function" ? port.getInfo() : {};
+      return info.usbVendorId === 0x303a && info.usbProductId === 0x1001;
+    });
+    const candidates = espPorts.length ? espPorts : ports;
+    if (candidates.length !== 1) {
+      appendLiveDebug(`Auto-connect skipped: ${candidates.length} remembered serial ports. Use Open to choose COM18.`);
+      return;
+    }
+    await openLiveSerialPort({ port: candidates[0], auto: true });
+  } catch (err) {
+    appendLiveDebug(`Auto-connect error: ${err.message || err}`);
   }
 }
 
@@ -3092,10 +3187,13 @@ async function closeLiveSerialPort() {
   renderLiveGcStatus();
 }
 
-function stopLivePositionMock({ clearDrones = false } = {}) {
+function stopLivePositionMock({ clearDrones = false, clearStatus = false } = {}) {
   liveState.mockTimers.forEach((timerId) => clearTimeout(timerId));
   liveState.mockTimers = [];
   liveState.mockActive = false;
+  if (clearStatus && liveState.gcStatus?.scanMode === "mock_live_position") {
+    liveState.gcStatus = null;
+  }
   if (clearDrones) {
     drones = [];
     pinnedDroneId = null;
@@ -3216,11 +3314,12 @@ function initLivePositionUi() {
   const openBtn = document.getElementById("liveSerialOpenBtn");
   const closeBtn = document.getElementById("liveSerialCloseBtn");
   const mockBtn = document.getElementById("liveMockToggleBtn");
-  openBtn?.addEventListener("click", openLiveSerialPort);
+  openBtn?.addEventListener("click", () => openLiveSerialPort());
   closeBtn?.addEventListener("click", closeLiveSerialPort);
   mockBtn?.addEventListener("click", toggleLiveMock);
   if ("serial" in navigator) {
     setLiveSerialState("waiting", "Disconnected", "Web Serial is available.");
+    window.setTimeout(autoConnectRememberedLiveSerialPort, 250);
   } else {
     setLiveSerialState("error", "Unsupported", "Use desktop Chrome or Edge for USB serial.");
     if (openBtn) openBtn.disabled = true;
