@@ -89,8 +89,9 @@ The firmware has two runtime roles in this branch:
     - Current narrow slice drops invalid/noisy persisted assignments; automatic reassignment belongs with allocator/join handling.
   - [ ] Reassign drones if a persisted profile is no longer supported.
     - Current narrow slice drops unsupported profiles; automatic reassignment belongs with allocator/join handling.
-  - [ ] Allocate new channels by uniform random selection from the clear candidate set.
-  - [ ] Choose the radio profile for each new assignment.
+  - [x] Allocate new channels by uniform random selection from the clear candidate set.
+    - Allocator picks from clear, unused telemetry channels.
+  - [x] Choose the radio profile for each new assignment.
     - Start with profile `0` for all drones unless a later field test proves a need for per-drone profile variation.
   - [x] Avoid assigning the same channel to multiple active drones.
     - Duplicate persisted channels are dropped during boot load.
@@ -114,15 +115,19 @@ The firmware has two runtime roles in this branch:
 
 - [ ] Milestone 8: Implement GC shared-channel join handling
   - [ ] GC periodically returns to shared channel.
-  - [ ] GC receives `JOIN_REQUEST`.
-  - [ ] GC sends `SILENCE`.
-  - [ ] GC selects or reuses an assignment for the drone.
-  - [ ] GC chooses a `radio_profile_id` and computes airtime plus `tx_period_ms` for that profile.
-  - [ ] GC sends `JOIN_ASSIGN`.
-  - [ ] GC waits for `JOIN_ACK`.
+  - [x] GC receives `JOIN_REQUEST`.
+    - Basic handler consumes live raw packets on the shared channel in GC mode.
+  - [x] GC sends `SILENCE`.
+  - [x] GC selects or reuses an assignment for the drone.
+  - [x] GC chooses a `radio_profile_id` and computes airtime plus `tx_period_ms` for that profile.
+  - [x] GC sends `JOIN_ASSIGN`.
+  - [x] GC waits for `JOIN_ACK`.
+    - Current implementation waits once for up to `80 ms`.
   - [ ] GC repeats `SILENCE -> JOIN_ASSIGN -> ACK wait` if ACK is missed.
   - [ ] GC marks assignment active only after receiving telemetry on the assigned channel.
-  - [ ] GC emits assignment events over serial JSON.
+  - [x] GC emits assignment events over serial JSON.
+  - [x] Bench-verify GC live join handler boot path.
+    - `COM18` GC build boots with raw live join handler enabled, emits `channel_table`, reports `assignedDrones = 0`, and disables legacy GS mesh GPS TX. A real one-drone join exchange is still pending drone-side join implementation.
 
 - [ ] Milestone 9: Implement drone MSP telemetry readout
   - [ ] Read GPS data using existing `BetaflightMSP::getRawGPS`.
