@@ -18,7 +18,7 @@ The firmware has two runtime roles in this branch:
   - [ ] Define drone role behavior for nonzero node IDs.
   - [ ] Ensure old flood-mesh fields are not used in the new air protocol.
 
-- [ ] Milestone 2: Implement binary packet definitions
+- [x] Milestone 2: Implement binary packet definitions
   - [x] Define packet type IDs for shared-channel control packets.
   - [x] Define `JOIN_REQUEST` struct.
   - [x] Define `SILENCE` struct.
@@ -27,8 +27,8 @@ The firmware has two runtime roles in this branch:
   - [x] Define 20-byte telemetry struct.
   - [x] Add compile-time size checks for every packet struct.
   - [x] Define endian/scaling rules in comments next to the structs.
-  - [ ] Enable LoRa PHY CRC.
-    - Default live-position radio profile declares PHY CRC enabled; actual RadioLib configuration is still future work.
+  - [x] Enable LoRa PHY CRC.
+    - SX1262 RadioLib backend calls `setCRC(2)`; SX127x backend also enables CRC in its radio configuration.
   - [x] Do not add a second payload CRC in v1.
 
 - [ ] Milestone 3: Add configurable radio profile
@@ -39,19 +39,24 @@ The firmware has two runtime roles in this branch:
   - [x] Store airtime buffer milliseconds.
   - [x] Keep SX1262 TX power fixed at `22 dBm`.
   - [x] Default to `SF8 / BW500 / CR4/5 / preamble 8`.
+  - [x] Apply the live radio profile to runtime LoRa config before radio initialization.
   - [x] Compute airtime for control and telemetry packet sizes.
   - [x] Print boot diagnostics for packet sizes, active radio profile, airtime, and TX period.
-  - [ ] Expose active profile in GC serial JSON.
+  - [x] Expose active profile in GC serial JSON.
+    - Current smoke `gc_status` reports the live profile and boot-scan clear channel count.
 
-- [ ] Milestone 4: Implement channel table and boot scan on GC
-  - [ ] Define BW500 channel center table from `902.5` to `927.5 MHz`.
-  - [ ] Mark `915.0 MHz` as shared discovery/control.
-  - [ ] Mark `914.5 MHz` and `915.5 MHz` as reserved/guard.
-  - [ ] Treat remaining channels as telemetry candidates.
-  - [ ] Sample RSSI/noise floor on each candidate at boot.
-  - [ ] Discard noisy channels.
-  - [ ] Keep the clear channel list in memory.
-  - [ ] Report clear/noisy channels over serial JSON.
+- [x] Milestone 4: Implement channel table and boot scan on GC
+  - [x] Define BW500 channel center table from `902.5` to `927.5 MHz`.
+  - [x] Mark `915.0 MHz` as shared discovery/control.
+  - [x] Mark `914.5 MHz` and `915.5 MHz` as reserved/guard.
+  - [x] Treat remaining channels as telemetry candidates.
+  - [x] Sample RSSI/noise floor on each candidate at boot.
+  - [x] Discard noisy channels.
+    - If fewer than five channels pass, firmware keeps the five quietest candidates and emits a warning.
+  - [x] Keep the clear channel list in memory.
+  - [x] Report clear/noisy channels over serial JSON.
+  - [x] Bench-verify GC boot scan on connected ESP32.
+    - `COM18` with `node_id = 0`, `node_role = ground_station` reported `42` clear channels, `6` noisy channels, `48` candidates, and emitted matching `channel_table` plus `gc_status.clearChannels = 42`.
 
 - [ ] Milestone 5: Implement GC assignment persistence
   - [ ] Store `node_id -> frequencyMhz/channelIndex` assignments in flash.
@@ -135,6 +140,7 @@ The firmware has two runtime roles in this branch:
   - [ ] Emit assignment events.
   - [ ] Emit GC status.
   - [ ] Emit channel table on request and after boot scan.
+    - Boot-scan emission is implemented; command/request handling is still future work.
   - [ ] Keep JSON minified and newline-delimited.
 
 - [ ] Milestone 13: Add firmware tests and field checks

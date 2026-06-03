@@ -47,7 +47,7 @@ This branch narrows Swarm Ground Control from a broad C2 prototype into a live d
   - [ ] Implement GC role for discovery, assignment, scanning, heading fusion, and serial JSON.
   - [ ] Implement drone role for join, assignment ACK, MSP telemetry readout, and telemetry TX.
   - [ ] Store GC channel assignments in flash.
-  - [ ] Keep TX power fixed at `22 dBm` for SX1262.
+  - [x] Keep TX power fixed at `22 dBm` for SX1262.
 
 ## Key Defaults
 
