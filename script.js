@@ -30,8 +30,8 @@ const APP_MODE = cfg("APP_MODE", "live-position");
 const LIVE_POSITION_MODE = APP_MODE === "live-position";
 const LIVE_POSITION_MOCK_DEFAULT = cfg("LIVE_POSITION_MOCK_DEFAULT", true);
 const LIVE_FRESHNESS_MS = {
-  fresh: 500,
-  late: 1500,
+  fresh: 1000,
+  late: 2000,
   stale: 5000,
 };
 

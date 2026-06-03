@@ -50,9 +50,9 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Store last received timestamp.
 
 - [x] Milestone 5: Implement freshness states
-  - [x] Mark drone fresh when packet age is `< 500 ms`.
-  - [x] Mark drone late when packet age is `500-1500 ms`.
-  - [x] Mark drone stale when packet age is `1500-5000 ms`.
+  - [x] Mark drone fresh when packet age is `< 1000 ms`.
+  - [x] Mark drone late when packet age is `1000-2000 ms`.
+  - [x] Mark drone stale when packet age is `2000-5000 ms`.
   - [x] Mark drone offline when packet age is `> 5000 ms`.
   - [x] Update marker style based on freshness.
   - [x] Update list/panel style based on freshness.
@@ -108,15 +108,15 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Simulate stale/late/offline behavior.
   - [x] Keep old 104-drone mock only as optional stress/demo mode if still needed.
 
-- [ ] Milestone 11: Manual verification
-  - [ ] Verify SGC can run without serial connected.
-  - [ ] Verify mock mode displays 5 drones.
-  - [ ] Verify serial mode creates drones dynamically.
-  - [ ] Verify map heading arrows follow telemetry.
-  - [ ] Verify freshness thresholds update correctly.
-  - [ ] Verify command UI is hidden in live-position mode.
-  - [ ] Verify UI remains usable on desktop viewport.
-  - [ ] Verify UI remains usable on mobile/tablet viewport where Web Serial is supported.
+- [x] Milestone 11: Manual verification
+  - [x] Verify SGC can run without serial connected. Verified manually.
+  - [x] Verify mock mode displays 5 drones. Verified manually.
+  - [x] Verify serial mode creates drones dynamically. Verified manually.
+  - [x] Verify map heading arrows follow telemetry. Verified manually.
+  - [x] Verify freshness thresholds update correctly. Verified manually; thresholds updated to fresh `< 1000 ms`, late `1000-2000 ms`, stale `2000-5000 ms`, offline `> 5000 ms`.
+  - [x] Verify command UI is hidden in live-position mode. Verified manually.
+  - [x] Verify UI remains usable on desktop viewport. Verified manually in full-screen and non-full-screen desktop browser windows.
+  - [x] Verify UI remains usable on mobile/tablet viewport where Web Serial is supported. Verified manually.
 
 ## Out Of Scope
 
