@@ -140,22 +140,22 @@ The firmware has two runtime roles in this branch:
     - Physical two-board test passed with GC on `COM18` and drone node `2` on `COM15`: GC received `JOIN_REQUEST`, reused persisted assignment at `922.5 MHz`, sent `SILENCE`, sent `JOIN_ASSIGN`, and received `JOIN_ACK`.
 
 - [ ] Milestone 9: Implement drone MSP telemetry readout
-  - [ ] Read GPS data using existing `BetaflightMSP::getRawGPS`.
-    - Code probes `getRawGPS` with a short timeout and reports `gpsReadOk`; bench run on node `2` currently reports `gpsReadOk=false`, as expected while GPS is inactive.
-  - [ ] Read attitude using existing `BetaflightMSP::getAttitude`.
-    - Code probes `getAttitude` with a short timeout and reports `attitudeReadOk`; bench run on node `2` currently reports `attitudeReadOk=false`, so FC MSP wiring/baud/pins still need verification.
+  - [x] Read GPS data using existing `BetaflightMSP::getRawGPS`.
+    - Code probes `getRawGPS` with a short timeout and reports `gpsReadOk`; latest node `2` bench capture on `COM15` reports `gpsReadOk=true`, `gpsFixValid=false`, `gpsFixQuality=0`, and `satelliteCount=0`, as expected while GPS is inactive.
+  - [x] Read attitude using existing `BetaflightMSP::getAttitude`.
+    - Latest node `2` bench capture on `COM15` reports `attitudeReadOk=true`, `attitudeValid=true`, and `yaw=315`.
   - [ ] Extract latitude and longitude.
     - Real GPS extraction is implemented for later valid GPS, but bench packets intentionally use simulated lat/lng while GPS is inactive.
-  - [ ] Extract altitude.
-    - Code probes `getAltitude` and uses `MSP_ALTITUDE` for `alt_cm` when available; bench run currently reports `altitudeReadOk=false`.
+  - [x] Extract altitude.
+    - Code probes `getAltitude` and uses `MSP_ALTITUDE` for `alt_cm` when available; latest node `2` bench capture reports `altitudeReadOk=true`, `altitudeValid=true`, and `alt=0`.
   - [x] Extract GPS course over ground.
     - Real CoG is used when FC GPS is valid; simulated CoG is used only while `GPS_SIMULATED` is set.
   - [x] Extract ground speed.
     - Real GPS speed is used when FC GPS is valid; simulated speed is used only while `GPS_SIMULATED` is set.
   - [x] Extract satellite count.
     - Satellite count comes from `MSP_RAW_GPS` when a GPS response is available; otherwise it is `0`.
-  - [ ] Extract yaw.
-    - Code path is implemented, but bench MSP attitude reads are not yet succeeding.
+  - [x] Extract yaw.
+    - Code path is implemented and latest node `2` bench capture confirms real MSP yaw is read.
   - [x] Set telemetry validity flags.
     - Adds `GPS_SIMULATED`; sets yaw/course/speed flags according to available fields.
   - [x] Increment sequence ID for every telemetry packet.
@@ -174,7 +174,7 @@ The firmware has two runtime roles in this branch:
   - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
   - [ ] Keep timing stable enough for GC phase tracking.
   - [x] Handle missed MSP reads without crashing.
-    - Bench run continued transmitting while MSP attitude/altitude/GPS reads reported false.
+    - Bench run continued transmitting before MSP was verified. Latest capture confirms MSP attitude, altitude, and GPS request paths now respond successfully.
   - [x] Encode invalid telemetry fields consistently.
     - Missing yaw uses `INVALID_YAW_DEG`; missing GPS response uses satellite count `0`; simulated GPS is marked with `GPS_SIMULATED`.
 
@@ -245,7 +245,7 @@ The firmware has two runtime roles in this branch:
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
   - [ ] Bench-test GC scanner ordering with simulated per-drone next transmit times.
   - [ ] Bench-test MSP telemetry packing with known values.
-    - Bench test confirmed `drone_fc_status` and simulated-GPS telemetry continue flowing, but MSP attitude/altitude reads currently fail on node `2`; verify FC MSP wiring/baud/pins before marking this complete.
+    - Bench test confirms `drone_fc_status` and simulated-GPS telemetry continue flowing. Latest node `2` capture on `COM15` reports MSP attitude/yaw and altitude success; GPS request succeeds but has no valid fix/satellites. Keep this unchecked until values are checked against known FC display values.
   - [ ] Field-test one drone at close range.
   - [ ] Field-test five drones at close range.
   - [ ] Field-test expected `0.5-2 km` range.
