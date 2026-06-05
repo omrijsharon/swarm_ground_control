@@ -465,9 +465,18 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   border-top: 1px solid rgba(255,255,255,0.10);
 }
 
+.live-spectrum-panel{
+  gap: 7px;
+  padding: 8px;
+  border: 1px solid rgba(120,220,255,0.22);
+  border-radius: 8px;
+  background: rgba(8,22,28,0.30);
+}
+
 .live-spectrum-header,
 .live-spectrum-legend{
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   color: rgba(255,255,255,0.55);
@@ -475,6 +484,30 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   font-weight: 900;
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.live-spectrum-actions{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.live-spectrum-rescan-btn{
+  min-height: 22px;
+  padding: 3px 8px;
+}
+
+.live-spectrum-meta,
+.live-spectrum-empty{
+  color: rgba(255,255,255,0.62);
+  font-size: var(--ui-font-xs);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.live-spectrum-empty{
+  padding: 6px 0 2px;
+  color: rgba(255,255,255,0.48);
 }
 
 .live-spectrum-legend{

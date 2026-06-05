@@ -188,6 +188,19 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Show each drone card's assigned profile.
   - [x] Keep the inline profile picker stable by avoiding GC-panel rerenders from telemetry packets and one-second age refreshes.
 
+- [ ] Milestone 17: On-demand spectrum panel
+  - [x] Make the GC `Channels` field clickable.
+  - [x] Open an inline spectrum panel from the `Channels` label/value.
+  - [x] Reuse the latest `channel_table.channels[]` data when opening the panel after a completed scan.
+  - [x] Keep the panel open until the operator closes it.
+  - [x] Add a close icon to the spectrum panel.
+  - [x] Add clear/noisy/assigned scan metadata to the panel.
+  - [x] Add a confirmed `Re-scan` action that sends `rescan_channels`.
+  - [x] Keep boot/fresh-session scan animation behavior unchanged when the panel is closed.
+  - [ ] Manually verify opening and closing the spectrum panel in the browser.
+  - [ ] Manually verify canceling `Re-scan` sends no command.
+  - [ ] Manually verify confirming `Re-scan` fills the spectrum live and telemetry recovers after scan.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.

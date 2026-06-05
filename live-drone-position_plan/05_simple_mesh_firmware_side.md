@@ -384,6 +384,8 @@ The firmware has two runtime roles in this branch:
   - [x] Recheck initially noisy channels in a second pass before final classification.
   - [x] Keep 32 samples for the second pass, with 8 ms settle time and 2 ms sample interval.
   - [x] Use second-pass median RSSI as the final noisy/clear decision so single max-RSSI spikes do not reject a channel.
+  - [x] Implement `rescan_channels` for manual SGC spectrum refresh without clearing assignments.
+  - [x] On `rescan_channels`, emit `command_ack`, rerun channel scan, then emit updated `channel_table` and `gc_status`.
   - [x] Bench-test late SGC connection by requesting status and channel table after GC boot.
     - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
   - [x] Bench-test `Start Fresh Session` clears flash and RAM assignments.

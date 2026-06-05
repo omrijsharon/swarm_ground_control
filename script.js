@@ -112,6 +112,11 @@ const liveState = {
   scanAnimationHideTimer: null,
   scanRows: new Map(),
   scanCandidateCount: 0,
+  spectrumPanelOpen: false,
+  spectrumRescanPending: false,
+  spectrumRescanConfirming: false,
+  lastScanCompletedAt: null,
+  channelTableReceivedAt: null,
   lastCommandAck: null,
   sessionEvents: [],
   freshSessionPending: false,
@@ -3211,8 +3216,8 @@ function getDefaultLiveScanChannels() {
   return rows;
 }
 
-function getLiveScanDisplayTable(table = {}) {
-  if (!liveState.scanAnimationVisible && !liveState.scanInProgress) {
+function getLiveScanDisplayTable(table = {}, includeScanRows = false) {
+  if (!liveState.scanAnimationVisible && !liveState.scanInProgress && !includeScanRows) {
     return table;
   }
 
@@ -3260,7 +3265,9 @@ function scheduleLiveScanAnimationHide() {
   liveState.scanAnimationHideTimer = window.setTimeout(() => {
     if (liveState.scanInProgress) return;
     liveState.scanAnimationVisible = false;
-    liveState.scanRows.clear();
+    if (!liveState.spectrumPanelOpen) {
+      liveState.scanRows.clear();
+    }
     liveState.scanAnimationHideTimer = null;
     renderLiveGcStatus();
   }, LIVE_SCAN_ANIMATION_HOLD_MS);
@@ -3282,24 +3289,129 @@ function updateLiveScanRow(message) {
   });
 }
 
-function renderLiveSpectrum(host, table = {}) {
-  if (!liveState.scanAnimationVisible && !liveState.scanInProgress) return;
+function getLiveChannelSummary(table = {}) {
+  const status = liveState.gcStatus || {};
+  const assignedDebug = getLiveAssignedDebug(status, table);
+  const noisy = Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz.length : Number(status.noisyChannels);
+  const clear = Array.isArray(table.clearFrequencyMhz)
+    ? table.clearFrequencyMhz.length
+    : Number.isFinite(Number(status.clearChannels))
+      ? Number(status.clearChannels)
+      : NaN;
+  return {
+    assigned: Number.isFinite(assignedDebug.count) ? assignedDebug.count : NaN,
+    clear,
+    noisy,
+  };
+}
 
-  const rows = getLiveChannelRows(getLiveScanDisplayTable(table));
-  if (!rows.length) return;
+function renderLiveSpectrumConfirm(host) {
+  if (!liveState.spectrumRescanConfirming) return;
+
+  const confirmEl = document.createElement("div");
+  confirmEl.className = "live-confirm";
+  const messageEl = document.createElement("div");
+  messageEl.className = "live-confirm-message";
+  messageEl.textContent = "Re-scanning channels may temporarily stale drone telemetry while the GC scans the spectrum. Continue?";
+  confirmEl.appendChild(messageEl);
+
+  const confirmActions = document.createElement("div");
+  confirmActions.className = "live-confirm-actions";
+  const cancelBtn = document.createElement("button");
+  cancelBtn.className = "live-btn";
+  cancelBtn.type = "button";
+  cancelBtn.textContent = "Cancel";
+  cancelBtn.addEventListener("click", cancelLiveSpectrumRescanConfirmation);
+  const continueBtn = document.createElement("button");
+  continueBtn.className = "live-btn live-danger-btn";
+  continueBtn.type = "button";
+  continueBtn.textContent = "Continue";
+  continueBtn.disabled = liveState.spectrumRescanPending;
+  continueBtn.addEventListener("click", startLiveSpectrumRescan);
+  confirmActions.appendChild(cancelBtn);
+  confirmActions.appendChild(continueBtn);
+  confirmEl.appendChild(confirmActions);
+
+  host.appendChild(confirmEl);
+}
+
+function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
+  const visible = manual ? liveState.spectrumPanelOpen : (liveState.scanAnimationVisible || liveState.scanInProgress);
+  if (!visible) return;
+
+  const rows = getLiveChannelRows(getLiveScanDisplayTable(table, manual && liveState.scanRows.size > 0));
 
   const wrap = document.createElement("div");
   wrap.className = "live-spectrum";
+  if (manual) wrap.classList.add("live-spectrum-panel");
   const header = document.createElement("div");
   header.className = "live-spectrum-header";
   const lastScan = liveState.channelScanEvents[liveState.channelScanEvents.length - 1];
   const scanText = liveState.scanInProgress
     ? `Scanning ${liveState.scanRows.size}/${liveState.scanCandidateCount || 48}`
     : lastScan?.event === "scan_complete"
-      ? "Scan complete"
+      ? manual ? "Latest scan" : "Scan complete"
       : "Spectrum";
-  header.innerHTML = `<span>${scanText}</span><span>${rows.length} channels</span>`;
+
+  const titleEl = document.createElement("span");
+  titleEl.textContent = scanText;
+  header.appendChild(titleEl);
+
+  if (manual) {
+    const actions = document.createElement("div");
+    actions.className = "live-spectrum-actions";
+    const rescanBtn = document.createElement("button");
+    rescanBtn.className = "live-btn live-spectrum-rescan-btn";
+    rescanBtn.type = "button";
+    const scanBusy = liveState.spectrumRescanPending || liveState.scanInProgress;
+    rescanBtn.textContent = scanBusy ? "Scanning..." : "Re-scan";
+    rescanBtn.disabled = !liveState.connected || scanBusy || liveState.spectrumRescanConfirming;
+    rescanBtn.addEventListener("click", requestLiveSpectrumRescanConfirmation);
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "live-profile-close live-spectrum-close";
+    closeBtn.type = "button";
+    closeBtn.setAttribute("aria-label", "Close spectrum panel");
+    closeBtn.title = "Close";
+    closeBtn.addEventListener("click", closeLiveSpectrumPanel);
+    actions.appendChild(rescanBtn);
+    actions.appendChild(closeBtn);
+    header.appendChild(actions);
+  } else {
+    const countEl = document.createElement("span");
+    countEl.textContent = `${rows.length} channels`;
+    header.appendChild(countEl);
+  }
   wrap.appendChild(header);
+
+  if (manual) {
+    const summary = getLiveChannelSummary(table);
+    const meta = [];
+    if (Number.isFinite(summary.clear) && Number.isFinite(summary.noisy)) {
+      meta.push(`${summary.clear} clear / ${summary.noisy} noisy`);
+    }
+    if (Number.isFinite(summary.assigned)) {
+      meta.push(`${summary.assigned} assigned`);
+    }
+    const lastUpdateAt = liveState.lastScanCompletedAt || liveState.channelTableReceivedAt;
+    if (lastUpdateAt) {
+      meta.push(`updated ${formatLiveAge(lastUpdateAt)} ago`);
+    }
+    const metaEl = document.createElement("div");
+    metaEl.className = "live-spectrum-meta";
+    metaEl.textContent = meta.length ? meta.join(" | ") : "No scan data yet";
+    wrap.appendChild(metaEl);
+
+    renderLiveSpectrumConfirm(wrap);
+  }
+
+  if (!rows.length) {
+    const emptyEl = document.createElement("div");
+    emptyEl.className = "live-spectrum-empty";
+    emptyEl.textContent = "No scan data yet";
+    wrap.appendChild(emptyEl);
+    host.appendChild(wrap);
+    return;
+  }
 
   const bars = document.createElement("div");
   bars.className = "live-spectrum-bars";
@@ -3342,6 +3454,8 @@ function renderLiveSpectrum(host, table = {}) {
 function toggleLiveProfilePicker() {
   if (!liveState.profilePickerOpen) {
     ensureLiveProfileDraft();
+    liveState.spectrumPanelOpen = false;
+    liveState.spectrumRescanConfirming = false;
   }
   liveState.profilePickerOpen = !liveState.profilePickerOpen;
   renderLiveGcStatus();
@@ -3350,6 +3464,68 @@ function toggleLiveProfilePicker() {
 function closeLiveProfilePicker() {
   liveState.profilePickerOpen = false;
   renderLiveGcStatus();
+}
+
+function openLiveSpectrumPanel() {
+  liveState.spectrumPanelOpen = true;
+  liveState.spectrumRescanConfirming = false;
+  liveState.profilePickerOpen = false;
+  renderLiveGcStatus();
+}
+
+function closeLiveSpectrumPanel() {
+  liveState.spectrumPanelOpen = false;
+  liveState.spectrumRescanConfirming = false;
+  if (!liveState.scanAnimationVisible && !liveState.scanInProgress) {
+    liveState.scanRows.clear();
+  }
+  renderLiveGcStatus();
+}
+
+function requestLiveSpectrumRescanConfirmation() {
+  if (liveState.spectrumRescanPending) return;
+  if (!liveState.connected) {
+    appendLiveDebug("channel rescan unavailable: connect GC serial first");
+    renderLiveGcStatus();
+    return;
+  }
+  liveState.spectrumPanelOpen = true;
+  liveState.spectrumRescanConfirming = true;
+  renderLiveGcStatus();
+}
+
+function cancelLiveSpectrumRescanConfirmation() {
+  liveState.spectrumRescanConfirming = false;
+  renderLiveGcStatus();
+}
+
+async function startLiveSpectrumRescan() {
+  if (liveState.spectrumRescanPending) return;
+  if (!liveState.connected) {
+    liveState.spectrumRescanConfirming = false;
+    appendLiveDebug("channel rescan unavailable: connect GC serial first");
+    renderLiveGcStatus();
+    return;
+  }
+  liveState.spectrumRescanConfirming = false;
+  liveState.spectrumRescanPending = true;
+  liveState.spectrumPanelOpen = true;
+  renderLiveGcStatus();
+  const commandId = await sendLiveSerialCommand("rescan_channels", {
+    persist: true,
+  });
+  if (commandId) {
+    window.setTimeout(() => {
+      if (!liveState.pendingCommands.has(commandId)) return;
+      liveState.pendingCommands.delete(commandId);
+      liveState.spectrumRescanPending = false;
+      appendLiveDebug("command timeout: rescan_channels");
+      renderLiveGcStatus();
+    }, 12000);
+  } else {
+    liveState.spectrumRescanPending = false;
+    renderLiveGcStatus();
+  }
 }
 
 function updateLiveProfileDraft(field, value) {
@@ -3458,12 +3634,9 @@ function renderLiveGcStatus() {
   const status = liveState.gcStatus || {};
   const table = liveState.channelTable || {};
   const assignedDebug = getLiveAssignedDebug(status, table);
-  const noisy = Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz.length : 0;
-  const clear = Array.isArray(table.clearFrequencyMhz)
-      ? table.clearFrequencyMhz.length
-      : Number.isFinite(Number(status.clearChannels))
-        ? Number(status.clearChannels)
-      : null;
+  const channelSummary = getLiveChannelSummary(table);
+  const noisy = Number.isFinite(channelSummary.noisy) ? channelSummary.noisy : 0;
+  const clear = Number.isFinite(channelSummary.clear) ? channelSummary.clear : null;
   const buffer =
     Number.isFinite(Number(status.txPeriodMs)) && Number.isFinite(Number(status.telemetryAirtimeMs))
       ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
@@ -3476,7 +3649,7 @@ function renderLiveGcStatus() {
     { label: "Airtime", value: status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A" },
     { label: "Buffer", value: buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
-    { label: "Channels", value: clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A" },
+    { label: "Channels", value: clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A", action: "channels" },
   ];
 
   const grid = document.createElement("div");
@@ -3484,17 +3657,25 @@ function renderLiveGcStatus() {
   items.forEach(({ label, value, action }) => {
     const item = document.createElement("div");
     item.className = "live-gc-item";
-    if (action === "profile") {
+    if (action === "profile" || action === "channels") {
       item.classList.add("live-gc-item-action");
       item.setAttribute("role", "button");
       item.tabIndex = 0;
-      item.setAttribute("aria-expanded", liveState.profilePickerOpen ? "true" : "false");
-      item.title = "Choose the default profile for future drone assignments";
-      item.addEventListener("click", toggleLiveProfilePicker);
+      item.setAttribute("aria-expanded", action === "profile"
+        ? liveState.profilePickerOpen ? "true" : "false"
+        : liveState.spectrumPanelOpen ? "true" : "false");
+      item.title = action === "profile"
+        ? "Choose the default profile for future drone assignments"
+        : "Open the latest spectrum scan";
+      item.addEventListener("click", action === "profile" ? toggleLiveProfilePicker : openLiveSpectrumPanel);
       item.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
-          toggleLiveProfilePicker();
+          if (action === "profile") {
+            toggleLiveProfilePicker();
+          } else {
+            openLiveSpectrumPanel();
+          }
         }
       });
     }
@@ -3512,7 +3693,11 @@ function renderLiveGcStatus() {
 
   renderLiveProfilePicker(host);
 
-  renderLiveSpectrum(host, table);
+  if (liveState.spectrumPanelOpen) {
+    renderLiveSpectrum(host, table, { manual: true });
+  } else {
+    renderLiveSpectrum(host, table);
+  }
 
   if (liveState.freshSessionConfirming) {
     const confirmEl = document.createElement("div");
@@ -3776,6 +3961,12 @@ function handleLiveProtocolMessage(message, source = "serial") {
         if (message.accepted) {
           clearLiveSerialDrones({ clearAssignments: true });
         }
+      } else if (pending.command === "rescan_channels") {
+        liveState.spectrumRescanPending = false;
+        liveState.spectrumRescanConfirming = false;
+        if (message.accepted) {
+          liveState.spectrumPanelOpen = true;
+        }
       }
     }
     appendLiveDebug(`${message.accepted ? "command ok" : "command rejected"}: ${message.command || "command"} ${message.message || message.reason || ""}`);
@@ -3803,6 +3994,7 @@ function handleLiveProtocolMessage(message, source = "serial") {
       liveState.scanRows.clear();
       liveState.scanCandidateCount = Number(message.candidateChannels) || 48;
       liveState.scanInProgress = true;
+      liveState.lastScanCompletedAt = null;
       showLiveScanAnimation();
     } else if (message.event === "channel_scanned") {
       updateLiveScanRow(message);
@@ -3812,11 +4004,13 @@ function handleLiveProtocolMessage(message, source = "serial") {
       appendLiveDebug(`scan recheck: ${Number(message.candidateChannels) || 0} noisy channels`);
     } else if (message.event === "scan_complete") {
       liveState.scanInProgress = false;
+      liveState.lastScanCompletedAt = Date.now();
       scheduleLiveScanAnimationHide();
     }
     renderLiveGcStatus();
   } else if (message.type === "channel_table") {
     liveState.channelTable = message;
+    liveState.channelTableReceivedAt = Date.now();
     updateStatusList();
     renderLiveGcStatus();
   } else if (message.type === "assignments") {
@@ -3866,6 +4060,7 @@ function processLiveSerialChunk(chunk) {
 async function sendLiveSerialCommand(command, fields = {}) {
   if (!liveState.connected || !liveState.port?.writable) {
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
+    if (command === "rescan_channels") liveState.spectrumRescanPending = false;
     appendLiveDebug("command rejected locally: serial port is not connected");
     renderLiveControls();
     renderLiveGcStatus();
@@ -3892,6 +4087,7 @@ async function sendLiveSerialCommand(command, fields = {}) {
   } catch (err) {
     liveState.pendingCommands.delete(commandId);
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
+    if (command === "rescan_channels") liveState.spectrumRescanPending = false;
     appendLiveDebug(`command send failed: ${err.message || err}`);
     renderLiveControls();
     renderLiveGcStatus();

@@ -82,6 +82,19 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] SGC retries `navigator.serial.getPorts()` and reopens the granted GC port after disconnect.
   - [x] SGC does not auto-reconnect after the user intentionally clicks `Close`.
 
+- [ ] Milestone 5a: On-demand spectrum inspection and rescan
+  - [x] SGC opens a persistent spectrum panel when the operator clicks `Channels`.
+  - [x] SGC closes the panel without affecting the normal GC summary.
+  - [x] SGC shows the latest channel table in the panel when no scan is active.
+  - [x] SGC asks for confirmation before sending a manual channel rescan.
+  - [x] SGC sends `rescan_channels` with `persist:true` after confirmation.
+  - [x] SGC keeps the panel open and updates bars live during a manual rescan.
+  - [x] GC implements `rescan_channels` without clearing assignments.
+  - [x] GC emits scan events, a fresh `channel_table`, and `gc_status` after manual rescan.
+  - [ ] Manually verify the browser panel open/close flow.
+  - [ ] Manually verify the cancel-confirmation path sends no command.
+  - [ ] Bench-verify manual rescan temporarily interrupts telemetry and then recovers.
+
 - [x] Milestone 6: Bench verification
   - [x] Bench-measure the longer boot scan and confirm it lands near 3.5-4.2 seconds.
     - Direct `clear_all_assignments` scan test emitted 48 `channel_scanned` events and completed in 3.69 seconds.

@@ -298,6 +298,8 @@ Maintenance response rules:
 - Commands that change channel availability or assignments emit an updated `channel_table`.
 - Rejected commands emit `command_ack` with `accepted:false` and may also emit `warning` or `error`.
 
+Implementation note: `rescan_channels` is implemented for manual spectrum refresh. It preserves existing assignments, emits `command_ack`, runs the GC channel scan, then emits fresh `channel_scan_event`, `channel_table`, and `gc_status` output.
+
 ## Parser Rules
 
 - [x] Milestone 9: Define SGC parser behavior
