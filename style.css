@@ -365,8 +365,13 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-profile-field select option{
-  background: #111820;
-  color: #f5f7fa;
+  background: #ffffff;
+  color: #111827;
+}
+
+.live-profile-field select option:checked{
+  background: #1f6feb;
+  color: #ffffff;
 }
 
 .live-profile-preview{
