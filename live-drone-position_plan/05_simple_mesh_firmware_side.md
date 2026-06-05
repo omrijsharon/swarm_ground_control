@@ -266,8 +266,10 @@ The firmware has two runtime roles in this branch:
     - Emits `scanner_event` with `event = "stale_slot_skipped"` when this happens.
   - [x] Correct timing phase on every received packet.
     - The narrow scanner updates estimated and next TX start from each valid packet.
-  - [x] Use longer listen windows after missed packets.
-  - [x] After one miss, listen for up to `2 * tx_period_ms`; after two or more misses, listen for up to `3 * tx_period_ms`.
+  - [x] Use bounded recovery windows after missed packets.
+  - [x] After one missed assigned-channel packet, keep one immediate recovery listen in the normal scanner cadence.
+  - [x] After repeated assigned-channel misses, demote that assignment to a slower background recovery cadence.
+    - After `2` misses, the GC clears the stale runtime phase for that assignment and retries assigned-channel acquisition every `2 s` instead of keeping that absent drone in the hot scan loop. This prevents a powered-off node from starving live drones.
   - [x] Keep the shared discovery channel in the schedule so new drones can join.
   - [x] Cycle back to the shared channel regularly for new drones.
     - Scheduler uses `GC_SCANNER_SHARED_LISTEN_MS = 40` and `GC_SCANNER_SHARED_INTERVAL_MS = 500`.
