@@ -3371,6 +3371,9 @@ function makeLiveProfileSegment(label, field, options, value, formatter) {
 
   const group = document.createElement("div");
   group.className = "live-profile-segments";
+  if (field === "codingRate") {
+    group.classList.add("live-profile-segments-cr");
+  }
   group.setAttribute("role", "radiogroup");
   group.setAttribute("aria-label", label);
 
