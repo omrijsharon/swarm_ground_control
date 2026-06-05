@@ -273,6 +273,8 @@ Command example:
 {"type":"command","command":"set_radio_profile","commandId":"sgc-0100","spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"airtimeBufferMs":44,"persist":true}
 ```
 
+Implementation note: SGC now has a disabled production UI picker that can preview this command payload and local airtime. The button remains disabled until GC firmware actually implements `set_radio_profile` and runtime profile switching.
+
 - [x] Milestone 8: Define assignment maintenance commands
   - [x] Define a command to clear one assignment.
   - [x] Define a command to clear all assignments.

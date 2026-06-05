@@ -176,6 +176,17 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Show live drone speed in km/h only.
   - [x] Apply the same live drone detail simplification to the hover/pinned tooltip.
 
+- [x] Milestone 16: SGC-only radio profile picker preparation
+  - [x] Make the GC `Profile` field clickable.
+  - [x] Render an inline profile picker for spreading factor, bandwidth, and coding rate.
+  - [x] Locally preview 20-byte LoRa telemetry airtime from the selected profile.
+  - [x] Mark the picker as applying to future assignments only.
+  - [x] Keep Apply disabled with `Firmware update required` until GC firmware implements `set_radio_profile`.
+  - [x] Add a helper that builds the future `set_radio_profile` command payload without sending it.
+  - [x] Store live drone `radioProfileId`, `txPeriodMs`, and `telemetryAirtimeMs` from telemetry.
+  - [x] Use `channel_table.assignments[]` as a fallback source for drone profile display.
+  - [x] Show each drone card's assigned profile.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.
@@ -194,6 +205,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
 - The production operator UI hides serial debug text, assigned-count debug text, and last-command debug text.
 - Drone cards and tooltips keep the operator-facing essentials: timing/update rate, altitude, speed, RSSI/SNR, satellite count, and channel/sequence details where applicable.
+- The GC profile picker is UI-prep only until firmware implements `set_radio_profile` and runtime scanner profile switching.
 - Browser smoke check after adding heading-fusion debug fields passed manually in SGC.
 - Production UI first pass static verification completed: `node --check script.js`, `git diff --check`, and local static fetch confirmed `Reset` exists and the visible mock toggle is absent.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.

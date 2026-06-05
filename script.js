@@ -116,6 +116,8 @@ const liveState = {
   sessionEvents: [],
   freshSessionPending: false,
   freshSessionConfirming: false,
+  profilePickerOpen: false,
+  profileDraft: null,
   assignmentEvents: [],
   scannerEvents: [],
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
@@ -891,6 +893,9 @@ class Drone {
       receivedAt,
       snr: packet.snr ?? null,
       frequencyMhz: packet.frequencyMhz ?? packet.frequency_mhz ?? null,
+      radioProfileId: packet.radioProfileId ?? packet.radio_profile_id ?? (this.current && this.current.radioProfileId) ?? null,
+      txPeriodMs: packet.txPeriodMs ?? packet.tx_period_ms ?? (this.current && this.current.txPeriodMs) ?? null,
+      telemetryAirtimeMs: packet.telemetryAirtimeMs ?? packet.telemetry_airtime_ms ?? (this.current && this.current.telemetryAirtimeMs) ?? null,
       sequenceId: packet.sequenceId ?? packet.sequence_id ?? null,
       gcMillis: packet.gcMillis ?? packet.gc_millis ?? null,
       battery: packet.battery ?? 0,
@@ -2813,6 +2818,104 @@ function renderLiveTimingLine(host, drone, latest, now = Date.now()) {
   host.appendChild(rateEl);
 }
 
+const LIVE_PROFILE_OPTIONS = {
+  spreadingFactors: [7, 8, 9, 10, 11, 12],
+  bandwidthHz: [125000, 250000, 500000],
+  codingRates: [5, 6, 7, 8],
+};
+
+function normalizeLiveRadioProfile(profile = {}) {
+  const spreadingFactor = LIVE_PROFILE_OPTIONS.spreadingFactors.includes(Number(profile.spreadingFactor))
+    ? Number(profile.spreadingFactor)
+    : 8;
+  const bandwidthHz = LIVE_PROFILE_OPTIONS.bandwidthHz.includes(Number(profile.bandwidthHz))
+    ? Number(profile.bandwidthHz)
+    : 500000;
+  const codingRate = LIVE_PROFILE_OPTIONS.codingRates.includes(Number(profile.codingRate))
+    ? Number(profile.codingRate)
+    : 5;
+  return { spreadingFactor, bandwidthHz, codingRate };
+}
+
+function liveProfileFromGcStatus() {
+  const status = liveState.gcStatus || {};
+  return normalizeLiveRadioProfile({
+    spreadingFactor: status.spreadingFactor,
+    bandwidthHz: status.bandwidthHz,
+    codingRate: status.codingRate,
+  });
+}
+
+function ensureLiveProfileDraft() {
+  if (!liveState.profileDraft) {
+    liveState.profileDraft = liveProfileFromGcStatus();
+  }
+  return liveState.profileDraft;
+}
+
+function formatLiveRadioProfile(profile = {}) {
+  const normalized = normalizeLiveRadioProfile(profile);
+  return `SF${normalized.spreadingFactor}/BW${Math.round(normalized.bandwidthHz / 1000)}/CR4/${normalized.codingRate}`;
+}
+
+function calculateLiveLoRaAirtimeMs(profile = {}, payloadBytes = 20) {
+  const normalized = normalizeLiveRadioProfile(profile);
+  const tsymMs = ((1 << normalized.spreadingFactor) / normalized.bandwidthHz) * 1000;
+  const lowDataRateOptimization = normalized.spreadingFactor >= 11 && normalized.bandwidthHz <= 125000 ? 1 : 0;
+  const explicitHeader = true;
+  const phyCrc = true;
+  const implicitHeader = explicitHeader ? 0 : 1;
+  const crcEnabled = phyCrc ? 1 : 0;
+  const numerator =
+    8 * payloadBytes -
+    4 * normalized.spreadingFactor +
+    28 +
+    16 * crcEnabled -
+    20 * implicitHeader;
+  const denominator = 4 * (normalized.spreadingFactor - 2 * lowDataRateOptimization);
+  const payloadSymbolGroups = numerator <= 0 ? 0 : Math.ceil(numerator / denominator);
+  const payloadSymbols = 8 + payloadSymbolGroups * normalized.codingRate;
+  return (8 + 4.25 + payloadSymbols) * tsymMs;
+}
+
+function buildLiveSetRadioProfileCommandPayload(profile = {}, commandId = "sgc-profile-preview") {
+  const normalized = normalizeLiveRadioProfile(profile);
+  return {
+    type: "command",
+    command: "set_radio_profile",
+    commandId,
+    spreadingFactor: normalized.spreadingFactor,
+    bandwidthHz: normalized.bandwidthHz,
+    codingRate: normalized.codingRate,
+    persist: true,
+  };
+}
+
+function getLiveKnownProfileForId(profileId) {
+  const id = Number(profileId);
+  if (!Number.isFinite(id)) return null;
+  const status = liveState.gcStatus || {};
+  const statusProfileId = Number(status.radioProfileId ?? 0);
+  if (id === statusProfileId || id === 0) {
+    return liveProfileFromGcStatus();
+  }
+  return null;
+}
+
+function getLiveAssignmentForDrone(nodeId) {
+  const assignments = Array.isArray(liveState.channelTable?.assignments) ? liveState.channelTable.assignments : [];
+  return assignments.find((assignment) => Number(assignment.nodeId) === Number(nodeId)) || null;
+}
+
+function formatLiveDroneProfile(drone, latest = {}) {
+  const assignment = getLiveAssignmentForDrone(drone.id);
+  const profileId = latest.radioProfileId ?? assignment?.radioProfileId;
+  const knownProfile = getLiveKnownProfileForId(profileId);
+  if (knownProfile) return formatLiveRadioProfile(knownProfile);
+  if (profileId !== null && profileId !== undefined) return `Profile ${profileId}`;
+  return "N/A";
+}
+
 function getLiveFreshnessState(drone, now = Date.now()) {
   if (!drone || !drone.lastReceivedAt) return "offline";
   const ageMs = Math.max(0, now - drone.lastReceivedAt);
@@ -3236,6 +3339,106 @@ function renderLiveSpectrum(host, table = {}) {
   host.appendChild(wrap);
 }
 
+function toggleLiveProfilePicker() {
+  if (!liveState.profilePickerOpen) {
+    ensureLiveProfileDraft();
+  }
+  liveState.profilePickerOpen = !liveState.profilePickerOpen;
+  renderLiveGcStatus();
+}
+
+function closeLiveProfilePicker() {
+  liveState.profilePickerOpen = false;
+  renderLiveGcStatus();
+}
+
+function updateLiveProfileDraft(field, value) {
+  const draft = ensureLiveProfileDraft();
+  liveState.profileDraft = normalizeLiveRadioProfile({
+    ...draft,
+    [field]: Number(value),
+  });
+  renderLiveGcStatus();
+}
+
+function makeLiveProfileSelect(label, field, options, value, formatter) {
+  const wrap = document.createElement("label");
+  wrap.className = "live-profile-field";
+
+  const labelEl = document.createElement("span");
+  labelEl.textContent = label;
+  wrap.appendChild(labelEl);
+
+  const select = document.createElement("select");
+  options.forEach((option) => {
+    const item = document.createElement("option");
+    item.value = String(option);
+    item.textContent = formatter ? formatter(option) : String(option);
+    select.appendChild(item);
+  });
+  select.value = String(value);
+  select.addEventListener("change", () => updateLiveProfileDraft(field, select.value));
+  wrap.appendChild(select);
+
+  return wrap;
+}
+
+function renderLiveProfilePicker(host) {
+  if (!liveState.profilePickerOpen) return;
+
+  const draft = ensureLiveProfileDraft();
+  const airtimeMs = calculateLiveLoRaAirtimeMs(draft, 20);
+  const commandPreview = buildLiveSetRadioProfileCommandPayload(draft);
+
+  const panel = document.createElement("div");
+  panel.className = "live-profile-picker";
+
+  const header = document.createElement("div");
+  header.className = "live-profile-header";
+  const title = document.createElement("div");
+  title.textContent = "Radio Profile";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "live-profile-close";
+  closeBtn.type = "button";
+  closeBtn.textContent = "Close";
+  closeBtn.addEventListener("click", closeLiveProfilePicker);
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  const controls = document.createElement("div");
+  controls.className = "live-profile-controls";
+  controls.appendChild(makeLiveProfileSelect("SF", "spreadingFactor", LIVE_PROFILE_OPTIONS.spreadingFactors, draft.spreadingFactor));
+  controls.appendChild(makeLiveProfileSelect("BW", "bandwidthHz", LIVE_PROFILE_OPTIONS.bandwidthHz, draft.bandwidthHz, (hz) => `${Math.round(hz / 1000)} kHz`));
+  controls.appendChild(makeLiveProfileSelect("CR", "codingRate", LIVE_PROFILE_OPTIONS.codingRates, draft.codingRate, (cr) => `4/${cr}`));
+  panel.appendChild(controls);
+
+  const preview = document.createElement("div");
+  preview.className = "live-profile-preview";
+  preview.innerHTML = `
+    <span>Future assignments only</span>
+    <strong>${formatLiveRadioProfile(draft)}</strong>
+    <span>Airtime ${airtimeMs.toFixed(1)} ms</span>
+  `;
+  panel.appendChild(preview);
+
+  const actions = document.createElement("div");
+  actions.className = "live-profile-actions";
+  const status = document.createElement("span");
+  status.textContent = "Firmware update required";
+  const applyBtn = document.createElement("button");
+  applyBtn.className = "live-btn";
+  applyBtn.type = "button";
+  applyBtn.disabled = true;
+  applyBtn.textContent = "Apply";
+  applyBtn.dataset.commandPreview = JSON.stringify(commandPreview);
+  actions.appendChild(status);
+  actions.appendChild(applyBtn);
+  panel.appendChild(actions);
+
+  host.appendChild(panel);
+}
+
 function renderLiveGcStatus() {
   const host = document.getElementById("liveGcStatus");
   if (!host) return;
@@ -3254,21 +3457,35 @@ function renderLiveGcStatus() {
       ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
       : null;
   const items = [
-    ["Serial", liveState.connected ? "Connected" : "Disconnected"],
-    ["Shared", status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A"],
-    ["Profile", status.spreadingFactor ? `SF${status.spreadingFactor} / BW${Math.round(Number(status.bandwidthHz || 0) / 1000)} / CR4/${status.codingRate}` : "N/A"],
-    ["TX Power", status.txPowerDbm !== undefined ? `${status.txPowerDbm} dBm` : "22 dBm"],
-    ["Airtime", status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A"],
-    ["Buffer", buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A"],
-    ["Assigned", Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A"],
-    ["Channels", clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A"],
+    { label: "Serial", value: liveState.connected ? "Connected" : "Disconnected" },
+    { label: "Shared", value: status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A" },
+    { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
+    { label: "TX Power", value: status.txPowerDbm !== undefined ? `${status.txPowerDbm} dBm` : "22 dBm" },
+    { label: "Airtime", value: status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A" },
+    { label: "Buffer", value: buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A" },
+    { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
+    { label: "Channels", value: clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A" },
   ];
 
   const grid = document.createElement("div");
   grid.className = "live-gc-grid";
-  items.forEach(([label, value]) => {
+  items.forEach(({ label, value, action }) => {
     const item = document.createElement("div");
     item.className = "live-gc-item";
+    if (action === "profile") {
+      item.classList.add("live-gc-item-action");
+      item.setAttribute("role", "button");
+      item.tabIndex = 0;
+      item.setAttribute("aria-expanded", liveState.profilePickerOpen ? "true" : "false");
+      item.title = "Choose the default profile for future drone assignments";
+      item.addEventListener("click", toggleLiveProfilePicker);
+      item.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          toggleLiveProfilePicker();
+        }
+      });
+    }
     const labelEl = document.createElement("div");
     labelEl.className = "live-gc-label";
     labelEl.textContent = label;
@@ -3280,6 +3497,8 @@ function renderLiveGcStatus() {
     grid.appendChild(item);
   });
   host.appendChild(grid);
+
+  renderLiveProfilePicker(host);
 
   renderLiveSpectrum(host, table);
 
@@ -3484,6 +3703,9 @@ function applyLiveTelemetry(message, source = "serial") {
       rssi: message.rssi,
       snr: message.snr,
       frequencyMhz: message.frequencyMhz,
+      radioProfileId: message.radioProfileId,
+      txPeriodMs: message.txPeriodMs,
+      telemetryAirtimeMs: message.telemetryAirtimeMs,
       sequenceId: message.sequenceId,
       gcMillis: message.gcMillis,
       command: "Live telemetry",
@@ -3584,9 +3806,11 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "channel_table") {
     liveState.channelTable = message;
+    updateStatusList();
     renderLiveGcStatus();
   } else if (message.type === "assignments") {
     liveState.channelTable = { ...(liveState.channelTable || {}), assignments: message.assignments || [] };
+    updateStatusList();
     renderLiveGcStatus();
   } else if (message.type === "scanner_event") {
     liveState.scannerEvents.push(message);
@@ -3905,6 +4129,9 @@ function scheduleLiveMockTick(drone, rng) {
       rssi: Math.max(-118, Math.min(-55, (latest.rssi || -82) + (rng() - 0.5) * 2)),
       snr: Math.max(-6, Math.min(14, (latest.snr || 9) + (rng() - 0.5) * 0.8)),
       frequencyMhz: latest.frequencyMhz,
+      radioProfileId: latest.radioProfileId ?? 0,
+      txPeriodMs: latest.txPeriodMs ?? 27,
+      telemetryAirtimeMs: latest.telemetryAirtimeMs ?? 25.7,
       sequenceId: (latest.sequenceId || 0) + 1,
       gcMillis: Math.round((latest.gcMillis || 0) + 320),
       command: "Mock live telemetry",
@@ -3926,6 +4153,7 @@ function startLivePositionMock() {
   liveState.gcStatus = {
     type: "gc_status",
     nodeId: 0,
+    radioProfileId: 0,
     sharedFrequencyMhz: 915.0,
     spreadingFactor: 8,
     bandwidthHz: 500000,
@@ -3958,6 +4186,9 @@ function startLivePositionMock() {
       rssi: -78 - i * 2,
       snr: 10.5 - i * 0.4,
       frequencyMhz: 916.0 + i * 0.5,
+      radioProfileId: 0,
+      txPeriodMs: 27,
+      telemetryAirtimeMs: 25.7,
       sequenceId: 1,
       gcMillis: 0,
       command: "Mock live telemetry",
@@ -4047,6 +4278,7 @@ function renderLiveStatusList() {
     const fields = [
       ["Alt", `${Number(latest.alt || 0).toFixed(1)} m`],
       ["Speed", Number.isFinite(speed) ? `${(speed * 3.6).toFixed(0)} km/h` : "N/A"],
+      ["Profile", formatLiveDroneProfile(d, latest)],
       ["RSSI", latest.rssi !== null && latest.rssi !== undefined ? `${Number(latest.rssi).toFixed(0)} dBm` : "N/A"],
       ["SNR", latest.snr !== null && latest.snr !== undefined ? `${Number(latest.snr).toFixed(1)} dB` : "N/A"],
       ["Sats", latest.satelliteCount !== null && latest.satelliteCount !== undefined ? String(latest.satelliteCount) : "N/A"],

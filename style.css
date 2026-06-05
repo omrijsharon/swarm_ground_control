@@ -248,6 +248,20 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   min-width: 0;
 }
 
+.live-gc-item-action{
+  cursor: pointer;
+  border-radius: 6px;
+  padding: 3px 5px;
+  margin: -3px -5px;
+  transition: background 0.12s ease, border-color 0.12s ease;
+}
+
+.live-gc-item-action:hover,
+.live-gc-item-action:focus-visible{
+  outline: none;
+  background: rgba(255,255,255,0.08);
+}
+
 .live-gc-label{
   color: rgba(255,255,255,0.50);
   font-size: var(--ui-font-xs);
@@ -273,6 +287,86 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 .live-danger-btn{
   border-color: rgba(255,138,138,0.32);
   background: rgba(255,108,108,0.12);
+}
+
+.live-profile-picker{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(120,220,255,0.24);
+  border-radius: 8px;
+  background: rgba(8,22,28,0.34);
+}
+
+.live-profile-header,
+.live-profile-actions{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(255,255,255,0.82);
+  font-size: var(--ui-font-xs);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-profile-close{
+  border: 0;
+  background: transparent;
+  color: rgba(255,255,255,0.62);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.live-profile-controls{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.live-profile-field{
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: rgba(255,255,255,0.54);
+  font-size: var(--ui-font-xs);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-profile-field select{
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid rgba(255,255,255,0.18);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.9);
+  font: inherit;
+  font-weight: 800;
+}
+
+.live-profile-preview{
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 2px;
+  color: rgba(255,255,255,0.62);
+  font-size: var(--ui-font-xs);
+  line-height: 1.35;
+}
+
+.live-profile-preview strong{
+  color: rgba(255,255,255,0.9);
+}
+
+.live-profile-actions span{
+  color: rgba(255,211,108,0.86);
+  letter-spacing: 0;
+  text-transform: none;
 }
 
 .live-confirm{
