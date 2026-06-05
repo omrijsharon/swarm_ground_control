@@ -186,6 +186,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Store live drone `radioProfileId`, `txPeriodMs`, and `telemetryAirtimeMs` from telemetry.
   - [x] Use `channel_table.assignments[]` as a fallback source for drone profile display.
   - [x] Show each drone card's assigned profile.
+  - [x] Keep the inline profile picker stable by avoiding GC-panel rerenders from telemetry packets and one-second age refreshes.
 
 ## Out Of Scope
 

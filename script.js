@@ -3714,7 +3714,6 @@ function applyLiveTelemetry(message, source = "serial") {
     Date.now()
   );
   updateStatusList();
-  renderLiveGcStatus();
   draw();
 }
 
@@ -9032,7 +9031,6 @@ window.addEventListener("DOMContentLoaded", () => {
     updateCommandSequencePanel();
     updateTooltip();
     renderLiveControls();
-    renderLiveGcStatus();
     if (LIVE_POSITION_MODE) draw();
   }, 1000);
 
