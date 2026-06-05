@@ -3446,7 +3446,17 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
 
   const legend = document.createElement("div");
   legend.className = "live-spectrum-legend";
-  legend.innerHTML = "<span>Shared</span><span>Assigned</span><span>Clear</span><span>Noisy</span>";
+  [
+    ["shared", "Shared"],
+    ["assigned", "Assigned"],
+    ["clear", "Clear"],
+    ["noisy", "Noisy"],
+  ].forEach(([key, label]) => {
+    const item = document.createElement("span");
+    item.className = `live-spectrum-legend-item ${key}`;
+    item.textContent = label;
+    legend.appendChild(item);
+  });
   wrap.appendChild(legend);
   host.appendChild(wrap);
 }

@@ -519,6 +519,37 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   font-weight: 800;
 }
 
+.live-spectrum-legend-item{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.live-spectrum-legend-item::before{
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 7px currentColor;
+}
+
+.live-spectrum-legend-item.shared{
+  color: rgba(120,220,255,0.92);
+}
+
+.live-spectrum-legend-item.assigned{
+  color: rgba(255,211,108,0.96);
+}
+
+.live-spectrum-legend-item.clear{
+  color: rgba(108,255,146,0.90);
+}
+
+.live-spectrum-legend-item.noisy{
+  color: rgba(255,108,108,0.94);
+}
+
 .live-spectrum-bars{
   min-height: 48px;
   display: flex;
