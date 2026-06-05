@@ -1197,6 +1197,10 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   border-color: rgba(255,211,108,0.32);
 }
 
+.status-entry.live-entry.locking{
+  border-color: rgba(120,220,255,0.42);
+}
+
 .status-entry.live-entry.stale,
 .status-entry.live-entry.offline{
   border-color: rgba(255,108,108,0.32);
@@ -1223,21 +1227,37 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-freshness{
+  appearance: none;
   margin-left: auto;
   flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
   border: 1px solid rgba(255,255,255,0.16);
+  background: transparent;
   color: rgba(255,255,255,0.78);
   font-size: var(--ui-font-xs);
   font-weight: 900;
+  font-family: inherit;
   text-transform: uppercase;
 }
 
 .live-freshness.fresh{ color: #6CFF92; }
+.live-freshness.locking{ color: #78DCFF; }
 .live-freshness.late{ color: #FFD36C; }
 .live-freshness.stale,
 .live-freshness.offline{ color: #FF8A8A; }
+
+.live-freshness-action{
+  cursor: pointer;
+  background: rgba(255,108,108,0.08);
+}
+
+.live-freshness-action:hover,
+.live-freshness-action:focus-visible{
+  outline: none;
+  border-color: rgba(255,138,138,0.42);
+  background: rgba(255,108,108,0.16);
+}
 
 .status-led{
   width: 12px;
@@ -1248,6 +1268,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .status-led.green{ color: #6CFF92; background: rgba(108,255,146,0.9); }
+.status-led.blue{ color: #78DCFF; background: rgba(120,220,255,0.9); }
 .status-led.red{ color: #FF6C6C; background: rgba(255,108,108,0.9); }
 .status-led.yellow{ color: #FFD36C; background: rgba(255,211,108,0.9); }
 .status-led.gray{ color: rgba(255,255,255,0.35); background: rgba(255,255,255,0.35); }

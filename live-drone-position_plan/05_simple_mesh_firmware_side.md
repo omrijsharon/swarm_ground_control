@@ -386,6 +386,9 @@ The firmware has two runtime roles in this branch:
   - [x] Use second-pass median RSSI as the final noisy/clear decision so single max-RSSI spikes do not reject a channel.
   - [x] Implement `rescan_channels` for manual SGC spectrum refresh without clearing assignments.
   - [x] On `rescan_channels`, emit `command_ack`, rerun channel scan, then emit updated `channel_table` and `gc_status`.
+  - [x] Implement `relock_drone` for manual runtime TST recovery of one assigned drone.
+  - [x] On `relock_drone`, reset only RAM phase fields and keep assignment/channel/persisted state intact.
+  - [x] On `relock_drone`, emit `command_ack` with `nodeId` plus `scanner_event.event = "manual_relock_scheduled"`.
   - [x] Bench-test late SGC connection by requesting status and channel table after GC boot.
     - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
   - [x] Bench-test `Start Fresh Session` clears flash and RAM assignments.

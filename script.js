@@ -35,6 +35,7 @@ const LIVE_FRESHNESS_MS = {
   late: 2000,
   stale: 5000,
 };
+const LIVE_RELOCK_TIMEOUT_MS = 8000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 
@@ -126,6 +127,7 @@ const liveState = {
   profileDraft: null,
   assignmentEvents: [],
   scannerEvents: [],
+  relockRequests: new Map(),
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
   mockActive: false,
   mockTimers: [],
@@ -2931,10 +2933,32 @@ function getLiveFreshnessState(drone, now = Date.now()) {
   return "offline";
 }
 
-function freshnessLedClass(freshness) {
-  if (freshness === "fresh") return "green";
-  if (freshness === "late") return "yellow";
-  if (freshness === "stale") return "red";
+function isLiveDroneRelocking(nodeId, now = Date.now()) {
+  const request = liveState.relockRequests.get(Number(nodeId));
+  if (!request) return false;
+  if (now >= request.expiresAt) {
+    liveState.relockRequests.delete(Number(nodeId));
+    return false;
+  }
+  return true;
+}
+
+function getLiveDisplayState(drone, freshness, now = Date.now()) {
+  if (drone && isLiveDroneRelocking(drone.id, now)) return "locking";
+  return freshness;
+}
+
+function formatLiveDisplayState(state) {
+  if (state === "fresh") return "ONLINE";
+  if (state === "locking") return "LOCKING";
+  return String(state || "offline").toUpperCase();
+}
+
+function freshnessLedClass(state) {
+  if (state === "fresh") return "green";
+  if (state === "locking") return "blue";
+  if (state === "late") return "yellow";
+  if (state === "stale") return "red";
   return "gray";
 }
 
@@ -3519,6 +3543,41 @@ function cancelLiveSpectrumRescanConfirmation() {
   renderLiveGcStatus();
 }
 
+async function requestLiveDroneRelock(nodeId) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id) || id <= 0) return;
+  if (!liveState.connected) {
+    appendLiveDebug(`relock unavailable: connect GC serial first for node ${id}`);
+    return;
+  }
+
+  const expiresAt = Date.now() + LIVE_RELOCK_TIMEOUT_MS;
+  liveState.relockRequests.set(id, { expiresAt, commandId: null });
+  updateStatusList();
+
+  const commandId = await sendLiveSerialCommand("relock_drone", { nodeId: id });
+  const request = liveState.relockRequests.get(id);
+  if (!commandId) {
+    liveState.relockRequests.delete(id);
+    updateStatusList();
+    return;
+  }
+  if (request) {
+    request.commandId = commandId;
+  }
+
+  window.setTimeout(() => {
+    const current = liveState.relockRequests.get(id);
+    if (!current || current.commandId !== commandId) return;
+    liveState.relockRequests.delete(id);
+    if (liveState.pendingCommands.has(commandId)) {
+      liveState.pendingCommands.delete(commandId);
+      appendLiveDebug(`command timeout: relock_drone node ${id}`);
+    }
+    updateStatusList();
+  }, LIVE_RELOCK_TIMEOUT_MS);
+}
+
 async function startLiveSpectrumRescan() {
   if (liveState.spectrumRescanPending) return;
   if (!liveState.connected) {
@@ -3900,6 +3959,7 @@ function applyLiveTelemetry(message, source = "serial") {
   }
 
   const drone = getOrCreateLiveDrone(message.nodeId);
+  liveState.relockRequests.delete(Number(message.nodeId));
   drone.updateTelemetry(
     {
       uptimeSec: message.gcMillis ? message.gcMillis / 1000 : 0,
@@ -3944,6 +4004,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
   liveState.serialTelemetrySeen = false;
+  liveState.relockRequests.clear();
   if (clearAssignments) {
     liveState.assignmentEvents = [];
     if (liveState.channelTable) {
@@ -3996,6 +4057,19 @@ function handleLiveProtocolMessage(message, source = "serial") {
           liveState.spectrumStatus = reason === "unknown_command"
             ? "GC firmware does not support re-scan yet. Flash the updated GC firmware."
             : `Re-scan rejected: ${reason}`;
+        }
+      } else if (pending.command === "relock_drone") {
+        const nodeId = Number(message.nodeId ?? pending.nodeId);
+        if (Number.isFinite(nodeId)) {
+          if (message.accepted) {
+            const current = liveState.relockRequests.get(nodeId);
+            liveState.relockRequests.set(nodeId, {
+              expiresAt: current?.expiresAt || Date.now() + LIVE_RELOCK_TIMEOUT_MS,
+              commandId: message.commandId,
+            });
+          } else {
+            liveState.relockRequests.delete(nodeId);
+          }
         }
       }
     }
@@ -4095,9 +4169,13 @@ async function sendLiveSerialCommand(command, fields = {}) {
   if (!liveState.connected || !liveState.port?.writable) {
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     if (command === "rescan_channels") liveState.spectrumRescanPending = false;
+    if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.relockRequests.delete(Number(fields.nodeId));
+    }
     appendLiveDebug("command rejected locally: serial port is not connected");
     renderLiveControls();
     renderLiveGcStatus();
+    updateStatusList();
     return null;
   }
   const commandId = `sgc-${String(++liveState.commandSeq).padStart(4, "0")}`;
@@ -4107,7 +4185,7 @@ async function sendLiveSerialCommand(command, fields = {}) {
     commandId,
     ...fields,
   };
-  liveState.pendingCommands.set(commandId, { command, sentAt: Date.now() });
+  liveState.pendingCommands.set(commandId, { command, sentAt: Date.now(), ...fields });
   try {
     const writer = liveState.port.writable.getWriter();
     try {
@@ -4122,9 +4200,13 @@ async function sendLiveSerialCommand(command, fields = {}) {
     liveState.pendingCommands.delete(commandId);
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     if (command === "rescan_channels") liveState.spectrumRescanPending = false;
+    if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.relockRequests.delete(Number(fields.nodeId));
+    }
     appendLiveDebug(`command send failed: ${err.message || err}`);
     renderLiveControls();
     renderLiveGcStatus();
+    updateStatusList();
     return null;
   }
 }
@@ -4497,13 +4579,14 @@ function renderLiveStatusList() {
     const latest = d.getLatest();
     if (!latest) return;
     const freshness = getLiveFreshnessState(d, now);
+    const displayState = getLiveDisplayState(d, freshness, now);
     const row = document.createElement("div");
-    row.className = `status-entry live-entry ${freshness}`;
+    row.className = `status-entry live-entry ${displayState}`;
     row.dataset.droneId = String(d.id);
     if (pinnedDroneId === d.id) row.classList.add("is-active");
 
     const led = document.createElement("div");
-    led.className = `status-led ${freshnessLedClass(freshness)}`;
+    led.className = `status-led ${freshnessLedClass(displayState)}`;
     row.appendChild(led);
 
     const main = document.createElement("div");
@@ -4534,9 +4617,18 @@ function renderLiveStatusList() {
     main.appendChild(grid);
     row.appendChild(main);
 
-    const badge = document.createElement("div");
-    badge.className = `live-freshness ${freshness}`;
-    badge.textContent = freshness;
+    const badge = document.createElement(displayState === "offline" ? "button" : "div");
+    badge.className = `live-freshness ${displayState}`;
+    badge.textContent = formatLiveDisplayState(displayState);
+    if (displayState === "offline") {
+      badge.type = "button";
+      badge.classList.add("live-freshness-action");
+      badge.title = "Try to re-lock this drone's telemetry timing";
+      badge.addEventListener("click", (event) => {
+        event.stopPropagation();
+        requestLiveDroneRelock(d.id);
+      });
+    }
     row.appendChild(badge);
 
     row.addEventListener("click", () => {
@@ -4797,11 +4889,12 @@ function ensureTooltipEl() {
 function renderLiveTooltip(el, target, latest) {
   const now = Date.now();
   const freshness = getLiveFreshnessState(target, now);
+  const displayState = getLiveDisplayState(target, freshness, now);
   const age = formatLiveAge(target.lastReceivedAt, now);
   const speed = Number(latest.groundSpeed);
   const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
   el.innerHTML = `
-    <div class="row battery-row"><strong>Drone ${target.id}</strong><span class="live-freshness ${freshness}">${freshness}</span></div>
+    <div class="row battery-row"><strong>Drone ${target.id}</strong><span class="live-freshness ${displayState}">${formatLiveDisplayState(displayState)}</span></div>
     <div class="row"><span>Age</span><strong>${age}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Number(latest.alt || 0).toFixed(1)} m</strong></div>
     <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${(speed * 3.6).toFixed(0)} km/h` : "N/A"}</strong></div>

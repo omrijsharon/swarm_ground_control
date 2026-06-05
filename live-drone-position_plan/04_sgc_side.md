@@ -56,6 +56,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Mark drone late when packet age is `1000-2000 ms`.
   - [x] Mark drone stale when packet age is `2000-5000 ms`.
   - [x] Mark drone offline when packet age is `> 5000 ms`.
+  - [x] Display the fresh state as `ONLINE` in the operator UI.
   - [x] Update marker style based on freshness.
   - [x] Update list/panel style based on freshness.
   - [x] Show packet age in tooltip or detail panel.
@@ -201,6 +202,17 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [ ] Manually verify opening and closing the spectrum panel in the browser.
   - [ ] Manually verify canceling `Re-scan` sends no command.
   - [ ] Manually verify confirming `Re-scan` fills the spectrum live and telemetry recovers after scan.
+
+- [ ] Milestone 18: Drone TST re-lock UI
+  - [x] Add transient `LOCKING` display state for manual TST recovery.
+  - [x] Make only the `OFFLINE` badge clickable.
+  - [x] Clicking `OFFLINE` sends `relock_drone` with the drone `nodeId`.
+  - [x] Stop badge clicks from also selecting/focusing the drone card.
+  - [x] Clear `LOCKING` immediately when telemetry arrives for that node.
+  - [x] Expire `LOCKING` after `8 seconds` if telemetry does not resume.
+  - [x] Apply `ONLINE`/`LOCKING` label mapping in the drone tooltip.
+  - [ ] Manually verify `OFFLINE -> LOCKING -> ONLINE` in the browser.
+  - [ ] Manually verify failed relock returns to `OFFLINE` after timeout.
 
 ## Out Of Scope
 

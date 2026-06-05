@@ -279,6 +279,7 @@ Implementation note: SGC now has a disabled production UI picker that can previe
   - [x] Define a command to clear one assignment.
   - [x] Define a command to clear all assignments.
   - [x] Define a command to force a channel rescan.
+  - [x] Define a command to force runtime TST re-lock for one assigned drone.
   - [x] Define a command to reassign a drone to a new clear channel.
 
 Assignment maintenance command examples:
@@ -287,6 +288,7 @@ Assignment maintenance command examples:
 {"type":"command","command":"clear_assignment","commandId":"sgc-0200","nodeId":2,"persist":true}
 {"type":"command","command":"clear_all_assignments","commandId":"sgc-0201","persist":true}
 {"type":"command","command":"rescan_channels","commandId":"sgc-0202","persist":true}
+{"type":"command","command":"relock_drone","commandId":"sgc-0205","nodeId":2}
 {"type":"command","command":"reassign_drone","commandId":"sgc-0203","nodeId":2,"persist":true}
 {"type":"command","command":"reassign_drone","commandId":"sgc-0204","nodeId":2,"frequencyMhz":917.0,"persist":true}
 ```
@@ -299,6 +301,8 @@ Maintenance response rules:
 - Rejected commands emit `command_ack` with `accepted:false` and may also emit `warning` or `error`.
 
 Implementation note: `rescan_channels` is implemented for manual spectrum refresh. It preserves existing assignments, emits `command_ack`, runs the GC channel scan, then emits fresh `channel_scan_event`, `channel_table`, and `gc_status` output.
+
+Implementation note: `relock_drone` is implemented for manual runtime TST recovery. It preserves the assignment and flash state, emits `command_ack`, emits `scanner_event.event = "manual_relock_scheduled"`, and lets the GC reacquire phase from normal assigned-channel telemetry.
 
 ## Parser Rules
 
