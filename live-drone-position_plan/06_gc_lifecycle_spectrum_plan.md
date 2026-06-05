@@ -135,6 +135,8 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] Keep one immediate assigned-channel recovery attempt after the first missed telemetry packet.
   - [x] Demote repeatedly missed assigned-channel recovery to a background retry cadence.
     - After `2` misses, the GC clears the stale runtime phase for that assignment and retries acquisition every `2 s` instead of letting an absent drone consume the normal scanner cadence.
+  - [x] Protect healthy predicted drone slots from stale recovery windows.
+    - Recovery/acquisition listens are clipped before the next known TST window from another active assignment, so a missing node should not make a live node miss enough packets to cascade offline.
   - [x] Build-check the firmware after the scheduler change.
     - `pio run -e seeed-xiao-s3` passed.
   - [x] Bench-verify the exact regression: power-cycle drone node `2` while the GC remains on and confirm it rejoins instead of endless `telemetry_missed`.
