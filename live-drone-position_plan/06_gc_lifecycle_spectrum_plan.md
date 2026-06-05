@@ -89,8 +89,10 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] SGC asks for confirmation before sending a manual channel rescan.
   - [x] SGC sends `rescan_channels` with `persist:true` after confirmation.
   - [x] SGC keeps the panel open and updates bars live during a manual rescan.
+  - [x] SGC shows visible panel status for re-scan accepted/rejected/timeout/scanning/complete.
   - [x] GC implements `rescan_channels` without clearing assignments.
   - [x] GC emits scan events, a fresh `channel_table`, and `gc_status` after manual rescan.
+    - Direct COM18 serial probe after flashing GC returned `command_ack accepted=true`, `scan_started`, `scan_complete`, `channel_table`, and `gc_status.scanMode = manual_rescan`.
   - [ ] Manually verify the browser panel open/close flow.
   - [ ] Manually verify the cancel-confirmation path sends no command.
   - [ ] Bench-verify manual rescan temporarily interrupts telemetry and then recovers.

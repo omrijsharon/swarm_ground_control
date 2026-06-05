@@ -196,6 +196,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Add a close icon to the spectrum panel.
   - [x] Add clear/noisy/assigned scan metadata to the panel.
   - [x] Add a confirmed `Re-scan` action that sends `rescan_channels`.
+  - [x] Show operator-facing status for re-scan send, accepted, rejected, timeout, scanning, and complete states.
   - [x] Keep boot/fresh-session scan animation behavior unchanged when the panel is closed.
   - [ ] Manually verify opening and closing the spectrum panel in the browser.
   - [ ] Manually verify canceling `Re-scan` sends no command.
