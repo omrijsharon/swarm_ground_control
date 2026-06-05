@@ -27,6 +27,8 @@ The firmware has two runtime roles in this branch:
   - [x] Define `SILENCE` struct.
   - [x] Define `JOIN_ASSIGN` struct.
   - [x] Define `JOIN_ACK` struct.
+  - [x] Define `TX_PERIOD_PROPOSAL` struct.
+  - [x] Define `TX_PERIOD_ACK` struct.
   - [x] Define 20-byte telemetry struct.
   - [x] Add compile-time size checks for every packet struct.
   - [x] Define endian/scaling rules in comments next to the structs.
@@ -77,13 +79,16 @@ The firmware has two runtime roles in this branch:
     - `channel_table.assignments[]` now supports `radioProfileId`, `txPeriodMs`, and `telemetryAirtimeMs`.
   - [x] Bench-verify profile/timing JSON on connected GC.
     - `COM18` reported one supported radio profile, default profile `0`, `telemetryAirtimeMs = 25.728`, `txPeriodMs = 27`, and `assignedDrones = 0` before join flow exists.
+    - The default airtime buffer was later increased to `74 ms`, so the same profile now computes `txPeriodMs = 100`.
 
 - [ ] Milestone 6: Implement GC assignment persistence
   - [x] Store `node_id -> frequencyMhz/channelIndex` assignments in flash.
     - Persistence format stores `nodeId` and `channelIndex`; frequency is recomputed from the BW500 channel table.
   - [x] Persist the assigned `radio_profile_id` with each channel assignment.
   - [x] Persist the assigned `tx_period_ms` or recompute it from `radio_profile_id` at boot.
-    - TX period and airtime are recomputed at boot from `radio_profile_id`.
+    - Firmware now persists accepted `txPeriodMs` plus `timingAccepted`; old/no-handshake assignments still fall back to the profile default.
+  - [x] Persist whether the TX period timing handshake was accepted.
+    - TST, freshness, RSSI/SNR, and miss counters remain RAM-only.
   - [x] Reload assignments at boot.
   - [x] Validate reloaded channels against the clear channel scan.
     - Assignments on noisy, reserved, shared, guard, or invalid channels are dropped during boot load.
@@ -115,6 +120,8 @@ The firmware has two runtime roles in this branch:
   - [x] Drone extracts assigned `channel_index`, `radio_profile_id`, and `tx_period_ms` from `JOIN_ASSIGN`.
   - [x] Drone sends `JOIN_ACK`.
   - [x] Drone switches to the assigned telemetry channel and radio profile after ACK.
+  - [x] Drone enters timing proposal state after `JOIN_ACK` instead of starting steady telemetry immediately.
+  - [x] Drone returns to shared-channel join if the timing proposal ACK is not received after retries.
   - [x] Drone accelerates retry after another drone completes assignment.
     - If a waiting drone hears `JOIN_ASSIGN` for another node, it remembers that node/nonce/channel. When it later hears the matching `JOIN_ACK`, it immediately schedules a fresh random join backoff instead of waiting for the full assignment timeout.
   - [ ] Drone returns to join mode if assignment expires or radio config changes.
@@ -130,8 +137,9 @@ The firmware has two runtime roles in this branch:
   - [x] GC chooses a `radio_profile_id` and computes airtime plus `tx_period_ms` for that profile.
   - [x] GC sends `JOIN_ASSIGN`.
   - [x] GC waits for `JOIN_ACK`.
-    - Current implementation waits once for up to `80 ms`.
-  - [ ] GC repeats `SILENCE -> JOIN_ASSIGN -> ACK wait` if ACK is missed.
+    - Current implementation waits up to `80 ms` per assignment attempt.
+  - [x] GC repeats `SILENCE -> JOIN_ASSIGN -> ACK wait` if ACK is missed.
+    - Required behavior: retry up to `3` attempts with the same assignment and request nonce, emit the attempt number in `assignment_event`, and keep the assignment available for reuse on a later `JOIN_REQUEST` if all attempts miss.
   - [ ] GC marks assignment active only after receiving telemetry on the assigned channel.
     - Current implementation reuses persisted assignments before telemetry is received; received telemetry updates timing/RSSI/SNR state, but explicit "active after telemetry" semantics are still future work.
   - [x] GC emits assignment events over serial JSON.
@@ -156,63 +164,134 @@ The firmware has two runtime roles in this branch:
     - Satellite count comes from `MSP_RAW_GPS` when a GPS response is available; otherwise it is `0`.
   - [x] Extract yaw.
     - Code path is implemented and latest node `2` bench capture confirms real MSP yaw is read.
+  - [x] Read `MSP_RAW_GPS`, `MSP_ATTITUDE`, and `MSP_ALTITUDE` with `MSP_MULTIPLE_MSP`.
+    - Firmware sends `MSP_MULTIPLE_MSP` command `230` with payload `[106, 108, 109]` and parses length-prefixed subresponses in request order.
+  - [x] Bench-verify `MSP_MULTIPLE_MSP` returns attitude and altitude from the FC.
+    - After power-cycling the drone ESP32 and FC together, node `2` on `COM15` reported `mspBatchOk=true`, `mspBatchFlags=7`, `attitudeReadOk=true`, `attitudeValid=true`, `altitudeReadOk=true`, `altitudeValid=true`, and `gpsReadOk=true` with no GPS fix.
+    - ESP-only reset through the serial bootloader can still leave the FC MSP link unavailable until the drone ESP32 and FC are power-cycled together again.
   - [x] Set telemetry validity flags.
     - Adds `GPS_SIMULATED`; sets yaw/course/speed flags according to available fields.
   - [x] Increment sequence ID for every telemetry packet.
   - [x] Pack the 20-byte telemetry packet.
     - Packet layout remains unchanged at 20 bytes.
 
+- [ ] Milestone 9A: Add simulated-FC drone mode for bench scheduler tests
+  - [x] Add runtime config fields for `live_position.simulated_fc` and `live_position.simulated_msp_batch_ms`.
+    - Defaults remain `false` and `8 ms`, so the GC and node `2` real-FC path are unchanged unless a device config explicitly enables simulation.
+  - [x] Skip real MSP calls when `simulated_fc` is enabled.
+  - [x] Delay by `simulated_msp_batch_ms` during the telemetry snapshot path to mimic FC read cost.
+  - [x] Populate the same `DroneRuntime` FC fields used by the real MSP path.
+    - Simulated drones generate deterministic node-specific lat/lng near Tel Aviv plus altitude, yaw, CoG, speed, and satellite count.
+  - [x] Set `GPS_SIMULATED`, `YAW_VALID`, `COURSE_OVER_GROUND_VALID`, and `GROUND_SPEED_VALID` in the 20-byte telemetry packet.
+  - [x] Keep the LoRa air protocol unchanged.
+    - Simulated-FC drones still use normal join, assignment ACK, timing proposal, timing ACK, and 20-byte telemetry packets.
+  - [x] Emit `simulatedFc` in drone serial diagnostics.
+    - `drone_fc_status` and `drone_live_status` identify simulated boards without changing GC serial JSON shape.
+  - [x] Build-check simulated-FC firmware support.
+    - `pio run -e seeed-xiao-s3` passes after adding the simulated-FC config and runtime path.
+  - [x] Flash node `1` with `simulated_fc = true` and `simulated_msp_batch_ms = 8`.
+    - `COM26` was flashed with the shared firmware and a temporary LittleFS config using `node_id = 1`, `node_role = drone`, and simulated-FC mode enabled. The repo `data/config.json` was restored to the GC config after upload.
+  - [x] Bench-verify node `1` joins the GC while node `2` remains active.
+    - Node `1` alone was reset and verified after clearing stale assignments: it rejoined the GC on `COM18`, received `911.0 MHz`, completed the timing proposal handshake, and emitted `drone_telemetry` with `gpsSource = "simulated"`.
+    - After node `2` was power-cycled, the GC/SGC path showed node `1` and node `2` active together.
+  - [ ] Bench-verify SGC shows drones `1` and `2` live at the same time.
+  - [ ] Run a 30 second two-node bench sample and check for sequence gaps or repeated `telemetry_missed`.
+    - Single simulated node baseline: a 30 second GC serial sample for node `1` received `305` telemetry packets with `0` sequence gaps and no `telemetry_missed` events. The two-node sample remains pending.
+  - [x] Flash node `3` with `simulated_fc = true` and `simulated_msp_batch_ms = 8`.
+    - `COM7` was flashed with the shared firmware and a temporary LittleFS config using `node_id = 3`, `node_role = drone`, and simulated-FC mode enabled. The repo `data/config.json` was restored to the GC config after upload.
+  - [x] Bench-verify GC receives node `3` after two active drones are already streaming.
+    - Initial node `3` attempts timed out because the GC shared-channel discovery window was too narrow and could be starved by assigned-drone scan windows. Firmware now forces a `160 ms` shared discovery listen at least every `1.5 s` and node join assignment retry timeout is `350 ms`.
+    - After flashing the GC on `COM18` and node `3` on `COM7`, GC received node `3` `JOIN_REQUEST`, assigned `920.5 MHz`, received `JOIN_ACK`, accepted the timing proposal, and emitted node `3` telemetry.
+  - [ ] Bench-verify SGC shows drones `1`, `2`, and `3` live at the same time.
+    - GC serial verification passed; browser/UI verification remains manual.
+  - [x] Bench-verify a reset/rejoin event does not permanently starve the other active drones.
+    - Power-cycling node `1` exposed a recovery cascade: the GC spent long windows reacquiring one node, then marked other nodes missed and chased their recovery windows too. Firmware now bounds recovery to one TX period, delays shared rejoin probes until a node has been absent for at least `2.5 s`, keeps trying assigned-channel acquisition for persisted drones with unknown phase, and uses a `140 ms` phase-acquisition window for 100 ms transmitters.
+  - [x] Bench-verify scanner samples active drones instead of chasing every 100 ms packet.
+    - The GC now schedules its next listen based on active drone count. In a 30 second three-node sample after the fix, GC received node `1` at about `5.07 Hz`, node `3` at about `5.03 Hz`, and node `2` at about `3.87 Hz`. Sequence gaps are expected in this mode because the drones still transmit every `100 ms` and the GC intentionally samples a subset of packets.
+
 - [ ] Milestone 10: Implement drone telemetry TX loop
   - [x] Apply the assigned radio profile before starting assigned-channel telemetry.
     - Current supported profile table has only profile `0`; the drone validates this profile and switches to the assigned channel.
   - [x] Use the assigned `tx_period_ms` from `JOIN_ASSIGN`.
+    - This is now a safe provisional period before the measured timing handshake.
   - [x] Locally compute telemetry airtime from the assigned LoRa settings for diagnostics and sanity checks.
   - [x] Confirm computed `ceil(airtime_ms) + airtime_buffer_ms` matches the assigned TX period.
+    - This remains true for the provisional `JOIN_ASSIGN` period; the steady period is later accepted by `TX_PERIOD_ACK`.
   - [x] Transmit telemetry on the assigned channel.
     - This slice transmits mixed telemetry: real FC yaw/altitude when MSP reads succeed, simulated GPS fields while FC GPS is inactive.
-  - [x] Schedule the next transmission from the previous transmission start time.
+  - [x] Measure one probe cycle before steady telemetry.
+    - The measured cycle is `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX`.
+  - [x] Send `TX_PERIOD_PROPOSAL` with measured cycle time, proposed period, MSP batch time, TX duration, and MSP flags.
+  - [x] Retry the same timing proposal up to five times while waiting `50 ms` for ACK.
+  - [x] Enter steady telemetry only after accepted `TX_PERIOD_ACK`.
+  - [x] Schedule steady cycles from cycle start using the accepted period.
   - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
-  - [ ] Keep timing stable enough for GC phase tracking.
+  - [x] Keep timing stable enough for GC phase tracking.
+    - GC now clamps accepted timing periods to at least `GC_MIN_ACCEPTED_TX_PERIOD_MS = 100` so a fast measured bench proposal such as `63 ms` does not outrun the current single-radio scanner margin.
+    - Test note: raising GC USB serial to `921600` and temporarily accepting `65 ms` did not make the low-period case reliable; the 25 second GC sample still showed many `telemetry_missed` events and sequence gaps.
+    - Persisted timing periods below that GC minimum are treated as stale timing and force a new timing handshake after the drone rejoins.
+    - Per-packet `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` scanner debug events are suppressed by default to avoid USB serial backpressure during high-rate telemetry.
   - [x] Handle missed MSP reads without crashing.
-    - Bench run continued transmitting before MSP was verified. Latest capture confirms MSP attitude, altitude, and GPS request paths now respond successfully.
+    - Bench run continued transmitting when MSP was unavailable. Latest timing-handshake bench capture after flashing the drone showed `mspBatchOk=false`, `mspBatchFlags=0`, and `mspBatchMs=50-51`, so LoRa telemetry stayed alive while FC data was stale.
   - [x] Encode invalid telemetry fields consistently.
     - Missing yaw uses `INVALID_YAW_DEG`; missing GPS response uses satellite count `0`; simulated GPS is marked with `GPS_SIMULATED`.
 
-- [ ] Milestone 11: Implement GC assigned-channel scanner
-  - [ ] Maintain one scan state per assigned drone.
-    - Narrow first-active-assignment scanner is implemented; full per-drone scanner state is still future work.
+- [x] Milestone 11: Implement GC assigned-channel scanner
+  - [x] Maintain one scan state per assigned drone.
+    - Multi-drone scheduler now uses per-assignment runtime timing fields plus one scanner runtime for the active listen window.
   - [x] Store per-drone channel index, frequency, radio profile, airtime, TX period, last RX done time, estimated TX start time, next predicted TX start time, miss count, RSSI/SNR, and last sequence ID.
     - Runtime receive fields are updated after valid telemetry is received.
   - [x] Change GC LoRa frequency and radio parameters before listening to each drone.
-    - Current scanner switches frequency between `915.0 MHz` shared channel and the first active assigned channel; only radio profile `0` is currently supported.
+    - Scheduler switches between shared `915.0 MHz` and the selected assigned drone channel; only radio profile `0` is currently supported.
   - [x] Tune to each assigned channel using that drone's assigned radio profile.
-    - Current scanner tunes to the first active assigned channel with profile `0`.
+    - Scheduler selects assigned drones by predicted listen window and tunes to the selected channel with profile `0`.
   - [x] Receive a valid telemetry packet.
     - Physical test received valid 20-byte fake telemetry from drone node `2`.
+  - [x] Listen for assigned-channel `TX_PERIOD_PROPOSAL` after `JOIN_ACK`.
+  - [x] Ignore the first 20-byte probe telemetry while waiting for a timing proposal.
+  - [x] Validate proposed TX periods in the `45-250 ms` range.
+    - GC accepts only protocol-valid proposals, then clamps the accepted operating period to at least `100 ms` for the current scanner.
+  - [x] Send `TX_PERIOD_ACK` with the accepted period.
+  - [x] Persist accepted `txPeriodMs` and `timingAccepted`.
+  - [x] Keep runtime TST, freshness, RSSI/SNR, and miss counters out of flash.
   - [x] Record RSSI and SNR for the received packet.
   - [x] Estimate packet start time as `rx_done_time - assigned_profile_airtime_ms`.
   - [x] Predict the next transmission start time as `estimated_tx_start + tx_period_ms`.
-  - [ ] Sort assigned drones by nearest predicted listen deadline before every scan pass.
-  - [ ] Tune before predicted packet start by a guard interval.
-  - [ ] Use an efficient scheduler that listens to the drone with the earliest useful receive window first.
-  - [ ] If a predicted receive window is already missed, skip to the next future slot instead of waiting through stale time.
+  - [x] Sort assigned drones by nearest predicted listen deadline before every scan pass.
+    - Implementation selects the assignment with the earliest useful `listen_start_ms` each scheduler decision.
+  - [x] Tune before predicted packet start by a guard interval.
+    - Uses `GC_SCANNER_TUNE_GUARD_MS = 8`.
+  - [x] Use an efficient scheduler that listens to the drone with the earliest useful receive window first.
+  - [x] If a predicted receive window is already missed, skip to the next future slot instead of waiting through stale time.
+    - Emits `scanner_event` with `event = "stale_slot_skipped"` when this happens.
   - [x] Correct timing phase on every received packet.
     - The narrow scanner updates estimated and next TX start from each valid packet.
-  - [ ] Use longer listen windows after missed packets.
-  - [ ] After one miss, listen for up to `2 * tx_period_ms`; after two or more misses, listen for up to `3 * tx_period_ms`.
+  - [x] Use longer listen windows after missed packets.
+  - [x] After one miss, listen for up to `2 * tx_period_ms`; after two or more misses, listen for up to `3 * tx_period_ms`.
   - [x] Keep the shared discovery channel in the schedule so new drones can join.
   - [x] Cycle back to the shared channel regularly for new drones.
-    - Current narrow scanner uses fixed listen windows: shared channel for `120 ms`, assigned channel for `160 ms`.
+    - Scheduler uses `GC_SCANNER_SHARED_LISTEN_MS = 40` and `GC_SCANNER_SHARED_INTERVAL_MS = 500`.
+  - [x] Hold shared-channel windows until their deadline once the GC has tuned to shared.
+    - This prevents a stale assigned-channel prediction from immediately preempting the shared listen window before a reset drone can be heard.
+  - [x] Force a periodic shared discovery window even while active drones are streaming.
+    - With two active drones, a new simulated node `3` repeatedly sent `JOIN_REQUEST` but the GC did not hear it because the normal `40 ms / 500 ms` shared window could be preempted by assigned-channel scan timing. The GC now forces a `160 ms` shared discovery listen at least every `1.5 s`.
+  - [x] Force longer shared-channel rejoin probes after repeated misses on an assigned drone.
+    - After `3` misses, the GC forces a `160 ms` shared rejoin probe when the shared interval is due. After `8` misses, it uses an extended `1100 ms` shared window to catch a reset drone's retrying `JOIN_REQUEST`.
 
 - [ ] Milestone 12: Implement GC heading fusion
-  - [ ] Use course over ground when speed is reliable.
-  - [ ] Start with CoG trust threshold around `4 m/s`.
-  - [ ] Use yaw plus learned yaw bias when CoG is not reliable.
-  - [ ] Estimate yaw bias from `CoG - yaw` when speed is above threshold and GPS quality is good.
-  - [ ] Update yaw bias slowly rather than replacing it from one sample.
+  - [x] Use course over ground when speed is reliable.
+    - Current implementation phases CoG into the result instead of switching abruptly.
+  - [x] Replace the hard `4 m/s` threshold with a smooth CoG blend.
+    - CoG weight ramps from `0.0` at `1.5 m/s` to `1.0` at `6.0 m/s` with smoothstep.
+  - [x] Keep learned yaw bias runtime-only for v1.
+    - Bias is stored in GC RAM per active assignment; it is not persisted to flash.
+  - [x] Use yaw plus learned yaw bias when CoG is not reliable.
+  - [x] Estimate yaw bias from `CoG - yaw` when speed, GPS quality, CoG, and yaw are reliable.
+  - [x] Update yaw bias slowly rather than replacing it from one sample.
   - [ ] Avoid bias updates during obvious unstable movement if detectable.
   - [x] Emit raw CoG, raw yaw, derived heading, and heading source in serial JSON.
-    - Current narrow behavior uses CoG only for real GPS packets; simulated GPS packets use yaw when yaw is valid, otherwise `headingSource = unknown`.
+    - `drone_telemetry` now also emits `yawHeading`, `yawBiasDeg`, `yawBiasValid`, `yawBiasSamples`, `cogWeight`, and `cogTrusted` for heading-fusion debugging.
+    - Simulated GPS packets keep `cogWeight = 0` and use yaw/yaw-bias only.
 
 - [ ] Milestone 13: Implement GC serial JSON output
   - [x] Emit `drone_telemetry` on every valid received telemetry packet.
@@ -221,13 +300,13 @@ The firmware has two runtime roles in this branch:
   - [x] Emit assigned frequency in MHz.
   - [x] Emit GPS source fields.
     - `drone_telemetry` now includes `gpsSource`, `gpsSimulated`, and `gpsFixQuality`.
-  - [ ] Emit assigned `radio_profile_id`.
-  - [ ] Emit assigned `txPeriodMs` and telemetry airtime where useful for debugging.
+  - [x] Emit assigned `radio_profile_id`.
+  - [x] Emit assigned `txPeriodMs` and telemetry airtime where useful for debugging.
   - [x] Emit sequence ID.
   - [x] Emit assignment events.
-  - [ ] Emit GC status.
-  - [ ] Emit channel table on request and after boot scan.
-    - Boot-scan emission is implemented; command/request handling is still future work.
+  - [x] Emit GC status.
+  - [x] Emit channel table on request and after boot scan.
+    - `get_status`, `get_channel_table`, and fresh-session emission are implemented.
   - [x] Keep JSON minified and newline-delimited.
 
 - [ ] Milestone 14: Add firmware tests and field checks
@@ -241,15 +320,82 @@ The firmware has two runtime roles in this branch:
   - [x] Bench-test one-drone fake/mixed telemetry receive.
     - GC received valid 20-byte telemetry from drone node `2` and emitted parsed serial JSON with incrementing `sequenceId`, RSSI/SNR, and assigned frequency.
     - After the FC-telemetry slice, GC serial capture confirmed mixed telemetry still flows with `gpsSource = simulated`, `gpsSimulated = true`, and `gpsFixQuality = 0`.
-  - [ ] Bench-test assignment persistence after GC reboot.
+  - [x] Bench-test assignment persistence after GC reboot.
+    - Reflash/reset on GC `COM18` preserved valid node `2` assignment state and telemetry resumed.
+  - [x] Build-check multi-drone GC scanner scheduler.
+    - `pio run -e seeed-xiao-s3` passes after replacing the one-drone scanner with the RAM-only scheduler.
+  - [x] Bench-test multi-drone scheduler regression with one active drone.
+    - After flashing GC `COM18`, a 10 second serial sample received 126 `drone_telemetry` packets from node `2`, with 136 `assigned_listen`, 126 `telemetry_received`, and 9 `telemetry_missed` scanner events.
+    - After increasing the default airtime buffer to `9 ms`, a 15 second GC sample showed `txPeriodMs = 35`, 104 `drone_telemetry` packets, and 49 `telemetry_missed` events. Drone serial showed the drone was not maintaining a clean 35 ms cadence.
+  - [x] Move drone telemetry TX scheduling ahead of MSP polling and constrain MSP work to the idle budget where practical.
+    - Implementation sends due LoRa telemetry before MSP polling, limits live-position MSP requests to one idle-budget job at a time, and limits MSP to one request per transmitted telemetry slot.
+    - Drone status now reports `lastTxLatenessMs`, `maxTxLatenessMs`, `lastTxDurationMs`, `maxTxDurationMs`, MSP poll durations, and MSP freshness counters per transmitted packet.
+    - Bench result after this change: MSP no longer explains the cadence loss, but the blocking `sendRawPacket()` path measured about `38 ms` while `txPeriodMs` was still `35`. Because the no-burst scheduler skipped late slots, the effective drone TX cadence became about `70 ms`.
+  - [x] Decide how to account for measured TX duration in the assigned TX period.
+    - The default airtime buffer is now `74 ms`, producing `txPeriodMs = 100` from `ceil(25.728) + 74`.
+    - With `txPeriodMs = 70` and a `20 ms` MSP timeout, one-drone GC samples still had misses and MSP stayed stale. After disabling the legacy main-loop MSP status check, one sample improved to 3 misses in 15 seconds and drone TX cadence reached 14.29 Hz, but MSP remained 0 fresh / 210 stale.
+    - With `txPeriodMs = 100` and a `50 ms` live MSP timeout, a 15 second GC sample received 151 telemetry JSON messages with 150 scanner `telemetry_received` events and zero `telemetry_missed` events.
+    - Drone serial for the same bench state showed 140 TX packets in 14 seconds, `lastTxDurationMs = 38`, `maxTxLatenessMs = 12`, and MSP still 0 fresh / 140 stale. Treat FC UART/MSP communication as the next blocker, not LoRa TX scheduling.
+  - [x] Build-check MSP batch timing proposal handshake.
+    - `pio run -e seeed-xiao-s3` passes after adding `MSP_MULTIPLE_MSP`, `TX_PERIOD_PROPOSAL`, `TX_PERIOD_ACK`, drone timing proposal state, and GC proposal ACK handling.
+  - [x] Bench-test `MSP_MULTIPLE_MSP` wire timing and subresponse parsing.
+    - Expected FC UART wire time at `115200` is about `4.2 ms`; total measured MSP batch should normally stay under `20 ms` when the FC responds.
+    - Betaflight `msp.c` was checked: `MSP_MULTIPLE_MSP` reads each requested MSP command as one byte and returns length-prefixed subresponses in request order, matching the firmware implementation.
+    - After power-cycling the drone ESP32 and FC together, COM15 bench capture showed the timing probe using `MSP_MULTIPLE_MSP` with `mspBatchMs = 8`, `mspFlags = 7`, `measuredCycleMs = 46`, and `txDurationMs = 38`.
+    - `mspFlags = 7` confirms the drone parsed `MSP_RAW_GPS`, `MSP_ATTITUDE`, and `MSP_ALTITUDE` subresponses from the batch request. GPS still reports no real fix, as expected for the bench setup.
+  - [x] Bench-test assigned-channel timing proposal handshake.
+    - Clear assignments, reset/reflash drone node `2`, confirm proposal received, ACK sent, drone enters steady telemetry, and accepted `txPeriodMs` is measured rather than hardcoded.
+    - GC on `COM18` captured `join_request_received = 1`, `assign_sent = 1`, `join_ack_received = 1`, one ignored probe telemetry packet, `tx_period_proposal_received = 1`, and `tx_period_ack_sent = 1`.
+    - The accepted period was measured: `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`, and `txPeriodMs = 104`.
+  - [x] Run a 15 second GC sample after timing lock and compare `telemetry_received` against `telemetry_missed`.
+    - After timing lock, a 15 second GC sample received `145` telemetry packets and `145` `drone_telemetry` JSON messages with `telemetry_missed = 0`.
+    - The join/acquisition capture had `4` early `telemetry_missed` events immediately after `TX_PERIOD_ACK`, then locked and tracked cleanly.
+    - After clamping accepted timing to the GC minimum, resetting drone node `2`, and re-handshaking, GC reported `txPeriodMs = 103` and a 15 second sample received `145` `drone_telemetry` messages with `0` sequence gaps and `0` `telemetry_missed` events.
+  - [x] Bench-verify reset recovery while the GC remains powered and locked to an old assigned channel.
+    - User manually power-cycled the drone ESP32 several times while the GC stayed on; node `2` rejoined and telemetry resumed in about `3-4 seconds`.
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
   - [ ] Bench-test GC scanner ordering with simulated per-drone next transmit times.
   - [ ] Bench-test MSP telemetry packing with known values.
-    - Bench test confirms `drone_fc_status` and simulated-GPS telemetry continue flowing. Latest node `2` capture on `COM15` reports MSP attitude/yaw and altitude success; GPS request succeeds but has no valid fix/satellites. Keep this unchecked until values are checked against known FC display values.
+    - Current node `2` bench capture on `COM15` reports `attitudeReadOk=false`, `altitudeReadOk=false`, and `gpsReadOk=false` even with a `50 ms` live MSP timeout. LoRa telemetry continues with simulated GPS and stale FC fields. Keep this unchecked until the FC UART/MSP link returns valid attitude and altitude values that can be compared against Betaflight Configurator.
   - [ ] Field-test one drone at close range.
   - [ ] Field-test five drones at close range.
   - [ ] Field-test expected `0.5-2 km` range.
   - [ ] Log RSSI/SNR during range tests.
+
+- [ ] Milestone 15: Implement GC lifecycle commands and spectrum reporting
+  - [x] Parse newline-delimited command JSON from SGC without breaking telemetry output.
+  - [x] Implement `ping`.
+  - [x] Implement `get_status`.
+  - [x] Implement `get_channel_table`.
+  - [x] Implement `get_assignments`.
+  - [x] Implement `clear_all_assignments` for SGC `Start Fresh Session`.
+  - [x] Emit `command_ack` for accepted and rejected commands.
+  - [x] On `clear_all_assignments`, delete `/live_assignments.json`.
+  - [x] On `clear_all_assignments`, clear RAM assignment state.
+  - [x] On `clear_all_assignments`, switch back to the shared discovery channel.
+  - [x] On `clear_all_assignments`, rerun the channel noise scan.
+  - [x] Emit updated `channel_table` and `gc_status` after fresh-session reset.
+  - [x] Emit `channel_scan_event` at scan start.
+  - [x] Emit per-channel or batched scan progress with median RSSI and max RSSI.
+  - [x] Emit `channel_scan_event` at scan completion.
+  - [x] Extend `channel_table` with per-channel RSSI and role details for SGC spectrum rendering.
+  - [x] Configure boot scan to use 32 RSSI samples per channel.
+  - [x] Configure boot scan to use 4 ms settle time and 2 ms RSSI sample interval.
+  - [x] Recheck initially noisy channels in a second pass before final classification.
+  - [x] Keep 32 samples for the second pass, with 8 ms settle time and 2 ms sample interval.
+  - [x] Use second-pass median RSSI as the final noisy/clear decision so single max-RSSI spikes do not reject a channel.
+  - [x] Bench-test late SGC connection by requesting status and channel table after GC boot.
+    - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
+  - [x] Bench-test `Start Fresh Session` clears flash and RAM assignments.
+    - Direct `clear_all_assignments` command emitted session events, reran channel scan, emitted `channel_table`, and reported `assignedDrones = 0`.
+  - [x] Bench-measure the longer boot scan and confirm it lands near 3.5-4.2 seconds.
+    - Direct `clear_all_assignments` scan test emitted 48 `channel_scanned` events and completed in 3.69 seconds.
+  - [x] Bench-measure the two-pass scan and record initial noisy count, final noisy count, and duration.
+    - Direct `clear_all_assignments` scan test: 48 initial events, 32 initially noisy, 32 rechecked, 9 cleared on recheck, 23 final noisy, 6.318 seconds total.
+  - [x] Bench-test drone reset reuses a valid persisted assignment.
+    - Direct bench showed node `2` can rejoin and reuse a valid assignment; user manual drone reset bench test passed.
+  - [x] Bench-test GC reset reloads valid persisted assignments and reacquires telemetry timing.
+    - GC reflash/reset loaded assignment state and resumed receiving node `2` telemetry.
 
 ## Out Of Scope
 

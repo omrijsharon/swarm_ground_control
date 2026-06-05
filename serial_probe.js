@@ -10,6 +10,12 @@ const sampleTelemetry = {
   headingSource: "course_over_ground",
   courseOverGround: 91.0,
   yaw: 88.0,
+  yawHeading: 90.5,
+  yawBiasDeg: 2.5,
+  yawBiasValid: true,
+  yawBiasSamples: 32,
+  cogWeight: 0.82,
+  cogTrusted: true,
   groundSpeed: 4.2,
   satelliteCount: 12,
   rssi: -82,
@@ -47,6 +53,12 @@ const protocolSchemas = {
       headingSource: "string",
       courseOverGround: "number",
       yaw: "number",
+      yawHeading: "number",
+      yawBiasDeg: "number",
+      yawBiasValid: "boolean",
+      yawBiasSamples: "integer",
+      cogWeight: "number",
+      cogTrusted: "boolean",
       groundSpeed: "number",
       satelliteCount: "integer",
       rssi: "number",
@@ -149,7 +161,7 @@ const state = {
   jsonCount: 0,
   rawCount: 0,
   lastPortInfo: null,
-  lastBaudRate: 115200,
+  lastBaudRate: 921600,
   reconnectTimer: null,
   reconnectAttempts: 0,
   manualClose: false,
@@ -356,8 +368,8 @@ function getBaudRate() {
   if (Number.isFinite(baud) && baud > 0) {
     return baud;
   }
-  els.baudRate.value = "115200";
-  return 115200;
+  els.baudRate.value = "921600";
+  return 921600;
 }
 
 function getPortInfo(port) {

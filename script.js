@@ -35,6 +35,8 @@ const LIVE_FRESHNESS_MS = {
   late: 2000,
   stale: 5000,
 };
+const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
+const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 
 let map;
 let overlay, ctx;
@@ -94,7 +96,9 @@ const liveState = {
   reader: null,
   keepReading: false,
   lineBuffer: "",
-  baudRate: 115200,
+  commandSeq: 0,
+  pendingCommands: new Map(),
+  baudRate: 921600,
   connected: false,
   portLabel: "None",
   lastMessageAt: null,
@@ -102,11 +106,27 @@ const liveState = {
   parseErrors: [],
   gcStatus: null,
   channelTable: null,
+  channelScanEvents: [],
+  scanInProgress: false,
+  scanAnimationVisible: false,
+  scanAnimationHideTimer: null,
+  scanRows: new Map(),
+  scanCandidateCount: 0,
+  lastCommandAck: null,
+  sessionEvents: [],
+  freshSessionPending: false,
+  freshSessionConfirming: false,
   assignmentEvents: [],
+  scannerEvents: [],
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
   mockActive: false,
   mockTimers: [],
   serialTelemetrySeen: false,
+  lastSerialPort: null,
+  lastSerialPortInfo: null,
+  reconnectTimer: null,
+  reconnecting: false,
+  userClosedSerial: false,
 };
 let orbitCloseSuppressUntil = 0;
 let orbitDroneId = null;
@@ -857,6 +877,12 @@ class Drone {
       headingSource: packet.headingSource ?? packet.heading_source ?? null,
       courseOverGround: packet.courseOverGround ?? packet.course_over_ground ?? null,
       yaw: packet.yaw ?? null,
+      yawHeading: packet.yawHeading ?? packet.yaw_heading ?? null,
+      yawBiasDeg: packet.yawBiasDeg ?? packet.yaw_bias_deg ?? null,
+      yawBiasValid: packet.yawBiasValid ?? packet.yaw_bias_valid ?? false,
+      yawBiasSamples: packet.yawBiasSamples ?? packet.yaw_bias_samples ?? 0,
+      cogWeight: packet.cogWeight ?? packet.cog_weight ?? null,
+      cogTrusted: packet.cogTrusted ?? packet.cog_trusted ?? false,
       groundSpeed: packet.groundSpeed ?? packet.ground_speed ?? null,
       satelliteCount: packet.satelliteCount ?? packet.satellite_count ?? null,
       gpsSource: packet.gpsSource ?? packet.gps_source ?? null,
@@ -2738,8 +2764,8 @@ function getLiveBaudRate() {
     liveState.baudRate = value;
     return value;
   }
-  liveState.baudRate = 115200;
-  if (input) input.value = "115200";
+  liveState.baudRate = 921600;
+  if (input) input.value = "921600";
   return liveState.baudRate;
 }
 
@@ -2769,6 +2795,101 @@ function describeLiveSerialPort(port) {
   if (info.usbVendorId !== undefined) parts.push(`VID 0x${info.usbVendorId.toString(16).padStart(4, "0")}`);
   if (info.usbProductId !== undefined) parts.push(`PID 0x${info.usbProductId.toString(16).padStart(4, "0")}`);
   return parts.length ? parts.join(" / ") : "Selected";
+}
+
+function getLiveSerialPortInfo(port) {
+  if (!port || typeof port.getInfo !== "function") return {};
+  try {
+    return port.getInfo() || {};
+  } catch {
+    return {};
+  }
+}
+
+function rememberLiveSerialPort(port) {
+  liveState.lastSerialPort = port;
+  liveState.lastSerialPortInfo = getLiveSerialPortInfo(port);
+}
+
+function liveSerialInfoMatches(a = {}, b = {}) {
+  const hasUsbInfo = a.usbVendorId !== undefined || a.usbProductId !== undefined;
+  if (!hasUsbInfo) return false;
+  return a.usbVendorId === b.usbVendorId && a.usbProductId === b.usbProductId;
+}
+
+function clearLiveSerialReconnectTimer() {
+  if (liveState.reconnectTimer) {
+    window.clearTimeout(liveState.reconnectTimer);
+    liveState.reconnectTimer = null;
+  }
+}
+
+function selectLiveReconnectPort(ports) {
+  if (!Array.isArray(ports) || !ports.length) return null;
+  if (liveState.lastSerialPort && ports.includes(liveState.lastSerialPort)) {
+    return liveState.lastSerialPort;
+  }
+  const matchingInfo = ports.filter((port) => {
+    return liveSerialInfoMatches(liveState.lastSerialPortInfo || {}, getLiveSerialPortInfo(port));
+  });
+  if (matchingInfo.length === 1) return matchingInfo[0];
+  if (ports.length === 1) return ports[0];
+  return null;
+}
+
+function scheduleLiveSerialReconnect(reason, delayMs = LIVE_SERIAL_RECONNECT_INTERVAL_MS) {
+  if (
+    !LIVE_POSITION_AUTO_CONNECT ||
+    liveState.userClosedSerial ||
+    liveState.connected ||
+    !("serial" in navigator) ||
+    !navigator.serial.getPorts
+  ) {
+    return;
+  }
+  if (!liveState.reconnecting) {
+    appendLiveDebug(`auto reconnect: ${reason}`);
+  }
+  liveState.reconnecting = true;
+  setLiveSerialState("waiting", "Reconnecting", "Waiting for the GC ESP32 serial port.");
+  if (liveState.reconnectTimer) return;
+  liveState.reconnectTimer = window.setTimeout(tryLiveSerialReconnect, delayMs);
+}
+
+async function tryLiveSerialReconnect() {
+  liveState.reconnectTimer = null;
+  if (liveState.userClosedSerial || liveState.connected || !navigator.serial?.getPorts) {
+    liveState.reconnecting = false;
+    return;
+  }
+
+  try {
+    const ports = await navigator.serial.getPorts();
+    const selectedPort = selectLiveReconnectPort(ports);
+    if (selectedPort) {
+      await openLiveSerialPort({ port: selectedPort, auto: true });
+    }
+  } catch (err) {
+    appendLiveDebug(`auto reconnect error: ${err.message || err}`);
+  }
+
+  if (!liveState.connected && !liveState.userClosedSerial) {
+    scheduleLiveSerialReconnect("port not ready yet");
+  }
+}
+
+function handleLiveSerialBrowserDisconnect(event) {
+  const disconnectedPort = event?.port || event?.target;
+  if (disconnectedPort && liveState.port && disconnectedPort !== liveState.port) return;
+  if (liveState.userClosedSerial) return;
+  markLiveSerialDisconnected("Selected port disconnected.");
+}
+
+function handleLiveSerialBrowserConnect() {
+  if (liveState.reconnecting && !liveState.connected && !liveState.userClosedSerial) {
+    clearLiveSerialReconnectTimer();
+    scheduleLiveSerialReconnect("port returned", 0);
+  }
 }
 
 function getLiveSerialDroneCount() {
@@ -2828,6 +2949,226 @@ function formatGpsSourceLabel(latest = {}) {
   return latest.gpsSource ? String(latest.gpsSource).toUpperCase() : "N/A";
 }
 
+function formatHeadingFusionLabel(latest = {}) {
+  const source = latest.headingSource ? String(latest.headingSource).replace(/_/g, " ").toUpperCase() : "UNKNOWN";
+  const weight = Number(latest.cogWeight);
+  const bias = Number(latest.yawBiasDeg);
+  const parts = [source];
+  if (Number.isFinite(weight)) {
+    parts.push(`CoG ${(weight * 100).toFixed(0)}%`);
+  }
+  if (latest.yawBiasValid && Number.isFinite(bias)) {
+    parts.push(`bias ${bias.toFixed(1)} deg`);
+  }
+  return parts.join(" / ");
+}
+
+function liveFrequencyKey(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(1) : "";
+}
+
+function getLiveChannelRows(table = {}) {
+  const assignedKeys = new Set(
+    (Array.isArray(table.assignments) ? table.assignments : [])
+      .map((item) => liveFrequencyKey(item.frequencyMhz))
+      .filter(Boolean)
+  );
+
+  if (Array.isArray(table.channels) && table.channels.length) {
+    return table.channels
+      .map((channel) => ({
+        channelIndex: Number(channel.channelIndex),
+        frequencyMhz: Number(channel.frequencyMhz),
+        role: channel.role || "telemetry_candidate",
+        clear: Boolean(channel.clear),
+        assigned: Boolean(channel.assigned) || assignedKeys.has(liveFrequencyKey(channel.frequencyMhz)),
+        medianRssi: Number(channel.medianRssi),
+        maxRssi: Number(channel.maxRssi),
+        state: channel.state || (channel.clear ? "clear" : "noisy"),
+      }))
+      .filter((channel) => Number.isFinite(channel.frequencyMhz))
+      .sort((a, b) => a.frequencyMhz - b.frequencyMhz);
+  }
+
+  const rows = [];
+  const addRow = (frequencyMhz, role, clear = false, state = "") => {
+    const freq = Number(frequencyMhz);
+    if (!Number.isFinite(freq)) return;
+    rows.push({
+      channelIndex: Math.round((freq - 902.5) / 0.5),
+      frequencyMhz: freq,
+      role,
+      clear,
+      assigned: assignedKeys.has(liveFrequencyKey(freq)),
+      medianRssi: NaN,
+      maxRssi: NaN,
+      state,
+    });
+  };
+  (Array.isArray(table.candidateFrequencyMhz) ? table.candidateFrequencyMhz : []).forEach((freq) => {
+    const key = liveFrequencyKey(freq);
+    const clear = Array.isArray(table.clearFrequencyMhz) && table.clearFrequencyMhz.map(liveFrequencyKey).includes(key);
+    addRow(freq, "telemetry_candidate", clear, clear ? "clear" : "noisy");
+  });
+  (Array.isArray(table.reservedFrequencyMhz) ? table.reservedFrequencyMhz : []).forEach((freq) => {
+    addRow(freq, Math.abs(Number(freq) - 915.0) < 0.01 ? "shared" : "guard", false, "reserved");
+  });
+  return rows.sort((a, b) => a.frequencyMhz - b.frequencyMhz);
+}
+
+function getDefaultLiveScanChannels() {
+  const rows = [];
+  for (let index = 0; index <= 50; index++) {
+    const frequencyMhz = 902.5 + index * 0.5;
+    const role =
+      index === 25
+        ? "shared"
+        : index === 24 || index === 26
+          ? "guard"
+          : "telemetry_candidate";
+    rows.push({
+      channelIndex: index,
+      frequencyMhz,
+      role,
+      clear: false,
+      assigned: false,
+      medianRssi: NaN,
+      maxRssi: NaN,
+      state: "pending",
+    });
+  }
+  return rows;
+}
+
+function getLiveScanDisplayTable(table = {}) {
+  if (!liveState.scanAnimationVisible && !liveState.scanInProgress) {
+    return table;
+  }
+
+  const rowsByKey = new Map();
+  getDefaultLiveScanChannels().forEach((channel) => {
+    rowsByKey.set(liveFrequencyKey(channel.frequencyMhz), channel);
+  });
+
+  liveState.scanRows.forEach((channel) => {
+    rowsByKey.set(liveFrequencyKey(channel.frequencyMhz), channel);
+  });
+
+  getLiveChannelRows(table).forEach((channel) => {
+    const key = liveFrequencyKey(channel.frequencyMhz);
+    const existing = rowsByKey.get(key);
+    if (existing) {
+      existing.assigned = existing.assigned || channel.assigned;
+      if (channel.role === "shared" || channel.role === "guard") {
+        existing.role = channel.role;
+      }
+    } else if (channel.role === "shared" || channel.role === "guard" || channel.assigned) {
+      rowsByKey.set(key, channel);
+    }
+  });
+
+  return {
+    ...table,
+    channels: [...rowsByKey.values()].sort((a, b) => a.frequencyMhz - b.frequencyMhz),
+  };
+}
+
+function showLiveScanAnimation() {
+  liveState.scanAnimationVisible = true;
+  if (liveState.scanAnimationHideTimer) {
+    window.clearTimeout(liveState.scanAnimationHideTimer);
+    liveState.scanAnimationHideTimer = null;
+  }
+}
+
+function scheduleLiveScanAnimationHide() {
+  liveState.scanAnimationVisible = true;
+  if (liveState.scanAnimationHideTimer) {
+    window.clearTimeout(liveState.scanAnimationHideTimer);
+  }
+  liveState.scanAnimationHideTimer = window.setTimeout(() => {
+    if (liveState.scanInProgress) return;
+    liveState.scanAnimationVisible = false;
+    liveState.scanRows.clear();
+    liveState.scanAnimationHideTimer = null;
+    renderLiveGcStatus();
+  }, LIVE_SCAN_ANIMATION_HOLD_MS);
+}
+
+function updateLiveScanRow(message) {
+  const frequencyMhz = Number(message.frequencyMhz);
+  if (!Number.isFinite(frequencyMhz)) return;
+  const state = message.state || "unknown";
+  liveState.scanRows.set(liveFrequencyKey(frequencyMhz), {
+    channelIndex: Number(message.channelIndex),
+    frequencyMhz,
+    role: "telemetry_candidate",
+    clear: state === "clear",
+    assigned: false,
+    medianRssi: Number(message.medianRssi),
+    maxRssi: Number(message.maxRssi),
+    state,
+  });
+}
+
+function renderLiveSpectrum(host, table = {}) {
+  if (!liveState.scanAnimationVisible && !liveState.scanInProgress) return;
+
+  const rows = getLiveChannelRows(getLiveScanDisplayTable(table));
+  if (!rows.length) return;
+
+  const wrap = document.createElement("div");
+  wrap.className = "live-spectrum";
+  const header = document.createElement("div");
+  header.className = "live-spectrum-header";
+  const lastScan = liveState.channelScanEvents[liveState.channelScanEvents.length - 1];
+  const scanText = liveState.scanInProgress
+    ? `Scanning ${liveState.scanRows.size}/${liveState.scanCandidateCount || 48}`
+    : lastScan?.event === "scan_complete"
+      ? "Scan complete"
+      : "Spectrum";
+  header.innerHTML = `<span>${scanText}</span><span>${rows.length} channels</span>`;
+  wrap.appendChild(header);
+
+  const bars = document.createElement("div");
+  bars.className = "live-spectrum-bars";
+  rows.forEach((channel) => {
+    const bar = document.createElement("div");
+    const roleClass = channel.assigned
+      ? "assigned"
+      : channel.role === "shared"
+        ? "shared"
+        : channel.role === "guard"
+          ? "guard"
+          : channel.clear
+            ? "clear"
+            : channel.state === "noisy"
+              ? "noisy"
+              : "unknown";
+    bar.className = `live-spectrum-bar ${roleClass}`;
+    const hasRssi = Number.isFinite(channel.medianRssi);
+    const height = hasRssi
+      ? 10 + clamp01((channel.medianRssi + 125) / 50) * 34
+      : channel.role === "shared"
+        ? 28
+        : channel.role === "guard"
+          ? 18
+          : 12;
+    bar.style.height = `${height.toFixed(0)}px`;
+    const rssiText = hasRssi ? ` median ${channel.medianRssi} dBm max ${channel.maxRssi} dBm` : "";
+    bar.title = `${channel.frequencyMhz.toFixed(1)} MHz ${channel.role}${channel.assigned ? " assigned" : ""}${rssiText}`;
+    bars.appendChild(bar);
+  });
+  wrap.appendChild(bars);
+
+  const legend = document.createElement("div");
+  legend.className = "live-spectrum-legend";
+  legend.innerHTML = "<span>Shared</span><span>Assigned</span><span>Clear</span><span>Noisy</span>";
+  wrap.appendChild(legend);
+  host.appendChild(wrap);
+}
+
 function renderLiveGcStatus() {
   const host = document.getElementById("liveGcStatus");
   if (!host) return;
@@ -2873,6 +3214,46 @@ function renderLiveGcStatus() {
   });
   host.appendChild(grid);
 
+  renderLiveSpectrum(host, table);
+
+  const actions = document.createElement("div");
+  actions.className = "live-gc-actions";
+  const freshBtn = document.createElement("button");
+  freshBtn.className = "live-btn live-danger-btn";
+  freshBtn.type = "button";
+  freshBtn.textContent = liveState.freshSessionPending ? "Clearing..." : "Start Fresh";
+  freshBtn.disabled = liveState.freshSessionPending || liveState.freshSessionConfirming;
+  freshBtn.addEventListener("click", requestFreshSessionConfirmation);
+  actions.appendChild(freshBtn);
+  host.appendChild(actions);
+
+  if (liveState.freshSessionConfirming) {
+    const confirmEl = document.createElement("div");
+    confirmEl.className = "live-confirm";
+    const messageEl = document.createElement("div");
+    messageEl.className = "live-confirm-message";
+    messageEl.textContent = "This will delete previous channel assignments and start a fresh session. Drones will need to rejoin. Continue?";
+    confirmEl.appendChild(messageEl);
+
+    const confirmActions = document.createElement("div");
+    confirmActions.className = "live-confirm-actions";
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "live-btn";
+    cancelBtn.type = "button";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", cancelFreshSessionConfirmation);
+    const continueBtn = document.createElement("button");
+    continueBtn.className = "live-btn live-danger-btn";
+    continueBtn.type = "button";
+    continueBtn.textContent = "Continue";
+    continueBtn.disabled = liveState.freshSessionPending;
+    continueBtn.addEventListener("click", startFreshSession);
+    confirmActions.appendChild(cancelBtn);
+    confirmActions.appendChild(continueBtn);
+    confirmEl.appendChild(confirmActions);
+    host.appendChild(confirmEl);
+  }
+
   const debugEl = document.createElement("div");
   debugEl.className = "live-meta";
   debugEl.textContent =
@@ -2888,6 +3269,13 @@ function renderLiveGcStatus() {
     eventEl.className = "live-meta";
     eventEl.textContent = `Last assignment: ${event.event || "event"}${event.nodeId !== undefined ? ` node ${event.nodeId}` : ""}`;
     host.appendChild(eventEl);
+  }
+
+  if (liveState.lastCommandAck) {
+    const ackEl = document.createElement("div");
+    ackEl.className = "live-meta";
+    ackEl.textContent = `Last command: ${liveState.lastCommandAck.command || "command"} ${liveState.lastCommandAck.accepted ? "accepted" : "rejected"}`;
+    host.appendChild(ackEl);
   }
 }
 
@@ -2910,6 +3298,12 @@ const liveProtocolSchemas = {
     headingSource: "string",
     courseOverGround: "number",
     yaw: "number",
+    yawHeading: "number",
+    yawBiasDeg: "number",
+    yawBiasValid: "boolean",
+    yawBiasSamples: "integer",
+    cogWeight: "number",
+    cogTrusted: "boolean",
     groundSpeed: "number",
     satelliteCount: "integer",
     rssi: "number",
@@ -2936,6 +3330,33 @@ const liveProtocolSchemas = {
   assignment_event: {
     type: "string",
     event: "string",
+    gcMillis: "integer",
+  },
+  command_ack: {
+    type: "string",
+    commandId: "string",
+    command: "string",
+    accepted: "boolean",
+    gcMillis: "integer",
+  },
+  session_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  channel_scan_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  scanner_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  assignments: {
+    type: "string",
+    assignments: "array",
     gcMillis: "integer",
   },
   channel_table: {
@@ -3009,6 +3430,12 @@ function applyLiveTelemetry(message, source = "serial") {
       headingSource: message.headingSource,
       courseOverGround: message.courseOverGround,
       yaw: message.yaw,
+      yawHeading: message.yawHeading,
+      yawBiasDeg: message.yawBiasDeg,
+      yawBiasValid: message.yawBiasValid,
+      yawBiasSamples: message.yawBiasSamples,
+      cogWeight: message.cogWeight,
+      cogTrusted: message.cogTrusted,
       groundSpeed: message.groundSpeed,
       satelliteCount: message.satelliteCount,
       gpsSource: message.gpsSource,
@@ -3029,6 +3456,27 @@ function applyLiveTelemetry(message, source = "serial") {
   draw();
 }
 
+function clearLiveSerialDrones({ clearAssignments = false } = {}) {
+  const before = drones.length;
+  drones = drones.filter((drone) => drone.type !== "live");
+  if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
+  if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
+  liveState.serialTelemetrySeen = false;
+  if (clearAssignments) {
+    liveState.assignmentEvents = [];
+    if (liveState.channelTable) {
+      liveState.channelTable = {
+        ...liveState.channelTable,
+        assignments: [],
+      };
+    }
+  }
+  if (drones.length !== before) {
+    updateStatusList();
+    draw();
+  }
+}
+
 function handleLiveProtocolMessage(message, source = "serial") {
   const issues = validateLiveProtocolMessage(message);
   if (issues.length) {
@@ -3045,9 +3493,70 @@ function handleLiveProtocolMessage(message, source = "serial") {
     liveState.assignmentEvents.push(message);
     while (liveState.assignmentEvents.length > 8) liveState.assignmentEvents.shift();
     renderLiveGcStatus();
+  } else if (message.type === "command_ack") {
+    liveState.lastCommandAck = message;
+    if (message.commandId && liveState.pendingCommands.has(message.commandId)) {
+      const pending = liveState.pendingCommands.get(message.commandId);
+      liveState.pendingCommands.delete(message.commandId);
+      if (pending.command === "clear_all_assignments") {
+        liveState.freshSessionPending = false;
+        if (message.accepted) {
+          clearLiveSerialDrones({ clearAssignments: true });
+        }
+      }
+    }
+    appendLiveDebug(`${message.accepted ? "command ok" : "command rejected"}: ${message.command || "command"} ${message.message || message.reason || ""}`);
+    renderLiveControls();
+    renderLiveGcStatus();
+  } else if (message.type === "session_event") {
+    liveState.sessionEvents.push(message);
+    while (liveState.sessionEvents.length > 8) liveState.sessionEvents.shift();
+    if (message.event === "assignments_cleared") {
+      clearLiveSerialDrones({ clearAssignments: true });
+    }
+    if (message.event === "fresh_session_complete" || message.event === "fresh_session_failed") {
+      liveState.freshSessionPending = false;
+    }
+    if (message.event === "fresh_session_complete") {
+      clearLiveSerialDrones({ clearAssignments: true });
+    }
+    appendLiveDebug(`session: ${message.event}${message.reason ? ` (${message.reason})` : ""}`);
+    renderLiveGcStatus();
+  } else if (message.type === "channel_scan_event") {
+    liveState.channelScanEvents.push(message);
+    while (liveState.channelScanEvents.length > 80) liveState.channelScanEvents.shift();
+    if (message.event === "scan_started") {
+      liveState.scanRows.clear();
+      liveState.scanCandidateCount = Number(message.candidateChannels) || 48;
+      liveState.scanInProgress = true;
+      showLiveScanAnimation();
+    } else if (message.event === "channel_scanned") {
+      updateLiveScanRow(message);
+      showLiveScanAnimation();
+    } else if (message.event === "noisy_rescan_started") {
+      showLiveScanAnimation();
+      appendLiveDebug(`scan recheck: ${Number(message.candidateChannels) || 0} noisy channels`);
+    } else if (message.event === "scan_complete") {
+      liveState.scanInProgress = false;
+      scheduleLiveScanAnimationHide();
+    }
+    renderLiveGcStatus();
   } else if (message.type === "channel_table") {
     liveState.channelTable = message;
     renderLiveGcStatus();
+  } else if (message.type === "assignments") {
+    liveState.channelTable = { ...(liveState.channelTable || {}), assignments: message.assignments || [] };
+    renderLiveGcStatus();
+  } else if (message.type === "scanner_event") {
+    liveState.scannerEvents.push(message);
+    while (liveState.scannerEvents.length > 12) liveState.scannerEvents.shift();
+    if (
+      message.event === "telemetry_missed" ||
+      message.event === "stale_slot_skipped" ||
+      message.event === "assigned_acquire_listen"
+    ) {
+      appendLiveDebug(`scanner: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}`);
+    }
   } else if (message.type === "warning" || message.type === "error") {
     appendLiveDebug(`${message.type}: ${message.code || "unknown"} ${message.message || ""}`);
   }
@@ -3076,6 +3585,92 @@ function processLiveSerialChunk(chunk) {
   const lines = liveState.lineBuffer.split(/\r\n|\n|\r/);
   liveState.lineBuffer = lines.pop() ?? "";
   lines.forEach(processLiveSerialLine);
+}
+
+async function sendLiveSerialCommand(command, fields = {}) {
+  if (!liveState.connected || !liveState.port?.writable) {
+    if (command === "clear_all_assignments") liveState.freshSessionPending = false;
+    appendLiveDebug("command rejected locally: serial port is not connected");
+    renderLiveGcStatus();
+    return null;
+  }
+  const commandId = `sgc-${String(++liveState.commandSeq).padStart(4, "0")}`;
+  const payload = {
+    type: "command",
+    command,
+    commandId,
+    ...fields,
+  };
+  liveState.pendingCommands.set(commandId, { command, sentAt: Date.now() });
+  try {
+    const writer = liveState.port.writable.getWriter();
+    try {
+      await writer.write(new TextEncoder().encode(`${JSON.stringify(payload)}\n`));
+    } finally {
+      writer.releaseLock();
+    }
+    appendLiveDebug(`command sent: ${command}`);
+    renderLiveGcStatus();
+    return commandId;
+  } catch (err) {
+    liveState.pendingCommands.delete(commandId);
+    if (command === "clear_all_assignments") liveState.freshSessionPending = false;
+    appendLiveDebug(`command send failed: ${err.message || err}`);
+    renderLiveGcStatus();
+    return null;
+  }
+}
+
+async function requestLiveGcSnapshot() {
+  if (!liveState.connected) return;
+  await sendLiveSerialCommand("get_status");
+  await sendLiveSerialCommand("get_channel_table");
+}
+
+function requestFreshSessionConfirmation() {
+  if (liveState.freshSessionPending) return;
+  if (!liveState.connected) {
+    appendLiveDebug("fresh session unavailable: connect GC serial first");
+    renderLiveGcStatus();
+    return;
+  }
+  liveState.freshSessionConfirming = true;
+  appendLiveDebug("fresh session confirmation opened");
+  renderLiveGcStatus();
+}
+
+function cancelFreshSessionConfirmation() {
+  liveState.freshSessionConfirming = false;
+  appendLiveDebug("fresh session cancelled");
+  renderLiveGcStatus();
+}
+
+async function startFreshSession() {
+  if (liveState.freshSessionPending) return;
+  if (!liveState.connected) {
+    liveState.freshSessionConfirming = false;
+    appendLiveDebug("fresh session unavailable: connect GC serial first");
+    return;
+  }
+  liveState.freshSessionConfirming = false;
+  liveState.freshSessionPending = true;
+  renderLiveGcStatus();
+  const commandId = await sendLiveSerialCommand("clear_all_assignments", {
+    persist: true,
+    reason: "start_fresh_session",
+  });
+  if (commandId) {
+    window.setTimeout(() => {
+      if (!liveState.pendingCommands.has(commandId)) return;
+      liveState.pendingCommands.delete(commandId);
+      liveState.freshSessionPending = false;
+      appendLiveDebug("command timeout: clear_all_assignments");
+      renderLiveGcStatus();
+    }, 8000);
+  } else {
+    liveState.freshSessionPending = false;
+    renderLiveGcStatus();
+  }
 }
 
 async function readLiveSerialLoop() {
@@ -3110,10 +3705,11 @@ function markLiveSerialDisconnected(reason) {
   liveState.port = null;
   liveState.reader = null;
   liveState.lineBuffer = "";
-  liveState.portLabel = "None";
+  liveState.portLabel = liveState.lastSerialPort ? describeLiveSerialPort(liveState.lastSerialPort) : "None";
   setLiveSerialState("error", "Disconnected", reason);
   renderLiveControls();
   renderLiveGcStatus();
+  scheduleLiveSerialReconnect(reason);
 }
 
 async function openLiveSerialPort({ port = null, auto = false } = {}) {
@@ -3121,18 +3717,27 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
     setLiveSerialState("error", "Unsupported", "Web Serial is unavailable in this browser.");
     return;
   }
+  if (!auto) {
+    liveState.userClosedSerial = false;
+    liveState.reconnecting = false;
+    clearLiveSerialReconnectTimer();
+  }
   try {
     const baudRate = getLiveBaudRate();
     const selectedPort = port || await (async () => {
       setLiveSerialState("waiting", "Selecting", "Choose the GC ESP32 serial port.");
       return navigator.serial.requestPort();
     })();
+    rememberLiveSerialPort(selectedPort);
     liveState.portLabel = describeLiveSerialPort(selectedPort);
     setLiveSerialState("waiting", "Opening", `Opening at ${baudRate} baud.`);
     await selectedPort.open({ baudRate });
     liveState.port = selectedPort;
     liveState.connected = true;
     liveState.keepReading = true;
+    liveState.reconnecting = false;
+    liveState.userClosedSerial = false;
+    clearLiveSerialReconnectTimer();
     liveState.lineBuffer = "";
     liveState.baudRate = baudRate;
     setLiveSerialState(
@@ -3142,6 +3747,7 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
     );
     renderLiveControls();
     readLiveSerialLoop();
+    window.setTimeout(requestLiveGcSnapshot, 150);
   } catch (err) {
     liveState.connected = false;
     liveState.keepReading = false;
@@ -3150,6 +3756,9 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
       : err.message || "Serial open failed.";
     setLiveSerialState("error", "Disconnected", auto ? `Auto-connect failed: ${detail}` : detail);
     renderLiveControls();
+    if (auto && !liveState.userClosedSerial) {
+      scheduleLiveSerialReconnect("auto-connect failed");
+    }
   }
 }
 
@@ -3179,6 +3788,9 @@ async function autoConnectRememberedLiveSerialPort() {
 }
 
 async function closeLiveSerialPort() {
+  liveState.userClosedSerial = true;
+  liveState.reconnecting = false;
+  clearLiveSerialReconnectTimer();
   liveState.keepReading = false;
   try {
     if (liveState.reader) await liveState.reader.cancel();
@@ -3331,6 +3943,8 @@ function initLivePositionUi() {
   closeBtn?.addEventListener("click", closeLiveSerialPort);
   mockBtn?.addEventListener("click", toggleLiveMock);
   if ("serial" in navigator) {
+    navigator.serial.addEventListener?.("disconnect", handleLiveSerialBrowserDisconnect);
+    navigator.serial.addEventListener?.("connect", handleLiveSerialBrowserConnect);
     setLiveSerialState("waiting", "Disconnected", "Web Serial is available.");
     window.setTimeout(autoConnectRememberedLiveSerialPort, 250);
   } else {
@@ -3385,6 +3999,7 @@ function renderLiveStatusList() {
       ["Alt", `${Number(latest.alt || 0).toFixed(1)} m`],
       ["Speed", Number.isFinite(speed) ? `${speed.toFixed(1)} m/s (${(speed * 3.6).toFixed(0)} km/h)` : "N/A"],
       ["Heading", `${Number(latest.heading || 0).toFixed(0)} deg`],
+      ["Fusion", formatHeadingFusionLabel(latest)],
       ["RSSI", latest.rssi !== null && latest.rssi !== undefined ? `${Number(latest.rssi).toFixed(0)} dBm` : "N/A"],
       ["SNR", latest.snr !== null && latest.snr !== undefined ? `${Number(latest.snr).toFixed(1)} dB` : "N/A"],
       ["Sats", latest.satelliteCount !== null && latest.satelliteCount !== undefined ? String(latest.satelliteCount) : "N/A"],
@@ -3672,6 +4287,7 @@ function renderLiveTooltip(el, target, latest) {
     <div class="row"><span>Altitude</span><strong>${Number(latest.alt || 0).toFixed(1)} m</strong></div>
     <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${speed.toFixed(1)} m/s` : "N/A"}</strong></div>
     <div class="row"><span>Heading</span><strong>${Number(latest.heading || 0).toFixed(0)} deg</strong></div>
+    <div class="row"><span>Fusion</span><strong>${formatHeadingFusionLabel(latest)}</strong></div>
     <div class="row"><span>CoG / Yaw</span><strong>${latest.courseOverGround !== null && latest.courseOverGround !== undefined ? Number(latest.courseOverGround).toFixed(0) : "N/A"} / ${latest.yaw !== null && latest.yaw !== undefined ? Number(latest.yaw).toFixed(0) : "N/A"}</strong></div>
     <div class="row"><span>RSSI / SNR</span><strong>${latest.rssi !== null && latest.rssi !== undefined ? Number(latest.rssi).toFixed(0) : "N/A"} / ${latest.snr !== null && latest.snr !== undefined ? Number(latest.snr).toFixed(1) : "N/A"}</strong></div>
     <div class="row"><span>GPS</span><strong>${formatGpsSourceLabel(latest)}</strong></div>

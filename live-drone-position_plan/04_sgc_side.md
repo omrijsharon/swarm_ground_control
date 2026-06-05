@@ -42,6 +42,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Store heading in degrees.
   - [x] Store course over ground in degrees.
   - [x] Store yaw in degrees.
+  - [x] Store heading-fusion debug fields.
+    - `yawHeading`, `yawBiasDeg`, `yawBiasValid`, `yawBiasSamples`, `cogWeight`, and `cogTrusted`.
   - [x] Store speed in meters per second.
   - [x] Store satellite count.
   - [x] Store RSSI and SNR.
@@ -72,6 +74,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Show altitude.
   - [x] Show speed in m/s and optionally km/h.
   - [x] Show heading.
+  - [x] Show heading-fusion source/debug summary.
   - [x] Show RSSI.
   - [x] Show SNR.
   - [x] Show satellite count.
@@ -118,6 +121,42 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Verify UI remains usable on desktop viewport. Verified manually in full-screen and non-full-screen desktop browser windows.
   - [x] Verify UI remains usable on mobile/tablet viewport where Web Serial is supported. Verified manually.
 
+- [x] Milestone 12: Add GC lifecycle and spectrum UI
+  - [x] Request `get_status` after the USB serial connection opens.
+  - [x] Request `get_channel_table` after the USB serial connection opens.
+  - [x] Parse and store `channel_scan_event` messages.
+  - [x] Show a boot/scanning state while channel scan messages arrive.
+  - [x] Render a compact spectrum/noise-floor visualization in the GC/radio panel.
+  - [x] Mark shared, guard, clear, noisy, and assigned channels in the spectrum view.
+  - [x] Keep the existing clear/noisy count summary.
+  - [x] Add a `Start Fresh Session` button in the GC/radio panel.
+  - [x] Show a confirmation dialog before sending the fresh-session command.
+  - [x] Confirmation copy states that previous channel assignments will be deleted.
+  - [x] Send `clear_all_assignments` with `reason:"start_fresh_session"` after confirmation.
+  - [x] Disable the button while the command is pending.
+  - [x] Show accepted/rejected command feedback in the serial/debug area.
+  - [x] Clear live drone cards only after GC confirms assignments were cleared or drones go stale/offline naturally.
+  - [x] Remove live drone cards immediately after GC confirms `clear_all_assignments`.
+  - [x] Parse `scanner_event` messages.
+  - [x] Show scanner acquisition, missed-packet, and stale-slot events in the existing debug area.
+
+- [x] Milestone 13: Boot scan animation and serial reset recovery
+  - [x] Render channel scan events progressively so the spectrum bars fill during a live scan.
+  - [x] Keep updating spectrum bars when the GC rechecks initially noisy channels.
+  - [x] Show a debug line when the GC starts noisy-channel recheck.
+  - [x] Hide the spectrum view about 3 seconds after `scan_complete`.
+  - [x] Keep the GC clear/noisy/assigned summary visible after the spectrum hides.
+  - [x] Remember the last successfully opened Web Serial port for the current page session.
+  - [x] Retry granted serial ports after GC disconnect/reset.
+  - [x] Re-request `get_status` and `get_channel_table` after automatic reconnect.
+  - [x] Stop automatic reconnect after the user clicks `Close`.
+  - [x] Manually verify GC reset reconnects SGC without clicking `Open`.
+    - User manual browser check passed.
+  - [x] Manually verify boot/fresh-session scan animation fills live and then hides.
+    - User manual browser check passed.
+  - [x] Manually verify closing the port disables reset auto-reconnect.
+    - User manual browser check passed.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.
@@ -131,9 +170,11 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - Live-position mode is the default branch UI through `APP_MODE = "live-position"`.
 - Existing C2 prototype code remains in `script.js`, but the left command sequence panel is hidden in live mode.
 - The right panel now owns USB serial controls, GC/radio status, and live drone status.
+- `Start Fresh Session` now uses an in-panel confirmation block instead of native `window.confirm()`, because the native browser dialog produced no visible response in manual testing.
 - When real serial `drone_telemetry` arrives, live mock drones are cleared so hardware telemetry owns the map.
 - Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
 - The GC status panel includes an `Assigned debug` line showing the source used for the `Assigned` value.
 - Drone cards and tooltips now display GPS source, including `GPS SIM` while bench lat/lng/CoG/speed are simulated.
+- Browser smoke check after adding heading-fusion debug fields passed manually in SGC.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.
 - Browser visual verification could not be completed in this session because the in-app browser backend was unavailable.

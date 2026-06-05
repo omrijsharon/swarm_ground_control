@@ -8,6 +8,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
 
 - [x] Use USB serial between browser SGC and GC ESP32.
 - [x] Start with baud rate `115200` unless testing shows it is too slow.
+  - Bench update: GC USB serial and SGC defaults were raised to `921600` to reduce JSON output time. This helps the host-side pipeline, but it did not by itself make a `65 ms` assigned telemetry period reliable.
 - [x] Use newline-delimited JSON, one JSON object per line.
 - [x] Allow non-JSON firmware logs during development, but SGC should ignore or display them separately.
 - [x] Prefer stable field names over compact JSON names.
@@ -37,6 +38,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `headingSource`.
   - [x] Include `courseOverGround`.
   - [x] Include `yaw`.
+  - [x] Include `yawHeading`, `yawBiasDeg`, `yawBiasValid`, `yawBiasSamples`, `cogWeight`, and `cogTrusted` for heading fusion debug.
   - [x] Include `groundSpeed`.
   - [x] Include `satelliteCount`.
   - [x] Include `gpsSource`.
@@ -45,13 +47,16 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `rssi`.
   - [x] Include `snr`.
   - [x] Include `frequencyMhz`.
+  - [x] Include `radioProfileId`.
+  - [x] Include `txPeriodMs`.
+  - [x] Include `telemetryAirtimeMs`.
   - [x] Include `sequenceId`.
   - [x] Include firmware-relative `gcMillis` timestamp.
 
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":100,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON
@@ -68,7 +73,7 @@ Candidate:
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":27,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -83,6 +88,7 @@ Required common fields:
 
 - `type`: always `assignment_event`.
 - `event`: one of `join_request_received`, `silence_sent`, `assign_sent`, `join_ack_received`, `assignment_active`, `assignment_expired`, `assignment_removed`.
+- Timing handshake events also use this type: `tx_period_proposal_received`, `tx_period_ack_sent`, `tx_period_ack_send_failed`, and `tx_period_proposal_ignored`.
 - `gcMillis`: firmware-relative GC timestamp.
 
 Optional event fields:
@@ -95,6 +101,9 @@ Optional event fields:
 - `attempt`: retry/attempt counter for repeated assign/silence cycles.
 - `rssi`, `snr`: link metrics when the event came from a received packet.
 - `reason`: reason for expiration/removal/failure.
+- `timingAccepted`: true after the assigned-channel TX period handshake is accepted.
+- `measuredCycleMs`, `proposedPeriodMs`, `mspBatchMs`, `txDurationMs`, `mspFlags`: timing proposal diagnostics.
+- `ackStatus`: `0` for accepted timing ACKs.
 
 Examples:
 
@@ -105,7 +114,28 @@ Examples:
 {"type":"assignment_event","event":"join_ack_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"rssi":-63,"snr":10.8,"gcMillis":123540}
 {"type":"assignment_event","event":"assignment_active","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"leaseSeconds":60,"gcMillis":123550}
 {"type":"assignment_event","event":"assignment_removed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"operator_clear","gcMillis":183550}
+{"type":"assignment_event","event":"tx_period_proposal_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"measuredCycleMs":58,"proposedPeriodMs":73,"mspBatchMs":19,"txDurationMs":38,"mspFlags":6,"gcMillis":123620}
+{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":73,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
 ```
+
+Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`, followed by `tx_period_ack_sent` with `txPeriodMs = 104` and `timingAccepted = true`.
+
+- [x] Milestone 3b: Define scanner event JSON
+  - [x] Emit scheduler state changes and timing corrections as `scanner_event`.
+  - [x] Include node/channel details for assigned-channel events.
+  - [x] Include GC-local listen-window timing fields where useful.
+  - [x] Include miss count and skipped-slot details for recovery debugging.
+
+Examples:
+
+```json
+{"type":"scanner_event","event":"assigned_listen","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"nextTstGcMillis":123456,"listenStartGcMillis":123448,"listenDeadlineGcMillis":123486,"missCount":0,"gcMillis":123440}
+{"type":"scanner_event","event":"timing_probe_telemetry_ignored","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"reason":"waiting_for_tx_period_proposal","gcMillis":123610}
+{"type":"scanner_event","event":"telemetry_received","nodeId":2,"estimatedTstGcMillis":123456,"nextTstGcMillis":123483,"missCount":0,"gcMillis":123482}
+{"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
+```
+
+Default firmware behavior suppresses high-rate scanner events such as `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` unless `LIVE_POSITION_VERBOSE_SCANNER_EVENTS` is enabled. Keep normal `drone_telemetry` output lightweight enough that USB serial does not block the LoRa receive loop.
 
 - [x] Milestone 4: Define channel table JSON
   - [x] Report shared channel.
@@ -142,6 +172,11 @@ Assignment record fields:
 - `lastSeenGcMillis`
 - `rssi`
 - `snr`
+- `txPeriodMs`
+- `telemetryAirtimeMs`
+- `timingAccepted`
+- `missCount`
+- `lastSequenceId`
 
 Example:
 
@@ -208,7 +243,7 @@ Response examples:
 
 ```json
 {"type":"command_ack","commandId":"sgc-0001","command":"ping","accepted":true,"message":"pong","gcMillis":123456}
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":27,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
 ```
 
 - [x] Milestone 7: Define configurable radio settings
@@ -235,7 +270,7 @@ Radio profile decision:
 Command example:
 
 ```json
-{"type":"command","command":"set_radio_profile","commandId":"sgc-0100","spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"airtimeBufferMs":1,"persist":true}
+{"type":"command","command":"set_radio_profile","commandId":"sgc-0100","spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"airtimeBufferMs":44,"persist":true}
 ```
 
 - [x] Milestone 8: Define assignment maintenance commands
@@ -273,7 +308,7 @@ Maintenance response rules:
 
 Implemented in `serial_probe.js` for the standalone probe:
 
-- Known GC-to-SGC types are schema-checked: `drone_telemetry`, `gc_status`, `assignment_event`, `channel_table`, `command_ack`, `warning`, and `error`.
+- Known GC-to-SGC types are schema-checked: `drone_telemetry`, `gc_status`, `assignment_event`, `scanner_event`, `channel_table`, `command_ack`, `warning`, and `error`.
 - Malformed JSON remains in the raw log with a parse error.
 - Valid JSON with a known protocol `type` but missing/wrong required fields is moved to the raw log with `protocol invalid`.
 - Valid JSON with no `type` or an unknown `type` remains visible in the parsed log with `_protocolWarnings`.
@@ -287,6 +322,64 @@ Implemented in `serial_probe.js` for the standalone probe:
   - [x] Consider disabling human logs when SGC is connected.
 
 Decision for this branch stage: keep human firmware logs enabled during development and smoke tests. The SGC probe explicitly tolerates mixed JSON/non-JSON streams. Before the serial protocol becomes the production operator path, add a GC firmware setting such as `serialMode:"json_only"` or `logLevel:"debug"` if raw logs become noisy or affect performance.
+
+## Lifecycle And Spectrum Extensions
+
+These tasks support `06_gc_lifecycle_spectrum_plan.md`.
+
+- [x] Milestone 11: Implement GC lifecycle command handling
+  - [x] GC accepts newline-delimited command JSON from SGC.
+  - [x] GC implements `ping`.
+  - [x] GC implements `get_status`.
+  - [x] GC implements `get_channel_table`.
+  - [x] GC implements `get_assignments`.
+  - [x] GC implements `clear_all_assignments` as the serial command behind SGC `Start Fresh Session`.
+  - [x] GC emits `command_ack` for every accepted or rejected command.
+  - [x] GC emits updated `gc_status` after lifecycle commands.
+  - [x] GC emits updated `channel_table` after commands that affect channels or assignments.
+
+Fresh-session command:
+
+```json
+{"type":"command","command":"clear_all_assignments","commandId":"sgc-0300","persist":true,"reason":"start_fresh_session"}
+```
+
+Expected ACK:
+
+```json
+{"type":"command_ack","commandId":"sgc-0300","command":"clear_all_assignments","accepted":true,"message":"assignments cleared","gcMillis":123456}
+```
+
+- [x] Milestone 12: Define and implement scan progress JSON
+  - [x] Emit `channel_scan_event` when the GC starts scanning.
+  - [x] Emit per-channel scan results or compact batches while scanning.
+  - [x] Emit `channel_scan_event` when scanning completes.
+  - [x] Include `frequencyMhz`, `channelIndex`, `medianRssi`, `maxRssi`, and `state`.
+  - [x] Include shared/guard/candidate role information where useful for SGC rendering.
+  - [x] Keep the final `channel_table` as the authoritative post-scan state.
+  - [x] Use the existing scan JSON stream for the temporary boot animation; no extra schema is required.
+  - [x] Re-emit `channel_scanned` for initially noisy channels after second-pass measurement so SGC updates the same bars.
+  - [x] Include optional `scanPass` for scan debugging; consumers may ignore it.
+
+Scan event examples:
+
+```json
+{"type":"channel_scan_event","event":"scan_started","candidateChannels":48,"gcMillis":123000}
+{"type":"channel_scan_event","event":"channel_scanned","channelIndex":6,"frequencyMhz":905.5,"medianRssi":-111,"maxRssi":-105,"state":"clear","gcMillis":123050}
+{"type":"channel_scan_event","event":"scan_complete","clearChannels":42,"noisyChannels":6,"fallbackUsed":false,"gcMillis":124200}
+```
+
+- [x] Milestone 13: Extend `channel_table` for spectrum rendering
+  - [x] Include per-channel details in addition to the existing clear/noisy frequency arrays.
+  - [x] Mark `shared`, `guard`, `telemetry_candidate`, `clear`, `noisy`, and `assigned` channel roles.
+  - [x] Include median and max RSSI values for candidate telemetry channels.
+  - [x] Preserve the existing compact arrays for simple SGC summary counts.
+
+Candidate extension:
+
+```json
+{"type":"channel_table","channels":[{"channelIndex":6,"frequencyMhz":905.5,"role":"telemetry_candidate","clear":true,"medianRssi":-111,"maxRssi":-105},{"channelIndex":25,"frequencyMhz":915.0,"role":"shared","clear":false}],"gcMillis":124250}
+```
 
 ## Smoke Test Verification
 

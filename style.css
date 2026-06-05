@@ -264,6 +264,113 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   overflow-wrap: anywhere;
 }
 
+.live-gc-actions{
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.live-danger-btn{
+  border-color: rgba(255,138,138,0.32);
+  background: rgba(255,108,108,0.12);
+}
+
+.live-confirm{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid rgba(255,138,138,0.28);
+  border-radius: 8px;
+  background: rgba(48,12,12,0.34);
+}
+
+.live-confirm-message{
+  color: rgba(255,255,255,0.82);
+  font-size: var(--ui-font-xs);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.live-confirm-actions{
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.live-spectrum{
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.10);
+}
+
+.live-spectrum-header,
+.live-spectrum-legend{
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: rgba(255,255,255,0.55);
+  font-size: var(--ui-font-xs);
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.live-spectrum-legend{
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 800;
+}
+
+.live-spectrum-bars{
+  min-height: 48px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  padding: 3px 0;
+}
+
+.live-spectrum-bar{
+  flex: 1 1 0;
+  min-width: 3px;
+  max-width: 8px;
+  border-radius: 2px 2px 0 0;
+  background: rgba(255,255,255,0.22);
+  border: 1px solid rgba(255,255,255,0.08);
+  transition: height 180ms ease, background-color 180ms ease, box-shadow 180ms ease;
+}
+
+.live-spectrum-bar.shared{
+  background: rgba(120,220,255,0.85);
+  box-shadow: 0 0 8px rgba(120,220,255,0.45);
+}
+
+.live-spectrum-bar.unknown{
+  background: rgba(255,255,255,0.18);
+}
+
+.live-spectrum-bar.guard{
+  background: rgba(255,255,255,0.28);
+}
+
+.live-spectrum-bar.clear{
+  background: rgba(108,255,146,0.72);
+}
+
+.live-spectrum-bar.noisy{
+  background: rgba(255,108,108,0.76);
+}
+
+.live-spectrum-bar.assigned{
+  background: rgba(255,211,108,0.92);
+  box-shadow: 0 0 8px rgba(255,211,108,0.5);
+}
+
 /* Panel header/title */
 .panel-top{
   display:flex;

@@ -42,6 +42,7 @@ Read these files before implementing branch work:
 - `03_serial_protocol_json.md`: USB serial JSON contract between GC ESP32 and SGC.
 - `04_sgc_side.md`: SGC UI and telemetry ingestion plan.
 - `05_simple_mesh_firmware_side.md`: firmware role plan for GC and drone ESP32 nodes.
+- `06_gc_lifecycle_spectrum_plan.md`: cross-cutting plan for JOIN retry hardening, fresh-session reset, GC lifecycle commands, and SGC spectrum/boot visibility.
 
 ## Checklist Behavior
 
@@ -87,6 +88,7 @@ The agreed project split is:
 3. USB serial protocol, JSON between SGC and GC ESP32.
 4. SGC live-position UI and telemetry ingestion.
 5. simple-mesh ESP32/LoRa firmware changes.
+6. GC lifecycle, fresh-session reset, and spectrum/boot visibility.
 
 Keep these boundaries clear. The browser app should render and inspect telemetry; the GC firmware should own radio allocation and scanning.
 

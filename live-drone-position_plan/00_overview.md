@@ -16,6 +16,8 @@ This branch narrows Swarm Ground Control from a broad C2 prototype into a live d
 - [x] SGC displays assigned telemetry frequency per drone.
 - [ ] Drone telemetry over LoRa is compact binary.
 - [x] GC-to-SGC serial output is newline-delimited JSON.
+- [x] SGC exposes an explicit `Start Fresh Session` workflow for clearing stale GC assignments.
+- [x] SGC displays GC boot/channel-scan spectrum visibility during system startup.
 - [x] Mission commands, teams, waypoints, and command sequences are out of scope for this branch.
 
 ## Project Parts
@@ -49,6 +51,17 @@ This branch narrows Swarm Ground Control from a broad C2 prototype into a live d
   - [ ] Store GC channel assignments in flash.
   - [x] Keep TX power fixed at `22 dBm` for SX1262.
 
+- [x] Milestone 6: GC lifecycle and spectrum visibility
+  - [x] Retry `SILENCE -> JOIN_ASSIGN -> ACK wait` during shared-channel joins.
+  - [x] Implement GC serial commands for status, channel table, assignments, and fresh-session reset.
+  - [x] Add an SGC `Start Fresh Session` flow with confirmation before deleting previous assignments.
+  - [x] Emit detailed GC channel scan/noise-floor data over serial JSON.
+  - [x] Render a compact SGC spectrum/boot visualization from the GC scan data.
+
+Detailed cross-cutting plan: `06_gc_lifecycle_spectrum_plan.md`.
+
+Future/backlog features that are not part of the current bench milestone are tracked in `07_future_features.md`.
+
 ## Key Defaults
 
 - [x] Radio default spreading factor: `SF8`.
@@ -60,7 +73,7 @@ This branch narrows Swarm Ground Control from a broad C2 prototype into a live d
 - [x] Telemetry packet size: `20 bytes`.
 - [x] Telemetry airtime at `SF8 / BW500 / CR4/5 / preamble 8`: about `25.7 ms`.
 - [x] Initial transmit period rule: `ceil(airtime_ms) + airtime_buffer_ms`.
-- [x] Initial airtime buffer default: `1 ms`, configurable.
+- [x] Initial airtime buffer default: `74 ms`, configurable.
 
 ## Freshness Thresholds
 
