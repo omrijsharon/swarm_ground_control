@@ -313,19 +313,35 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-profile-close{
+  position: relative;
   width: 20px;
   height: 20px;
   border: 1px solid rgba(255,255,255,0.16);
   border-radius: 999px;
   background: rgba(255,255,255,0.06);
-  color: rgba(255,255,255,0.78);
   cursor: pointer;
   padding: 0;
-  font: inherit;
-  font-size: 13px;
-  line-height: 18px;
-  text-align: center;
-  text-transform: none;
+}
+
+.live-profile-close::before,
+.live-profile-close::after{
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 9px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.78);
+  transform-origin: center;
+}
+
+.live-profile-close::before{
+  transform: translate(-50%, -50%) rotate(45deg);
+}
+
+.live-profile-close::after{
+  transform: translate(-50%, -50%) rotate(-45deg);
 }
 
 .live-profile-close:hover,
@@ -333,6 +349,13 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   outline: none;
   border-color: rgba(255,255,255,0.34);
   background: rgba(255,255,255,0.12);
+}
+
+.live-profile-close:hover::before,
+.live-profile-close:hover::after,
+.live-profile-close:focus-visible::before,
+.live-profile-close:focus-visible::after{
+  background: rgba(255,255,255,0.94);
 }
 
 .live-profile-controls{
