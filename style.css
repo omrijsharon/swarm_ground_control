@@ -498,11 +498,16 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-spectrum-meta,
+.live-spectrum-status,
 .live-spectrum-empty{
   color: rgba(255,255,255,0.62);
   font-size: var(--ui-font-xs);
   font-weight: 800;
   line-height: 1.35;
+}
+
+.live-spectrum-status{
+  color: rgba(255,211,108,0.90);
 }
 
 .live-spectrum-empty{

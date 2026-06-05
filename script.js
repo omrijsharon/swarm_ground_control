@@ -115,6 +115,7 @@ const liveState = {
   spectrumPanelOpen: false,
   spectrumRescanPending: false,
   spectrumRescanConfirming: false,
+  spectrumStatus: "",
   lastScanCompletedAt: null,
   channelTableReceivedAt: null,
   lastCommandAck: null,
@@ -3401,6 +3402,13 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
     metaEl.textContent = meta.length ? meta.join(" | ") : "No scan data yet";
     wrap.appendChild(metaEl);
 
+    if (liveState.spectrumStatus) {
+      const statusEl = document.createElement("div");
+      statusEl.className = "live-spectrum-status";
+      statusEl.textContent = liveState.spectrumStatus;
+      wrap.appendChild(statusEl);
+    }
+
     renderLiveSpectrumConfirm(wrap);
   }
 
@@ -3495,12 +3503,14 @@ function closeLiveSpectrumPanel() {
 function requestLiveSpectrumRescanConfirmation() {
   if (liveState.spectrumRescanPending) return;
   if (!liveState.connected) {
+    liveState.spectrumStatus = "Connect GC serial before re-scanning.";
     appendLiveDebug("channel rescan unavailable: connect GC serial first");
     renderLiveGcStatus();
     return;
   }
   liveState.spectrumPanelOpen = true;
   liveState.spectrumRescanConfirming = true;
+  liveState.spectrumStatus = "";
   renderLiveGcStatus();
 }
 
@@ -3513,6 +3523,7 @@ async function startLiveSpectrumRescan() {
   if (liveState.spectrumRescanPending) return;
   if (!liveState.connected) {
     liveState.spectrumRescanConfirming = false;
+    liveState.spectrumStatus = "Connect GC serial before re-scanning.";
     appendLiveDebug("channel rescan unavailable: connect GC serial first");
     renderLiveGcStatus();
     return;
@@ -3520,6 +3531,7 @@ async function startLiveSpectrumRescan() {
   liveState.spectrumRescanConfirming = false;
   liveState.spectrumRescanPending = true;
   liveState.spectrumPanelOpen = true;
+  liveState.spectrumStatus = "Sending re-scan command...";
   renderLiveGcStatus();
   const commandId = await sendLiveSerialCommand("rescan_channels", {
     persist: true,
@@ -3529,11 +3541,13 @@ async function startLiveSpectrumRescan() {
       if (!liveState.pendingCommands.has(commandId)) return;
       liveState.pendingCommands.delete(commandId);
       liveState.spectrumRescanPending = false;
+      liveState.spectrumStatus = "Re-scan command timed out. The GC firmware may need to be updated.";
       appendLiveDebug("command timeout: rescan_channels");
       renderLiveGcStatus();
     }, 12000);
   } else {
     liveState.spectrumRescanPending = false;
+    liveState.spectrumStatus = "Re-scan command could not be sent.";
     renderLiveGcStatus();
   }
 }
@@ -3976,6 +3990,12 @@ function handleLiveProtocolMessage(message, source = "serial") {
         liveState.spectrumRescanConfirming = false;
         if (message.accepted) {
           liveState.spectrumPanelOpen = true;
+          liveState.spectrumStatus = "Re-scan accepted by GC.";
+        } else {
+          const reason = message.reason || message.message || "unknown reason";
+          liveState.spectrumStatus = reason === "unknown_command"
+            ? "GC firmware does not support re-scan yet. Flash the updated GC firmware."
+            : `Re-scan rejected: ${reason}`;
         }
       }
     }
@@ -4005,16 +4025,20 @@ function handleLiveProtocolMessage(message, source = "serial") {
       liveState.scanCandidateCount = Number(message.candidateChannels) || 48;
       liveState.scanInProgress = true;
       liveState.lastScanCompletedAt = null;
+      liveState.spectrumStatus = "Scanning channels...";
       showLiveScanAnimation();
     } else if (message.event === "channel_scanned") {
       updateLiveScanRow(message);
       showLiveScanAnimation();
     } else if (message.event === "noisy_rescan_started") {
+      liveState.spectrumStatus = `Rechecking ${Number(message.candidateChannels) || 0} noisy channels...`;
       showLiveScanAnimation();
       appendLiveDebug(`scan recheck: ${Number(message.candidateChannels) || 0} noisy channels`);
     } else if (message.event === "scan_complete") {
       liveState.scanInProgress = false;
       liveState.lastScanCompletedAt = Date.now();
+      liveState.spectrumRescanPending = false;
+      liveState.spectrumStatus = "Scan complete.";
       scheduleLiveScanAnimationHide();
     }
     renderLiveGcStatus();
