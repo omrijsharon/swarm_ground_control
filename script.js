@@ -2846,17 +2846,12 @@ function renderLiveControls() {
   const closeBtn = document.getElementById("liveSerialCloseBtn");
   const baudInput = document.getElementById("liveSerialBaud");
   const resetBtn = document.getElementById("liveResetSessionBtn");
-  const metaEl = document.getElementById("liveSerialMeta");
   if (openBtn) openBtn.disabled = liveState.connected;
   if (closeBtn) closeBtn.disabled = !liveState.connected;
   if (baudInput) baudInput.disabled = liveState.connected;
   if (resetBtn) {
     resetBtn.textContent = liveState.freshSessionPending ? "Resetting..." : "Reset";
     resetBtn.disabled = !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
-  }
-  if (metaEl) {
-    const last = liveState.lastMessageAt ? formatLiveAge(liveState.lastMessageAt) : "never";
-    metaEl.textContent = `Port ${liveState.portLabel} | Baud ${liveState.baudRate} | Last message: ${last}`;
   }
 }
 
@@ -3315,28 +3310,12 @@ function renderLiveGcStatus() {
     host.appendChild(confirmEl);
   }
 
-  const debugEl = document.createElement("div");
-  debugEl.className = "live-meta";
-  debugEl.textContent =
-    `Assigned debug: ${assignedDebug.source}; ` +
-    `live=${assignedDebug.liveSerialDrones}; all=${assignedDebug.allDrones}; ` +
-    `table=${assignedDebug.tableAssignments ?? "none"}; status=${assignedDebug.statusAssigned ?? "none"}; ` +
-    `serial=${liveState.serialTelemetrySeen ? "yes" : "no"}; mock=${liveState.mockActive ? "on" : "off"}`;
-  host.appendChild(debugEl);
-
   if (liveState.assignmentEvents.length) {
     const event = liveState.assignmentEvents[liveState.assignmentEvents.length - 1];
     const eventEl = document.createElement("div");
     eventEl.className = "live-meta";
     eventEl.textContent = `Last assignment: ${event.event || "event"}${event.nodeId !== undefined ? ` node ${event.nodeId}` : ""}`;
     host.appendChild(eventEl);
-  }
-
-  if (liveState.lastCommandAck) {
-    const ackEl = document.createElement("div");
-    ackEl.className = "live-meta";
-    ackEl.textContent = `Last command: ${liveState.lastCommandAck.command || "command"} ${liveState.lastCommandAck.accepted ? "accepted" : "rejected"}`;
-    host.appendChild(ackEl);
   }
 }
 
@@ -4067,13 +4046,10 @@ function renderLiveStatusList() {
     const speed = Number(latest.groundSpeed);
     const fields = [
       ["Alt", `${Number(latest.alt || 0).toFixed(1)} m`],
-      ["Speed", Number.isFinite(speed) ? `${speed.toFixed(1)} m/s (${(speed * 3.6).toFixed(0)} km/h)` : "N/A"],
-      ["Heading", `${Number(latest.heading || 0).toFixed(0)} deg`],
-      ["Fusion", formatHeadingFusionLabel(latest)],
+      ["Speed", Number.isFinite(speed) ? `${(speed * 3.6).toFixed(0)} km/h` : "N/A"],
       ["RSSI", latest.rssi !== null && latest.rssi !== undefined ? `${Number(latest.rssi).toFixed(0)} dBm` : "N/A"],
       ["SNR", latest.snr !== null && latest.snr !== undefined ? `${Number(latest.snr).toFixed(1)} dB` : "N/A"],
       ["Sats", latest.satelliteCount !== null && latest.satelliteCount !== undefined ? String(latest.satelliteCount) : "N/A"],
-      ["GPS", formatGpsSourceLabel(latest)],
     ];
     fields.forEach(([name, value]) => {
       const item = document.createElement("div");
@@ -4355,12 +4331,9 @@ function renderLiveTooltip(el, target, latest) {
     <div class="row battery-row"><strong>Drone ${target.id}</strong><span class="live-freshness ${freshness}">${freshness}</span></div>
     <div class="row"><span>Age</span><strong>${age}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Number(latest.alt || 0).toFixed(1)} m</strong></div>
-    <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${speed.toFixed(1)} m/s` : "N/A"}</strong></div>
-    <div class="row"><span>Heading</span><strong>${Number(latest.heading || 0).toFixed(0)} deg</strong></div>
-    <div class="row"><span>Fusion</span><strong>${formatHeadingFusionLabel(latest)}</strong></div>
+    <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${(speed * 3.6).toFixed(0)} km/h` : "N/A"}</strong></div>
     <div class="row"><span>CoG / Yaw</span><strong>${latest.courseOverGround !== null && latest.courseOverGround !== undefined ? Number(latest.courseOverGround).toFixed(0) : "N/A"} / ${latest.yaw !== null && latest.yaw !== undefined ? Number(latest.yaw).toFixed(0) : "N/A"}</strong></div>
     <div class="row"><span>RSSI / SNR</span><strong>${latest.rssi !== null && latest.rssi !== undefined ? Number(latest.rssi).toFixed(0) : "N/A"} / ${latest.snr !== null && latest.snr !== undefined ? Number(latest.snr).toFixed(1) : "N/A"}</strong></div>
-    <div class="row"><span>GPS</span><strong>${formatGpsSourceLabel(latest)}</strong></div>
     <div class="row"><span>Sats</span><strong>${latest.satelliteCount ?? "N/A"}</strong></div>
     <div class="row"><span>Channel</span><strong>${freq}</strong></div>
     <div class="row"><span>Seq</span><strong>${latest.sequenceId ?? "N/A"}</strong></div>

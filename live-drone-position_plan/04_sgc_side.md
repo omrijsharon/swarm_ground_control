@@ -168,6 +168,14 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Add a fixed-width drone card timing line so the age value does not shift as digit count changes.
   - [x] Add recent update-rate display from the last three receive intervals.
 
+- [x] Milestone 15: Production UI cleanup second pass
+  - [x] Remove USB serial metadata and visible serial/debug log text below the control buttons.
+  - [x] Remove the `Assigned debug` line from the GC/radio panel.
+  - [x] Remove the `Last command` line from the GC/radio panel.
+  - [x] Remove heading, fusion, and GPS rows from live drone cards.
+  - [x] Show live drone speed in km/h only.
+  - [x] Apply the same live drone detail simplification to the hover/pinned tooltip.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.
@@ -184,8 +192,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - `Reset` uses the same in-panel fresh-session confirmation block instead of native `window.confirm()`, because the native browser dialog produced no visible response in manual testing.
 - When real serial `drone_telemetry` arrives, live mock drones are cleared so hardware telemetry owns the map.
 - Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
-- The GC status panel includes an `Assigned debug` line showing the source used for the `Assigned` value.
-- Drone cards and tooltips now display GPS source, including `GPS SIM` while bench lat/lng/CoG/speed are simulated.
+- The production operator UI hides serial debug text, assigned-count debug text, and last-command debug text.
+- Drone cards and tooltips keep the operator-facing essentials: timing/update rate, altitude, speed, RSSI/SNR, satellite count, and channel/sequence details where applicable.
 - Browser smoke check after adding heading-fusion debug fields passed manually in SGC.
 - Production UI first pass static verification completed: `node --check script.js`, `git diff --check`, and local static fetch confirmed `Reset` exists and the visible mock toggle is absent.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.
