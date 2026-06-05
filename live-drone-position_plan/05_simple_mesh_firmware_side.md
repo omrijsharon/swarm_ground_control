@@ -272,6 +272,10 @@ The firmware has two runtime roles in this branch:
     - After `2` misses, the GC clears the stale runtime phase for that assignment and retries assigned-channel acquisition every `2 s` instead of keeping that absent drone in the hot scan loop. This prevents a powered-off node from starving live drones.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.
     - If a recovery/acquisition listen would overlap another drone's known predicted receive slot, the GC clips the recovery window or skips directly to the known slot. This is intended to prevent a disconnected node from causing another live node to cascade into offline state.
+  - [x] Keep timing-proposal acquisition responsive after a drone rejoins.
+    - After `JOIN_ACK`, the GC schedules assigned-channel timing acquisition immediately. If it misses a `TX_PERIOD_PROPOSAL`, it retries after `20 ms` instead of backing off to the shared-channel interval.
+  - [x] Extend drone timing-proposal retries for multi-drone scheduler load.
+    - Drones retry `TX_PERIOD_PROPOSAL` up to `12` times before returning to shared-channel join.
   - [x] Keep the shared discovery channel in the schedule so new drones can join.
   - [x] Cycle back to the shared channel regularly for new drones.
     - Scheduler uses `GC_SCANNER_SHARED_LISTEN_MS = 40` and `GC_SCANNER_SHARED_INTERVAL_MS = 500`.
