@@ -338,7 +338,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 .live-profile-controls{
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
+  gap: 8px;
 }
 
 .live-profile-field{
@@ -352,26 +352,39 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   text-transform: uppercase;
 }
 
-.live-profile-field select{
-  width: 100%;
-  min-width: 0;
-  height: 28px;
-  border: 1px solid rgba(255,255,255,0.18);
+.live-profile-segments{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+
+.live-profile-segment{
+  flex: 1 1 auto;
+  min-width: 28px;
+  height: 26px;
+  border: 1px solid rgba(255,255,255,0.16);
   border-radius: 6px;
-  background: rgba(18,24,28,0.96);
-  color: rgba(255,255,255,0.92);
+  background: rgba(255,255,255,0.06);
+  color: rgba(255,255,255,0.72);
+  cursor: pointer;
   font: inherit;
-  font-weight: 800;
+  font-size: var(--ui-font-xs);
+  font-weight: 900;
+  padding: 0 5px;
 }
 
-.live-profile-field select option{
-  background: #ffffff;
-  color: #111827;
+.live-profile-segment:hover,
+.live-profile-segment:focus-visible{
+  outline: none;
+  border-color: rgba(120,220,255,0.36);
+  background: rgba(120,220,255,0.10);
+  color: rgba(255,255,255,0.92);
 }
 
-.live-profile-field select option:checked{
-  background: #1f6feb;
-  color: #ffffff;
+.live-profile-segment.is-selected{
+  border-color: rgba(108,255,146,0.42);
+  background: rgba(108,255,146,0.16);
+  color: rgba(255,255,255,0.96);
 }
 
 .live-profile-preview{

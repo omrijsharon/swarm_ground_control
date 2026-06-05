@@ -178,7 +178,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 
 - [x] Milestone 16: SGC-only radio profile picker preparation
   - [x] Make the GC `Profile` field clickable.
-  - [x] Render an inline profile picker for spreading factor, bandwidth, and coding rate.
+  - [x] Render an inline segmented profile picker for spreading factor, bandwidth, and coding rate.
   - [x] Locally preview 20-byte LoRa telemetry airtime from the selected profile.
   - [x] Mark the picker as applying to future assignments only.
   - [x] Keep Apply disabled with `Firmware update required` until GC firmware implements `set_radio_profile`.

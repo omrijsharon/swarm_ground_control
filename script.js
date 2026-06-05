@@ -3361,24 +3361,32 @@ function updateLiveProfileDraft(field, value) {
   renderLiveGcStatus();
 }
 
-function makeLiveProfileSelect(label, field, options, value, formatter) {
-  const wrap = document.createElement("label");
+function makeLiveProfileSegment(label, field, options, value, formatter) {
+  const wrap = document.createElement("div");
   wrap.className = "live-profile-field";
 
   const labelEl = document.createElement("span");
   labelEl.textContent = label;
   wrap.appendChild(labelEl);
 
-  const select = document.createElement("select");
+  const group = document.createElement("div");
+  group.className = "live-profile-segments";
+  group.setAttribute("role", "radiogroup");
+  group.setAttribute("aria-label", label);
+
   options.forEach((option) => {
-    const item = document.createElement("option");
-    item.value = String(option);
+    const item = document.createElement("button");
+    item.className = "live-profile-segment";
+    item.type = "button";
     item.textContent = formatter ? formatter(option) : String(option);
-    select.appendChild(item);
+    const selected = Number(option) === Number(value);
+    item.classList.toggle("is-selected", selected);
+    item.setAttribute("role", "radio");
+    item.setAttribute("aria-checked", selected ? "true" : "false");
+    item.addEventListener("click", () => updateLiveProfileDraft(field, option));
+    group.appendChild(item);
   });
-  select.value = String(value);
-  select.addEventListener("change", () => updateLiveProfileDraft(field, select.value));
-  wrap.appendChild(select);
+  wrap.appendChild(group);
 
   return wrap;
 }
@@ -3410,9 +3418,9 @@ function renderLiveProfilePicker(host) {
 
   const controls = document.createElement("div");
   controls.className = "live-profile-controls";
-  controls.appendChild(makeLiveProfileSelect("SF", "spreadingFactor", LIVE_PROFILE_OPTIONS.spreadingFactors, draft.spreadingFactor));
-  controls.appendChild(makeLiveProfileSelect("BW", "bandwidthHz", LIVE_PROFILE_OPTIONS.bandwidthHz, draft.bandwidthHz, (hz) => `${Math.round(hz / 1000)} kHz`));
-  controls.appendChild(makeLiveProfileSelect("CR", "codingRate", LIVE_PROFILE_OPTIONS.codingRates, draft.codingRate, (cr) => `4/${cr}`));
+  controls.appendChild(makeLiveProfileSegment("SF", "spreadingFactor", LIVE_PROFILE_OPTIONS.spreadingFactors, draft.spreadingFactor));
+  controls.appendChild(makeLiveProfileSegment("BW", "bandwidthHz", LIVE_PROFILE_OPTIONS.bandwidthHz, draft.bandwidthHz, (hz) => `${Math.round(hz / 1000)}`));
+  controls.appendChild(makeLiveProfileSegment("CR", "codingRate", LIVE_PROFILE_OPTIONS.codingRates, draft.codingRate, (cr) => `4/${cr}`));
   panel.appendChild(controls);
 
   const preview = document.createElement("div");
