@@ -1037,6 +1037,39 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   font-size: var(--ui-font-xs);
   line-height: 1.3;
 }
+
+.live-timing-line{
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.live-timing-frequency{
+  flex: 0 0 auto;
+}
+
+.live-timing-separator,
+.live-timing-ago{
+  flex: 0 0 auto;
+  color: rgba(255,255,255,0.45);
+}
+
+.live-timing-age-value{
+  flex: 0 0 4ch;
+  text-align: right;
+}
+
+.live-timing-age-unit{
+  flex: 0 0 2ch;
+}
+
+.live-timing-rate{
+  flex: 0 0 5.5ch;
+}
+
 .status-battery{
   margin-left: auto;
   display: flex;

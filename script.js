@@ -888,6 +888,7 @@ class Drone {
       gpsSource: packet.gpsSource ?? packet.gps_source ?? null,
       gpsSimulated: packet.gpsSimulated ?? packet.gps_simulated ?? false,
       gpsFixQuality: packet.gpsFixQuality ?? packet.gps_fix_quality ?? null,
+      receivedAt,
       snr: packet.snr ?? null,
       frequencyMhz: packet.frequencyMhz ?? packet.frequency_mhz ?? null,
       sequenceId: packet.sequenceId ?? packet.sequence_id ?? null,
@@ -2741,6 +2742,77 @@ function formatLiveAge(receivedAt = null, now = Date.now()) {
   return `${(ageMs / 1000).toFixed(1)} s`;
 }
 
+function formatLiveAgeParts(receivedAt = null, now = Date.now()) {
+  if (!receivedAt) return { value: "--", unit: "ms" };
+  const ageMs = Math.max(0, now - receivedAt);
+  if (ageMs < 1000) return { value: String(Math.round(ageMs)), unit: "ms" };
+  return { value: (ageMs / 1000).toFixed(1), unit: "s" };
+}
+
+function getLiveUpdateRateHz(drone) {
+  if (!drone || drone.history.length < 2) return null;
+  const recent = drone.history
+    .map((entry) => entry.receivedAt)
+    .filter((receivedAt) => Number.isFinite(receivedAt))
+    .slice(-4);
+  if (recent.length < 2) return null;
+
+  const intervals = [];
+  for (let i = 1; i < recent.length; i += 1) {
+    const intervalMs = recent[i] - recent[i - 1];
+    if (intervalMs > 0) intervals.push(intervalMs);
+  }
+  if (!intervals.length) return null;
+
+  const averageIntervalMs = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+  if (averageIntervalMs <= 0) return null;
+  return 1000 / averageIntervalMs;
+}
+
+function renderLiveTimingLine(host, drone, latest, now = Date.now()) {
+  const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
+  const age = formatLiveAgeParts(drone.lastReceivedAt, now);
+  const updateRateHz = getLiveUpdateRateHz(drone);
+
+  host.className = "status-mission live-timing-line";
+  host.innerHTML = "";
+
+  const freqEl = document.createElement("span");
+  freqEl.className = "live-timing-frequency";
+  freqEl.textContent = freq;
+  host.appendChild(freqEl);
+
+  const separatorEl = document.createElement("span");
+  separatorEl.className = "live-timing-separator";
+  separatorEl.textContent = "|";
+  host.appendChild(separatorEl);
+
+  const ageValueEl = document.createElement("span");
+  ageValueEl.className = "live-timing-age-value";
+  ageValueEl.textContent = age.value;
+  host.appendChild(ageValueEl);
+
+  const ageUnitEl = document.createElement("span");
+  ageUnitEl.className = "live-timing-age-unit";
+  ageUnitEl.textContent = age.unit;
+  host.appendChild(ageUnitEl);
+
+  const agoEl = document.createElement("span");
+  agoEl.className = "live-timing-ago";
+  agoEl.textContent = "ago";
+  host.appendChild(agoEl);
+
+  const rateSeparatorEl = document.createElement("span");
+  rateSeparatorEl.className = "live-timing-separator";
+  rateSeparatorEl.textContent = "|";
+  host.appendChild(rateSeparatorEl);
+
+  const rateEl = document.createElement("span");
+  rateEl.className = "live-timing-rate";
+  rateEl.textContent = updateRateHz === null ? "-- Hz" : `${updateRateHz.toFixed(1)} Hz`;
+  host.appendChild(rateEl);
+}
+
 function getLiveFreshnessState(drone, now = Date.now()) {
   if (!drone || !drone.lastReceivedAt) return "offline";
   const ageMs = Math.max(0, now - drone.lastReceivedAt);
@@ -2773,14 +2845,14 @@ function renderLiveControls() {
   const openBtn = document.getElementById("liveSerialOpenBtn");
   const closeBtn = document.getElementById("liveSerialCloseBtn");
   const baudInput = document.getElementById("liveSerialBaud");
-  const mockBtn = document.getElementById("liveMockToggleBtn");
+  const resetBtn = document.getElementById("liveResetSessionBtn");
   const metaEl = document.getElementById("liveSerialMeta");
   if (openBtn) openBtn.disabled = liveState.connected;
   if (closeBtn) closeBtn.disabled = !liveState.connected;
   if (baudInput) baudInput.disabled = liveState.connected;
-  if (mockBtn) {
-    mockBtn.textContent = liveState.mockActive ? "Mock Off" : "Mock On";
-    mockBtn.classList.toggle("live-btn-primary", liveState.mockActive);
+  if (resetBtn) {
+    resetBtn.textContent = liveState.freshSessionPending ? "Resetting..." : "Reset";
+    resetBtn.disabled = !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
   }
   if (metaEl) {
     const last = liveState.lastMessageAt ? formatLiveAge(liveState.lastMessageAt) : "never";
@@ -3216,17 +3288,6 @@ function renderLiveGcStatus() {
 
   renderLiveSpectrum(host, table);
 
-  const actions = document.createElement("div");
-  actions.className = "live-gc-actions";
-  const freshBtn = document.createElement("button");
-  freshBtn.className = "live-btn live-danger-btn";
-  freshBtn.type = "button";
-  freshBtn.textContent = liveState.freshSessionPending ? "Clearing..." : "Start Fresh";
-  freshBtn.disabled = liveState.freshSessionPending || liveState.freshSessionConfirming;
-  freshBtn.addEventListener("click", requestFreshSessionConfirmation);
-  actions.appendChild(freshBtn);
-  host.appendChild(actions);
-
   if (liveState.freshSessionConfirming) {
     const confirmEl = document.createElement("div");
     confirmEl.className = "live-confirm";
@@ -3521,6 +3582,7 @@ function handleLiveProtocolMessage(message, source = "serial") {
       clearLiveSerialDrones({ clearAssignments: true });
     }
     appendLiveDebug(`session: ${message.event}${message.reason ? ` (${message.reason})` : ""}`);
+    renderLiveControls();
     renderLiveGcStatus();
   } else if (message.type === "channel_scan_event") {
     liveState.channelScanEvents.push(message);
@@ -3591,6 +3653,7 @@ async function sendLiveSerialCommand(command, fields = {}) {
   if (!liveState.connected || !liveState.port?.writable) {
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     appendLiveDebug("command rejected locally: serial port is not connected");
+    renderLiveControls();
     renderLiveGcStatus();
     return null;
   }
@@ -3616,6 +3679,7 @@ async function sendLiveSerialCommand(command, fields = {}) {
     liveState.pendingCommands.delete(commandId);
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     appendLiveDebug(`command send failed: ${err.message || err}`);
+    renderLiveControls();
     renderLiveGcStatus();
     return null;
   }
@@ -3631,17 +3695,20 @@ function requestFreshSessionConfirmation() {
   if (liveState.freshSessionPending) return;
   if (!liveState.connected) {
     appendLiveDebug("fresh session unavailable: connect GC serial first");
+    renderLiveControls();
     renderLiveGcStatus();
     return;
   }
   liveState.freshSessionConfirming = true;
   appendLiveDebug("fresh session confirmation opened");
+  renderLiveControls();
   renderLiveGcStatus();
 }
 
 function cancelFreshSessionConfirmation() {
   liveState.freshSessionConfirming = false;
   appendLiveDebug("fresh session cancelled");
+  renderLiveControls();
   renderLiveGcStatus();
 }
 
@@ -3650,10 +3717,13 @@ async function startFreshSession() {
   if (!liveState.connected) {
     liveState.freshSessionConfirming = false;
     appendLiveDebug("fresh session unavailable: connect GC serial first");
+    renderLiveControls();
+    renderLiveGcStatus();
     return;
   }
   liveState.freshSessionConfirming = false;
   liveState.freshSessionPending = true;
+  renderLiveControls();
   renderLiveGcStatus();
   const commandId = await sendLiveSerialCommand("clear_all_assignments", {
     persist: true,
@@ -3665,10 +3735,12 @@ async function startFreshSession() {
       liveState.pendingCommands.delete(commandId);
       liveState.freshSessionPending = false;
       appendLiveDebug("command timeout: clear_all_assignments");
+      renderLiveControls();
       renderLiveGcStatus();
     }, 8000);
   } else {
     liveState.freshSessionPending = false;
+    renderLiveControls();
     renderLiveGcStatus();
   }
 }
@@ -3938,10 +4010,10 @@ function initLivePositionUi() {
   if (!LIVE_POSITION_MODE) return;
   const openBtn = document.getElementById("liveSerialOpenBtn");
   const closeBtn = document.getElementById("liveSerialCloseBtn");
-  const mockBtn = document.getElementById("liveMockToggleBtn");
+  const resetBtn = document.getElementById("liveResetSessionBtn");
   openBtn?.addEventListener("click", () => openLiveSerialPort());
   closeBtn?.addEventListener("click", closeLiveSerialPort);
-  mockBtn?.addEventListener("click", toggleLiveMock);
+  resetBtn?.addEventListener("click", requestFreshSessionConfirmation);
   if ("serial" in navigator) {
     navigator.serial.addEventListener?.("disconnect", handleLiveSerialBrowserDisconnect);
     navigator.serial.addEventListener?.("connect", handleLiveSerialBrowserConnect);
@@ -3965,7 +4037,7 @@ function renderLiveStatusList() {
   if (!sorted.length) {
     const empty = document.createElement("div");
     empty.className = "status-entry live-entry";
-    empty.textContent = liveState.connected ? "Waiting for drone telemetry." : "Open USB serial or enable mock mode.";
+    empty.textContent = liveState.connected ? "Waiting for drone telemetry." : "Open USB serial to receive telemetry.";
     host.appendChild(empty);
     return;
   }
@@ -3989,9 +4061,7 @@ function renderLiveStatusList() {
     label.className = "status-label";
     label.textContent = `Drone ${d.id}`;
     const detail = document.createElement("div");
-    detail.className = "status-mission";
-    const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
-    detail.textContent = `${freq} | ${formatLiveAge(d.lastReceivedAt, now)} ago`;
+    renderLiveTimingLine(detail, d, latest, now);
     const grid = document.createElement("div");
     grid.className = "live-entry-grid";
     const speed = Number(latest.groundSpeed);

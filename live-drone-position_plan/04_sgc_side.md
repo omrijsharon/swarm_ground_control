@@ -129,7 +129,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Render a compact spectrum/noise-floor visualization in the GC/radio panel.
   - [x] Mark shared, guard, clear, noisy, and assigned channels in the spectrum view.
   - [x] Keep the existing clear/noisy count summary.
-  - [x] Add a `Start Fresh Session` button in the GC/radio panel.
+  - [x] Add an operator fresh-session control.
+    - First implemented as `Start Fresh Session` in the GC/radio panel; later moved to the top USB serial control row as `Reset`.
   - [x] Show a confirmation dialog before sending the fresh-session command.
   - [x] Confirmation copy states that previous channel assignments will be deleted.
   - [x] Send `clear_all_assignments` with `reason:"start_fresh_session"` after confirmation.
@@ -157,6 +158,16 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Manually verify closing the port disables reset auto-reconnect.
     - User manual browser check passed.
 
+- [x] Milestone 14: Production UI first pass
+  - [x] Replace the visible mock on/off button with a production `Reset` button.
+  - [x] Keep mock mode available internally but remove it from the normal operator path.
+  - [x] Wire `Reset` to the existing confirmed fresh-session command.
+  - [x] Remove the duplicate `Start Fresh` button from the GC/radio panel.
+  - [x] Remove operator text that points to hidden mock mode.
+  - [x] Add browser receive timestamps to live telemetry history.
+  - [x] Add a fixed-width drone card timing line so the age value does not shift as digit count changes.
+  - [x] Add recent update-rate display from the last three receive intervals.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.
@@ -170,11 +181,12 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - Live-position mode is the default branch UI through `APP_MODE = "live-position"`.
 - Existing C2 prototype code remains in `script.js`, but the left command sequence panel is hidden in live mode.
 - The right panel now owns USB serial controls, GC/radio status, and live drone status.
-- `Start Fresh Session` now uses an in-panel confirmation block instead of native `window.confirm()`, because the native browser dialog produced no visible response in manual testing.
+- `Reset` uses the same in-panel fresh-session confirmation block instead of native `window.confirm()`, because the native browser dialog produced no visible response in manual testing.
 - When real serial `drone_telemetry` arrives, live mock drones are cleared so hardware telemetry owns the map.
 - Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
 - The GC status panel includes an `Assigned debug` line showing the source used for the `Assigned` value.
 - Drone cards and tooltips now display GPS source, including `GPS SIM` while bench lat/lng/CoG/speed are simulated.
 - Browser smoke check after adding heading-fusion debug fields passed manually in SGC.
+- Production UI first pass static verification completed: `node --check script.js`, `git diff --check`, and local static fetch confirmed `Reset` exists and the visible mock toggle is absent.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.
 - Browser visual verification could not be completed in this session because the in-app browser backend was unavailable.
