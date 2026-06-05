@@ -3400,7 +3400,9 @@ function renderLiveProfilePicker(host) {
   const closeBtn = document.createElement("button");
   closeBtn.className = "live-profile-close";
   closeBtn.type = "button";
-  closeBtn.textContent = "Close";
+  closeBtn.textContent = "x";
+  closeBtn.setAttribute("aria-label", "Close profile picker");
+  closeBtn.title = "Close";
   closeBtn.addEventListener("click", closeLiveProfilePicker);
   header.appendChild(title);
   header.appendChild(closeBtn);
