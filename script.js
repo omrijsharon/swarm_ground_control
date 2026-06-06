@@ -38,6 +38,7 @@ const LIVE_FRESHNESS_MS = {
 const LIVE_RELOCK_TIMEOUT_MS = 8000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
+const LIVE_GC_DIAGNOSTIC_LOG_LIMIT = cfg("LIVE_GC_DIAGNOSTIC_LOG_LIMIT", 20000);
 
 let map;
 let overlay, ctx;
@@ -137,6 +138,9 @@ const liveState = {
   reconnectTimer: null,
   reconnecting: false,
   userClosedSerial: false,
+  gcDiagnosticLog: [],
+  gcDiagnosticLineNumber: 0,
+  gcDiagnosticStartedAt: Date.now(),
 };
 let orbitCloseSuppressUntil = 0;
 let orbitDroneId = null;
@@ -2748,6 +2752,81 @@ function appendLiveDebug(message, { replace = false } = {}) {
   debugEl.scrollTop = debugEl.scrollHeight;
 }
 
+function pickLiveDiagnosticFields(message) {
+  if (!message || typeof message !== "object") return {};
+  const keys = [
+    "type",
+    "event",
+    "nodeId",
+    "command",
+    "commandId",
+    "accepted",
+    "reason",
+    "gcMillis",
+    "sequenceId",
+    "frequencyMhz",
+    "channelIndex",
+    "txPeriodMs",
+    "telemetryAirtimeMs",
+    "rssi",
+    "snr",
+    "missCount",
+    "nextTstGcMillis",
+    "estimatedTstGcMillis",
+    "listenStartGcMillis",
+    "listenDeadlineGcMillis",
+  ];
+  return Object.fromEntries(keys.filter((key) => message[key] !== undefined).map((key) => [key, message[key]]));
+}
+
+function recordLiveGcDiagnosticLine(rawLine, { parsed = null, parseError = null, direction = "gc_to_sgc" } = {}) {
+  const line = String(rawLine || "").trim();
+  if (!line) return;
+
+  const entry = {
+    pcTimeIso: new Date().toISOString(),
+    pcElapsedMs: Date.now() - liveState.gcDiagnosticStartedAt,
+    source: "sgc-web-serial",
+    direction,
+    baud: liveState.baudRate,
+    port: liveState.portLabel,
+    lineNumber: ++liveState.gcDiagnosticLineNumber,
+    raw: line,
+    isJson: Boolean(parsed),
+    ...pickLiveDiagnosticFields(parsed),
+  };
+  if (parsed) entry.json = parsed;
+  if (parseError) entry.parseError = parseError;
+
+  liveState.gcDiagnosticLog.push(entry);
+  while (liveState.gcDiagnosticLog.length > LIVE_GC_DIAGNOSTIC_LOG_LIMIT) {
+    liveState.gcDiagnosticLog.shift();
+  }
+}
+
+function exportLiveGcDiagnosticLog() {
+  if (!liveState.gcDiagnosticLog.length) {
+    appendLiveDebug("diagnostic log is empty");
+    return;
+  }
+  const jsonl = `${liveState.gcDiagnosticLog.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const filename = `sgc_gc_serial_${stamp}.jsonl`;
+  const blob = new Blob([jsonl], { type: "application/x-ndjson" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  appendLiveDebug(`diagnostic log exported: ${filename}`);
+}
+
+window.downloadLiveGcLog = exportLiveGcDiagnosticLog;
+window.getLiveGcLog = () => liveState.gcDiagnosticLog.slice();
+
 function formatLiveAge(receivedAt = null, now = Date.now()) {
   if (!receivedAt) return "never";
   const ageMs = Math.max(0, now - receivedAt);
@@ -4147,13 +4226,16 @@ function processLiveSerialLine(line) {
   renderLiveControls();
 
   if (!trimmed.startsWith("{")) {
+    recordLiveGcDiagnosticLine(trimmed);
     return;
   }
 
   try {
     const parsed = JSON.parse(trimmed);
+    recordLiveGcDiagnosticLine(trimmed, { parsed });
     handleLiveProtocolMessage(parsed, "serial");
   } catch (err) {
+    recordLiveGcDiagnosticLine(trimmed, { parseError: err.message });
     appendLiveDebug(`parse error: ${err.message}`);
   }
 }
@@ -4189,7 +4271,9 @@ async function sendLiveSerialCommand(command, fields = {}) {
   try {
     const writer = liveState.port.writable.getWriter();
     try {
-      await writer.write(new TextEncoder().encode(`${JSON.stringify(payload)}\n`));
+      const encodedPayload = JSON.stringify(payload);
+      recordLiveGcDiagnosticLine(encodedPayload, { parsed: payload, direction: "sgc_to_gc" });
+      await writer.write(new TextEncoder().encode(`${encodedPayload}\n`));
     } finally {
       writer.releaseLock();
     }

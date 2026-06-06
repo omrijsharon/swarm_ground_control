@@ -49,7 +49,6 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `frequencyMhz`.
   - [x] Include `radioProfileId`.
   - [x] Include `txPeriodMs`.
-  - [x] Include `txSlotIndex` and `txSlotOffsetMs` when the GC has assigned scheduled telemetry slots.
   - [x] Include `telemetryAirtimeMs`.
   - [x] Include `sequenceId`.
   - [x] Include firmware-relative `gcMillis` timestamp.
@@ -57,7 +56,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":250,"txSlotIndex":0,"txSlotOffsetMs":0,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON
@@ -74,7 +73,7 @@ Candidate:
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"minimumTxPeriodMs":100,"txPeriodMs":250,"txSlotCount":5,"txSlotSpacingMs":50,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -102,7 +101,6 @@ Optional event fields:
 - `attempt`: retry/attempt counter for repeated assign/silence cycles.
 - `rssi`, `snr`: link metrics when the event came from a received packet.
 - `reason`: reason for expiration/removal/failure.
-- `txSlotIndex`, `txSlotOffsetMs`, `txStartDelayMs`: scheduled-slot timing fields when a timing ACK is sent or accepted.
 - `timingAccepted`: true after the assigned-channel TX period handshake is accepted.
 - `measuredCycleMs`, `proposedPeriodMs`, `mspBatchMs`, `txDurationMs`, `mspFlags`: timing proposal diagnostics.
 - `ackStatus`: `0` for accepted timing ACKs.
@@ -117,10 +115,10 @@ Examples:
 {"type":"assignment_event","event":"assignment_active","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"leaseSeconds":60,"gcMillis":123550}
 {"type":"assignment_event","event":"assignment_removed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"operator_clear","gcMillis":183550}
 {"type":"assignment_event","event":"tx_period_proposal_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"measuredCycleMs":58,"proposedPeriodMs":73,"mspBatchMs":19,"txDurationMs":38,"mspFlags":6,"gcMillis":123620}
-{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":250,"txSlotIndex":1,"txSlotOffsetMs":50,"txStartDelayMs":142,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
+{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
 ```
 
-Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`. After the three-drone phase-collision fix, the GC accepts the proposal but commands the scheduled multi-drone period, currently `txPeriodMs = 250`, with deterministic slot fields.
+Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`. The GC accepts protocol-valid proposals but clamps the accepted period to at least `100 ms`.
 
 - [x] Milestone 3b: Define scanner event JSON
   - [x] Emit scheduler state changes and timing corrections as `scanner_event`.
@@ -138,6 +136,19 @@ Examples:
 ```
 
 Default firmware behavior suppresses high-rate scanner events such as `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` unless `LIVE_POSITION_VERBOSE_SCANNER_EVENTS` is enabled. Keep normal `drone_telemetry` output lightweight enough that USB serial does not block the LoRa receive loop.
+
+- [x] Milestone 3c: Add GC serial capture diagnostics
+  - [x] Add a laptop-side serial logger that writes timestamped JSONL from the GC USB serial stream.
+    - Tool: `tools/gc_serial_logger.ps1`.
+    - Default capture target: `COM18` at `921600` baud.
+    - Generated logs are written under ignored `logs/`.
+  - [x] Include host timestamps, firmware `gcMillis`, raw lines, parsed JSON, node IDs, sequence IDs, TST/listen-window fields, RSSI/SNR, and command/assignment/scanner event fields where present.
+  - [x] Add summary output with per-node packet rate, sequence gaps, duplicates, and `telemetry_missed` counts.
+    - Smoke run on GC `COM18` captured `184` `drone_telemetry` lines in `10 s` across nodes `1`, `2`, and `3`, with `0` `telemetry_missed` events and no parse errors.
+  - [x] Keep a silent in-browser rolling diagnostic log of the Web Serial stream while SGC owns the port.
+    - It records incoming GC lines and outgoing SGC commands with a `direction` field.
+    - Browser console helpers: `downloadLiveGcLog()` exports JSONL, and `getLiveGcLog()` returns the current in-memory entries.
+  - [ ] Use a long capture during a multi-drone failure and attach the generated JSONL/summary notes to the scheduler bench results.
 
 - [x] Milestone 4: Define channel table JSON
   - [x] Report shared channel.
@@ -175,8 +186,6 @@ Assignment record fields:
 - `rssi`
 - `snr`
 - `txPeriodMs`
-- `txSlotIndex`
-- `txSlotOffsetMs`
 - `telemetryAirtimeMs`
 - `timingAccepted`
 - `missCount`
@@ -185,7 +194,7 @@ Assignment record fields:
 Example:
 
 ```json
-{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0,916.0],"noisyFrequencyMhz":[903.5],"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":250,"txSlotIndex":1,"txSlotOffsetMs":50,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"bandwidthHz":500000,"channelSpacingMhz":0.5,"gcMillis":123500}
+{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0,916.0],"noisyFrequencyMhz":[903.5],"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"bandwidthHz":500000,"channelSpacingMhz":0.5,"gcMillis":123500}
 ```
 
 - [x] Milestone 5: Define error/warning JSON
@@ -247,7 +256,7 @@ Response examples:
 
 ```json
 {"type":"command_ack","commandId":"sgc-0001","command":"ping","accepted":true,"message":"pong","gcMillis":123456}
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"minimumTxPeriodMs":100,"txPeriodMs":250,"txSlotCount":5,"txSlotSpacingMs":50,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
 ```
 
 - [x] Milestone 7: Define configurable radio settings
@@ -307,6 +316,10 @@ Maintenance response rules:
 Implementation note: `rescan_channels` is implemented for manual spectrum refresh. It preserves existing assignments, emits `command_ack`, runs the GC channel scan, then emits fresh `channel_scan_event`, `channel_table`, and `gc_status` output.
 
 Implementation note: `relock_drone` is implemented for manual runtime TST recovery. It preserves the assignment and flash state, emits `command_ack`, emits `scanner_event.event = "manual_relock_scheduled"`, and lets the GC reacquire phase from normal assigned-channel telemetry.
+
+Scheduler note: manual relock is intentionally preemptive for a bounded runtime-only window. The GC emits `scanner_event.event = "manual_relock_listen"` while it reserves assigned-channel receive time for that node, `manual_relock_retry` if a relock listen expires without telemetry, and `manual_relock_expired` if the bounded relock window elapses without reacquisition. This can temporarily reduce other drones' update rates, which is expected during operator-requested recovery.
+
+Post-ACK lock note: after `tx_period_ack_sent`, the GC also uses a bounded preemptive first-telemetry lock window. The GC emits `post_ack_lock_listen`, `post_ack_lock_retry`, and `post_ack_lock_expired` so a reset drone that completed JOIN plus timing ACK can reacquire TST even when already-online drones have dense receive windows.
 
 ## Parser Rules
 

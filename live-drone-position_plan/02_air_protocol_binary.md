@@ -256,8 +256,7 @@ total                       5 bytes
   - [x] Drone measures one `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX` probe cycle.
   - [x] Drone proposes `measured_cycle_ms + 15 ms`.
   - [x] GC accepts periods from `45-250 ms`.
-  - [x] GC may command a longer scheduled operating period than the measured proposal to protect the single-radio scanner.
-  - [x] GC includes a one-time `start_delay_ms` so the drone's first steady telemetry TX lands in its assigned slot.
+  - [x] GC clamps accepted periods to at least `100 ms` so the single-radio scanner has enough margin.
   - [x] GC ignores the first 20-byte probe telemetry for SGC output and TST lock.
   - [x] GC persists the accepted period but keeps TST/RSSI/SNR/miss counters in RAM only.
 
@@ -283,10 +282,9 @@ type                 uint8    1    # 0x06
 node_id              uint8    1
 sequence_id          uint8    1
 accepted_period_ms   uint16   2
-start_delay_ms       uint16   2    # delay after ACK receive before first steady telemetry TX
 status               uint8    1    # 0 = accepted
 -------------------------------
-total                         8 bytes
+total                         6 bytes
 ```
 
 ## Expected Airtime
@@ -306,7 +304,7 @@ payload_bytes   packet              airtime_ms
 4               SILENCE             15.488
 5               JOIN_REQUEST        15.488
 5               JOIN_ACK            15.488
-8               TX_PERIOD_ACK       18.048
+6               TX_PERIOD_ACK       15.488
 9               JOIN_ASSIGN         18.048
 12              TX_PERIOD_PROPOSAL  20.608
 20              telemetry           25.728
@@ -420,7 +418,6 @@ Shared-channel behavior:
   - [x] Drone measures one full MSP batch plus telemetry TX cycle on the assigned channel.
   - [x] Drone proposes `ceil(measured_cycle_ms) + 15 ms` to the GC.
   - [x] Drone starts steady telemetry only after `TX_PERIOD_ACK`.
-  - [x] Drone uses `TX_PERIOD_ACK.start_delay_ms` so its first steady telemetry packet lands in the GC-assigned slot.
   - [x] Initial fallback buffer is configurable and currently starts at `74 ms`.
 
 Drone transmit timing:
@@ -428,16 +425,13 @@ Drone transmit timing:
 - Default telemetry airtime is `25.728 ms`.
 - Default `airtime_buffer_ms` is `74`.
 - Minimum raw `tx_period_ms = ceil(25.728) + 74 = 100 ms`.
-- Current multi-drone scheduled period is `250 ms`, with five `50 ms` slots per frame for node IDs `1..5`.
-- `TX_PERIOD_ACK.accepted_period_ms` is the scheduled steady period, currently `250 ms`.
-- `TX_PERIOD_ACK.start_delay_ms` tells the drone how long to wait after receiving ACK before its first steady telemetry TX.
 - After the one-time probe telemetry packet, the drone waits `30 ms` before sending `TX_PERIOD_PROPOSAL` so the GC can re-arm RX inside the acquisition window.
-- In steady telemetry, the LoRa TX start is the scheduled slot. MSP/FC refresh must happen in idle time before the slot; the due TX uses the latest cached snapshot.
+- In steady telemetry, the drone transmits at a regular accepted period. MSP/FC refresh must happen in idle time; the due TX uses the latest cached snapshot.
 - If telemetry work is late, skip late slots instead of transmitting bursts or shifting the phase.
 - The GC updates the TST estimate after every received packet, so runtime TST drift is RAM-only and is never written to flash.
 - Bench note: after MSP polling was moved behind LoRa TX, the drone measured the blocking `sendRawPacket()` path at about `38 ms`, longer than the earlier `35 ms` period. The fixed-period fallback was replaced by a timing proposal handshake. In the first bench run after that change, drone node `2` proposed `104 ms` from `measuredCycleMs = 89` plus the `15 ms` buffer, the GC ACKed it, and a post-lock 15 second GC sample received `145` telemetry packets with zero `telemetry_missed` events.
 - Bench note: after MSP batch started responding quickly, drone node `2` measured and proposed `63 ms`, but the current GC scanner missed packets at that rate. Raising GC USB serial to `921600` and accepting `65 ms` still produced many sequence gaps, so the bottleneck is not only USB baud rate. The GC keeps the protocol range at `45-250 ms` but clamps the accepted operating period to at least `100 ms`; the resulting `txPeriodMs = 103` bench run produced `145` received telemetry messages in 15 seconds with zero sequence gaps.
-- Bench/design note: with three drones, independent free-running TST phases can overlap even on different LoRa channels because the GC has one radio. The timing ACK now assigns a deterministic slot in a `250 ms` frame to avoid that phase collision.
+- Scheduler design note: with multiple drones, independent packet windows may overlap. The GC does not prevent overlap; it ranks catchable receive windows by telemetry age and near-future TST, then intentionally skips lower-priority windows without counting those skips as `telemetry_missed`.
 
 - [x] Milestone 14: Define GC scan timing
   - [x] GC records packet receive-done time for each drone.
@@ -452,11 +446,14 @@ GC scan timing:
 
 - On first active assignment, listen on that drone channel for up to `2 * tx_period_ms`.
 - If assignment timing is not accepted yet, listen on the assigned channel for timing proposal acquisition and ignore the probe telemetry packet.
-- After accepting `TX_PERIOD_PROPOSAL`, ACK the drone with the scheduled period and first-start delay for that node's slot.
+- After accepting `TX_PERIOD_PROPOSAL`, ACK the drone with the accepted period.
 - On packet receive, estimate `last_tx_start_ms = rx_done_ms - airtime_ms`.
 - Predict next start as `last_tx_start_ms + tx_period_ms`.
 - Tune to the assigned channel `8 ms` before predicted start.
 - Listen for `airtime_ms + 4 ms` after predicted end on a healthy phase estimate.
+- For known-phase drones, consider only catchable windows where `nextTst >= now + 8 ms`.
+- Group candidates within `50 ms` of the earliest catchable TST and select by `lastUpdateAgeMs + missCount * 250 - deltaFromEarliestTstMs * 4`.
+- If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
 - After one missed packet, listen for `2 * tx_period_ms`.
 - After two or more misses, listen for `3 * tx_period_ms`, then keep cycling so other drones are not starved.
 - Return to the shared channel about every `500 ms` and dwell for `40 ms` to catch new `JOIN_REQUEST` packets.
