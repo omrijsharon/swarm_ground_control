@@ -49,6 +49,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `frequencyMhz`.
   - [x] Include `radioProfileId`.
   - [x] Include `txPeriodMs`.
+  - [x] Include `txSlotIndex` and `txSlotOffsetMs` when the GC has assigned scheduled telemetry slots.
   - [x] Include `telemetryAirtimeMs`.
   - [x] Include `sequenceId`.
   - [x] Include firmware-relative `gcMillis` timestamp.
@@ -56,7 +57,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":100,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":250,"txSlotIndex":0,"txSlotOffsetMs":0,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON
@@ -73,7 +74,7 @@ Candidate:
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"minimumTxPeriodMs":100,"txPeriodMs":250,"txSlotCount":5,"txSlotSpacingMs":50,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -101,6 +102,7 @@ Optional event fields:
 - `attempt`: retry/attempt counter for repeated assign/silence cycles.
 - `rssi`, `snr`: link metrics when the event came from a received packet.
 - `reason`: reason for expiration/removal/failure.
+- `txSlotIndex`, `txSlotOffsetMs`, `txStartDelayMs`: scheduled-slot timing fields when a timing ACK is sent or accepted.
 - `timingAccepted`: true after the assigned-channel TX period handshake is accepted.
 - `measuredCycleMs`, `proposedPeriodMs`, `mspBatchMs`, `txDurationMs`, `mspFlags`: timing proposal diagnostics.
 - `ackStatus`: `0` for accepted timing ACKs.
@@ -115,10 +117,10 @@ Examples:
 {"type":"assignment_event","event":"assignment_active","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"leaseSeconds":60,"gcMillis":123550}
 {"type":"assignment_event","event":"assignment_removed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"operator_clear","gcMillis":183550}
 {"type":"assignment_event","event":"tx_period_proposal_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"measuredCycleMs":58,"proposedPeriodMs":73,"mspBatchMs":19,"txDurationMs":38,"mspFlags":6,"gcMillis":123620}
-{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":73,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
+{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":250,"txSlotIndex":1,"txSlotOffsetMs":50,"txStartDelayMs":142,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
 ```
 
-Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`, followed by `tx_period_ack_sent` with `txPeriodMs = 104` and `timingAccepted = true`.
+Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`. After the three-drone phase-collision fix, the GC accepts the proposal but commands the scheduled multi-drone period, currently `txPeriodMs = 250`, with deterministic slot fields.
 
 - [x] Milestone 3b: Define scanner event JSON
   - [x] Emit scheduler state changes and timing corrections as `scanner_event`.
@@ -173,6 +175,8 @@ Assignment record fields:
 - `rssi`
 - `snr`
 - `txPeriodMs`
+- `txSlotIndex`
+- `txSlotOffsetMs`
 - `telemetryAirtimeMs`
 - `timingAccepted`
 - `missCount`
@@ -181,7 +185,7 @@ Assignment record fields:
 Example:
 
 ```json
-{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0,916.0],"noisyFrequencyMhz":[903.5],"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"bandwidthHz":500000,"channelSpacingMhz":0.5,"gcMillis":123500}
+{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0,916.0],"noisyFrequencyMhz":[903.5],"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":250,"txSlotIndex":1,"txSlotOffsetMs":50,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"bandwidthHz":500000,"channelSpacingMhz":0.5,"gcMillis":123500}
 ```
 
 - [x] Milestone 5: Define error/warning JSON
@@ -243,7 +247,7 @@ Response examples:
 
 ```json
 {"type":"command_ack","commandId":"sgc-0001","command":"ping","accepted":true,"message":"pong","gcMillis":123456}
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"minimumTxPeriodMs":100,"txPeriodMs":250,"txSlotCount":5,"txSlotSpacingMs":50,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
 ```
 
 - [x] Milestone 7: Define configurable radio settings
