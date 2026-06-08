@@ -21,6 +21,20 @@ The firmware has two runtime roles in this branch:
   - [x] Ensure old flood-mesh fields are not used in the new air protocol.
     - Live GC and live drone roles use raw type-specific packets; the legacy mesh loop and legacy GPS/test TX paths are skipped in live-position mode.
 
+- [ ] Milestone 1A: Make web OTA usable for field firmware updates
+  - [x] Enable Web OTA in the `seeed-xiao-s3` build.
+    - `platformio.ini` includes `-DENABLE_WEB_OTA=1` for this branch build.
+  - [x] Start the OTA AP during boot before LoRa/MSP runtime.
+    - Serial boot logs should print `[OTA] Web OTA ready` before mesh initialization completes.
+  - [x] Use a node-specific OTA SSID.
+    - Firmware now advertises `simple-mesh-<node_id>`, for example `simple-mesh-4`, instead of one shared `simple-mesh` SSID for every board.
+  - [x] Keep the OTA password fixed for this branch.
+    - Password remains `n3v3rd1sarm`; OTA page remains on `http://192.168.4.1:8080`.
+  - [x] Emit periodic OTA AP diagnostics over USB serial.
+    - Runtime logs include SSID, URL, and connected station count so RF visibility can be debugged without guessing.
+  - [ ] Bench-verify a laptop/phone can see the node-specific SSID.
+  - [ ] Bench-verify a `firmware.bin` upload through the OTA web page succeeds.
+
 - [x] Milestone 2: Implement binary packet definitions
   - [x] Define packet type IDs for shared-channel control packets.
   - [x] Define `JOIN_REQUEST` struct.
@@ -44,11 +58,17 @@ The firmware has two runtime roles in this branch:
   - [x] Store airtime buffer milliseconds.
   - [x] Keep SX1262 TX power fixed at `22 dBm`.
   - [x] Default to `SF8 / BW500 / CR4/5 / preamble 8`.
+  - [x] Add fixed robust shared discovery profile `SF11 / BW250 / CR4/8 / preamble 8`.
   - [x] Apply the live radio profile to runtime LoRa config before radio initialization.
+  - [x] Add runtime radio-profile switching for frequency/profile transitions.
+    - `SimpleMesh` and the radio backend can now switch SF/BW/CR/preamble/TX power without reflashing LittleFS.
+  - [x] Apply the discovery profile before shared-channel listen/TX.
+  - [x] Apply the assigned telemetry profile before assigned-channel timing proposal and telemetry.
   - [x] Compute airtime for control and telemetry packet sizes.
   - [x] Print boot diagnostics for packet sizes, active radio profile, airtime, and TX period.
   - [x] Expose active profile in GC serial JSON.
     - Current smoke `gc_status` reports the live profile and boot-scan clear channel count.
+  - [x] Expose robust discovery profile and discovery control-packet airtimes in GC serial JSON.
 
 - [x] Milestone 4: Implement channel table and boot scan on GC
   - [x] Define BW500 channel center table from `902.5` to `927.5 MHz`.
@@ -137,7 +157,7 @@ The firmware has two runtime roles in this branch:
   - [x] GC chooses a `radio_profile_id` and computes airtime plus `tx_period_ms` for that profile.
   - [x] GC sends `JOIN_ASSIGN`.
   - [x] GC waits for `JOIN_ACK`.
-    - Current implementation waits up to `80 ms` per assignment attempt.
+    - Current implementation waits up to `900 ms` per assignment attempt because discovery control packets use `SF11 / BW250 / CR4/8`.
   - [x] GC repeats `SILENCE -> JOIN_ASSIGN -> ACK wait` if ACK is missed.
     - Required behavior: retry up to `3` attempts with the same assignment and request nonce, emit the attempt number in `assignment_event`, and keep the assignment available for reuse on a later `JOIN_REQUEST` if all attempts miss.
   - [ ] GC marks assignment active only after receiving telemetry on the assigned channel.
@@ -166,9 +186,13 @@ The firmware has two runtime roles in this branch:
     - Code path is implemented and latest node `2` bench capture confirms real MSP yaw is read.
   - [x] Read `MSP_RAW_GPS`, `MSP_ATTITUDE`, and `MSP_ALTITUDE` with `MSP_MULTIPLE_MSP`.
     - Firmware sends `MSP_MULTIPLE_MSP` command `230` with payload `[106, 108, 109]` and parses length-prefixed subresponses in request order.
+    - Assigned telemetry mode now keeps using `MSP_MULTIPLE_MSP` during idle time after timing lock. The previous single-command idle scheduler could starve GPS because attitude/altitude were always due first, leaving the drone to retransmit the one GPS snapshot captured during the timing probe.
   - [x] Bench-verify `MSP_MULTIPLE_MSP` returns attitude and altitude from the FC.
     - After power-cycling the drone ESP32 and FC together, node `2` on `COM15` reported `mspBatchOk=true`, `mspBatchFlags=7`, `attitudeReadOk=true`, `attitudeValid=true`, `altitudeReadOk=true`, `altitudeValid=true`, and `gpsReadOk=true` with no GPS fix.
     - ESP-only reset through the serial bootloader can still leave the FC MSP link unavailable until the drone ESP32 and FC are power-cycled together again.
+  - [ ] Bench-verify live GPS fields continue updating after timing lock.
+    - Required check after flashing the fixed drone firmware: `drone_fc_status.gpsVersion` and `txGpsFreshCount` should continue increasing after `state = assigned_telemetry`, and SGC should show changing GPS/satellite values when the FC GPS changes.
+    - Required GC check after flashing the fixed GC firmware: `drone_telemetry.lat` and `drone_telemetry.lng` should be emitted from the integer `1e7` packet fields with enough precision for map movement, not rounded through `float`.
   - [x] Set telemetry validity flags.
     - Adds `GPS_SIMULATED`; sets yaw/course/speed flags according to available fields.
   - [x] Increment sequence ID for every telemetry packet.
@@ -200,7 +224,7 @@ The firmware has two runtime roles in this branch:
   - [x] Flash node `3` with `simulated_fc = true` and `simulated_msp_batch_ms = 8`.
     - `COM7` was flashed with the shared firmware and a temporary LittleFS config using `node_id = 3`, `node_role = drone`, and simulated-FC mode enabled. The repo `data/config.json` was restored to the GC config after upload.
   - [x] Bench-verify GC receives node `3` after two active drones are already streaming.
-    - Initial node `3` attempts timed out because the GC shared-channel discovery window was too narrow and could be starved by assigned-drone scan windows. Firmware now forces a `160 ms` shared discovery listen at least every `1.5 s` and node join assignment retry timeout is `350 ms`.
+    - Initial node `3` attempts timed out because the GC shared-channel discovery window was too narrow and could be starved by assigned-drone scan windows. Firmware later forced shared discovery windows; long-range discovery now uses `360 ms` normal shared windows every `3 s`, `720 ms` forced windows every `8 s`, and a `1300 ms` drone assignment timeout.
     - After flashing the GC on `COM18` and node `3` on `COM7`, GC received node `3` `JOIN_REQUEST`, assigned `920.5 MHz`, received `JOIN_ACK`, accepted the timing proposal, and emitted node `3` telemetry.
   - [ ] Bench-verify SGC shows drones `1`, `2`, and `3` live at the same time.
     - GC serial verification passed; browser/UI verification remains manual.
@@ -275,6 +299,7 @@ The firmware has two runtime roles in this branch:
     - The narrow scanner updates estimated and next TX start from each valid packet.
   - [x] Keep drone steady telemetry phase stable after ACK.
     - Drone steady telemetry uses cached MSP data at its regular accepted period. MSP refresh is moved to idle time so FC reads do not shift the TST.
+    - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path in the idle window, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
   - [x] Use bounded recovery windows after missed packets.
   - [x] After one missed assigned-channel packet, keep one immediate recovery listen in the normal scanner cadence.
   - [x] After repeated assigned-channel misses, demote that assignment to a slower background recovery cadence.
@@ -291,9 +316,9 @@ The firmware has two runtime roles in this branch:
   - [x] Hold shared-channel windows until their deadline once the GC has tuned to shared.
     - This prevents a stale assigned-channel prediction from immediately preempting the shared listen window before a reset drone can be heard.
   - [x] Force a periodic shared discovery window even while active drones are streaming.
-    - With two active drones, a new simulated node `3` repeatedly sent `JOIN_REQUEST` but the GC did not hear it because the normal `40 ms / 500 ms` shared window could be preempted by assigned-channel scan timing. The GC now forces a `160 ms` shared discovery listen at least every `1.5 s`.
+    - With robust discovery enabled, normal shared windows are `360 ms` about every `3 s`, and forced shared windows are `720 ms` about every `8 s`.
   - [x] Force longer shared-channel rejoin probes after repeated misses on an assigned drone.
-    - After `3` misses, the GC forces a `160 ms` shared rejoin probe when the shared interval is due. After `8` misses, it uses an extended `1100 ms` shared window to catch a reset drone's retrying `JOIN_REQUEST`.
+    - After `3` misses, the GC forces a `720 ms` shared rejoin probe when the shared interval is due. After `8` misses, it uses an extended `1600 ms` shared window to catch a reset drone's retrying `JOIN_REQUEST`.
 
 - [ ] Milestone 12: Implement GC heading fusion
   - [x] Use course over ground when speed is reliable.
@@ -395,6 +420,7 @@ The firmware has two runtime roles in this branch:
   - [x] On `clear_all_assignments`, delete `/live_assignments.json`.
   - [x] On `clear_all_assignments`, clear RAM assignment state.
   - [x] On `clear_all_assignments`, switch back to the shared discovery channel.
+    - Shared discovery now means `915.0 MHz` with the robust discovery profile, not the assigned telemetry profile.
   - [x] On `clear_all_assignments`, rerun the channel noise scan.
   - [x] Emit updated `channel_table` and `gc_status` after fresh-session reset.
   - [x] Emit `channel_scan_event` at scan start.

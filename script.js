@@ -2933,6 +2933,15 @@ function liveProfileFromGcStatus() {
   });
 }
 
+function liveDiscoveryProfileFromGcStatus() {
+  const status = liveState.gcStatus || {};
+  return normalizeLiveRadioProfile({
+    spreadingFactor: status.discoverySpreadingFactor,
+    bandwidthHz: status.discoveryBandwidthHz,
+    codingRate: status.discoveryCodingRate,
+  });
+}
+
 function ensureLiveProfileDraft() {
   if (!liveState.profileDraft) {
     liveState.profileDraft = liveProfileFromGcStatus();
@@ -3807,6 +3816,7 @@ function renderLiveGcStatus() {
     { label: "Serial", value: liveState.connected ? "Connected" : "Disconnected" },
     { label: "Shared", value: status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A" },
     { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
+    { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
     { label: "TX Power", value: status.txPowerDbm !== undefined ? `${status.txPowerDbm} dBm` : "22 dBm" },
     { label: "Airtime", value: status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A" },
     { label: "Buffer", value: buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A" },
@@ -4565,9 +4575,16 @@ function startLivePositionMock() {
     spreadingFactor: 8,
     bandwidthHz: 500000,
     codingRate: 5,
+    discoverySpreadingFactor: 11,
+    discoveryBandwidthHz: 250000,
+    discoveryCodingRate: 8,
+    discoverySilenceAirtimeMs: 231.4,
+    discoveryJoinRequestAirtimeMs: 231.4,
+    discoveryJoinAssignAirtimeMs: 297.0,
+    discoveryJoinAckAirtimeMs: 231.4,
     txPowerDbm: 22,
     telemetryAirtimeMs: 25.7,
-    txPeriodMs: 27,
+    txPeriodMs: 100,
     assignedDrones: 5,
     clearChannels: 48,
     scanMode: "mock_live_position",
@@ -4594,7 +4611,7 @@ function startLivePositionMock() {
       snr: 10.5 - i * 0.4,
       frequencyMhz: 916.0 + i * 0.5,
       radioProfileId: 0,
-      txPeriodMs: 27,
+      txPeriodMs: 100,
       telemetryAirtimeMs: 25.7,
       sequenceId: 1,
       gcMillis: 0,

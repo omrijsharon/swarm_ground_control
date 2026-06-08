@@ -33,7 +33,7 @@ The air protocol has two planes:
   - [x] Compute airtime from the active radio parameters and packet size.
   - [x] Do not make airtime a manually entered value.
 
-Default v1 radio profile:
+Default assigned-channel telemetry radio profile:
 
 ```text
 profile_id          0
@@ -46,6 +46,21 @@ phy_crc             true
 tx_power_dbm        22
 airtime_buffer_ms   74
 ```
+
+Shared-channel discovery radio profile:
+
+```text
+profile_id          255      # firmware-known discovery profile, not assigned to drones
+spreading_factor    11
+bandwidth_hz        250000
+coding_rate         8        # RadioLib denominator style: 8 means 4/8
+preamble_symbols    8
+explicit_header     true
+phy_crc             true
+tx_power_dbm        22
+```
+
+Implementation note: live-position firmware now switches the radio profile at runtime. The GC and drone use the discovery profile on the shared channel, then switch to assigned telemetry profile `0` for `TX_PERIOD_PROPOSAL`, `TX_PERIOD_ACK`, and 20-byte telemetry.
 
 ## Telemetry Packet
 
@@ -290,22 +305,28 @@ total                         6 bytes
 ## Expected Airtime
 
 - [x] Milestone 9: Verify airtime calculations in code
-  - [x] Verify `5-byte JOIN_REQUEST` airtime is about `15.5 ms`.
-  - [x] Verify `4-byte SILENCE` airtime is about `15.5 ms`.
-  - [x] Verify `9-byte JOIN_ASSIGN` airtime is about `18.0 ms`.
-  - [x] Verify `5-byte JOIN_ACK` airtime is about `15.5 ms`.
+  - [x] Verify `5-byte JOIN_REQUEST` airtime is about `231.4 ms` on the discovery profile.
+  - [x] Verify `4-byte SILENCE` airtime is about `231.4 ms` on the discovery profile.
+  - [x] Verify `9-byte JOIN_ASSIGN` airtime is about `297.0 ms` on the discovery profile.
+  - [x] Verify `5-byte JOIN_ACK` airtime is about `231.4 ms` on the discovery profile.
   - [x] Verify `20-byte telemetry` airtime is about `25.7 ms`.
   - [x] Recalculate if preamble, SF, BW, CR, header mode, or CRC mode changes.
 
-Default airtime table at SF8 / BW500 / CR4/5 / preamble 8 / explicit header / PHY CRC:
+Discovery airtime table at SF11 / BW250 / CR4/8 / preamble 8 / explicit header / PHY CRC:
 
 ```text
 payload_bytes   packet              airtime_ms
-4               SILENCE             15.488
-5               JOIN_REQUEST        15.488
-5               JOIN_ACK            15.488
+4               SILENCE             231.424
+5               JOIN_REQUEST        231.424
+5               JOIN_ACK            231.424
+9               JOIN_ASSIGN         296.960
+```
+
+Telemetry airtime table at SF8 / BW500 / CR4/5 / preamble 8 / explicit header / PHY CRC:
+
+```text
+payload_bytes   packet              airtime_ms
 6               TX_PERIOD_ACK       15.488
-9               JOIN_ASSIGN         18.048
 12              TX_PERIOD_PROPOSAL  20.608
 20              telemetry           25.728
 ```
@@ -400,9 +421,9 @@ Shared-channel behavior:
   - if LBT fails, restart random backoff.
 - GC join response:
   - receive `JOIN_REQUEST`;
-  - send broadcast `SILENCE` with `quiet_ms = 250`;
+  - send broadcast `SILENCE` with `quiet_ms = 900`;
   - send targeted `JOIN_ASSIGN`;
-  - wait up to `80 ms` for `JOIN_ACK`;
+  - wait up to `900 ms` for `JOIN_ACK`;
   - retry the silence/assign/ACK wait sequence up to `3` attempts.
 - Target drone sends `JOIN_ACK`, then switches to the assigned channel.
 - After `JOIN_ACK`, the drone sends one probe telemetry packet, then sends `TX_PERIOD_PROPOSAL`.
@@ -456,5 +477,6 @@ GC scan timing:
 - If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
 - After one missed packet, listen for `2 * tx_period_ms`.
 - After two or more misses, listen for `3 * tx_period_ms`, then keep cycling so other drones are not starved.
-- Return to the shared channel about every `500 ms` and dwell for `40 ms` to catch new `JOIN_REQUEST` packets.
+- Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
+- If shared discovery is badly overdue, use a `720 ms` forced shared listen window.
 - High-rate per-packet scanner debug should stay off by default because serial JSON output can otherwise block the receive loop.

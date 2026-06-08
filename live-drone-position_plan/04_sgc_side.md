@@ -85,7 +85,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - [x] Milestone 8: Add GC/radio status display
   - [x] Show GC serial connection state.
   - [x] Show shared frequency.
-  - [x] Show active SF/BW/CR.
+  - [x] Show active telemetry SF/BW/CR.
+  - [x] Show robust discovery/join SF/BW/CR when GC reports it.
   - [x] Show TX power as fixed `22 dBm`.
   - [x] Show computed telemetry airtime.
   - [x] Show configured airtime buffer.
