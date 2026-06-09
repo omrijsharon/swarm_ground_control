@@ -258,7 +258,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Keep a smaller HOME glow when HOME is not selected.
 - [x] Deselect HOME on empty-map click.
 - [x] Add selected-HOME actions for move and delete.
-- [x] Add selected-HOME Center action.
+- [x] Automatically center the map when HOME is selected.
 - [x] Hide the selected-HOME menu when the rename menu opens.
 - [x] Show a top helper while moving HOME.
 - [x] Add drone-card long-press action sheet.

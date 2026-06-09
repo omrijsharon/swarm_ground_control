@@ -782,7 +782,6 @@ function renderGroundStationMenu() {
       <span class="menu-eta">${LIVE_POSITION_MODE ? "HOME" : "Ground Station"}</span>
     </div>
     <div class="command-list cmd-action-list column" style="margin-top:2px;">
-      ${LIVE_POSITION_MODE ? `<button class="cmd-chip cmd-action" data-action="gs-center" type="button">Center</button>` : ""}
       ${isUser ? `<button class="cmd-chip cmd-action" data-action="gs-rename" type="button">Change name</button>` : ""}
       ${
         isUser
@@ -806,24 +805,6 @@ function renderGroundStationMenu() {
         : `<div class="status-mission" style="line-height:1.35; opacity:0.85; margin-top:10px;">Read-only.</div>`
     }
   `;
-
-  const centerBtn = gsMenuEl.querySelector("[data-action='gs-center']");
-  if (centerBtn) {
-    centerBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const g2 = groundStations.find((g) => Number(g.id) === Number(gs.id));
-      if (!g2 || !map) return;
-      const zoom = map.getZoom ? map.getZoom() : undefined;
-      if (typeof map.flyTo === "function") {
-        map.flyTo([g2.lat, g2.lng], zoom, { duration: 0.45 });
-      } else {
-        map.setView([g2.lat, g2.lng], zoom, { animate: true });
-      }
-      closeGroundStationMenu(false);
-      suppressMapClickUntil = performance.now() + 450;
-      forceRedraw();
-    });
-  }
 
   const rename = gsMenuEl.querySelector("[data-action='gs-rename']");
   if (rename) {
@@ -896,6 +877,15 @@ function openGroundStationMenu(station, containerPoint) {
 
   activeGroundStationId = station.id;
   gsRelocate = null;
+  if (LIVE_POSITION_MODE && Number.isFinite(Number(station.lat)) && Number.isFinite(Number(station.lng))) {
+    const zoom = map.getZoom ? map.getZoom() : undefined;
+    if (typeof map.flyTo === "function") {
+      map.flyTo([station.lat, station.lng], zoom, { duration: 0.45 });
+    } else {
+      map.setView([station.lat, station.lng], zoom, { animate: true });
+    }
+    suppressMapClickUntil = performance.now() + 450;
+  }
 
   gsMenuEl = document.createElement("div");
   gsMenuEl.className = "relative-menu";
