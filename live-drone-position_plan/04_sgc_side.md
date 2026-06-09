@@ -255,7 +255,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Allow multiple local HOME markers.
 - [x] Select HOME from long-press/right-click on the HOME icon.
 - [x] Show a stronger selected-HOME glow.
+- [x] Keep a smaller HOME glow when HOME is not selected.
+- [x] Deselect HOME on empty-map click.
 - [x] Add selected-HOME actions for move and delete.
+- [x] Hide the selected-HOME menu when the rename menu opens.
 - [x] Show a top helper while moving HOME.
 - [x] Add drone-card long-press action sheet.
 - [x] Add drone-marker long-press action sheet.

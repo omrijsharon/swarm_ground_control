@@ -605,6 +605,7 @@ function openGroundStationNameMenu(stationId) {
   if (!gs) return;
 
   const host = document.getElementById("app") || document.body;
+  closeGroundStationMenu(false);
   closeGroundStationNameMenu();
   pendingGsNaming = { stationId };
   activeGroundStationId = stationId;
@@ -809,6 +810,7 @@ function renderGroundStationMenu() {
   if (rename) {
     rename.addEventListener("click", (e) => {
       e.stopPropagation();
+      closeGroundStationMenu(false);
       openGroundStationNameMenu(gs.id);
     });
   }
@@ -5485,6 +5487,7 @@ function openLiveMapMenu(latlng, containerPoint) {
   if (!isFinite(lat) || !isFinite(lng)) return;
 
   const host = document.getElementById("app") || document.body;
+  activeGroundStationId = null;
   closeLiveMapMenu();
   closeLiveDroneActionSheet();
   closeUserHomePrompt();
@@ -6524,6 +6527,8 @@ function handleMapClick(e) {
         focusDroneById(nearest.id);
       }
     } else {
+      closeGroundStationMenu(true);
+      activeGroundStationId = null;
       setPinnedDrone(null);
       hoveredDroneId = null;
       if (tooltipEl) tooltipEl.style.display = "none";
@@ -9886,17 +9891,17 @@ function drawGroundStationIcon(x, y, size = 18, { active = false } = {}) {
   // Larger perimeter ring; keep H compact.
   const radius = size * 0.95;
 
-  // Selection glow (cyan) when active.
-  if (active) {
-    ctx.shadowColor = SETTINGS.SELECTION_GLOW_COLOR;
-    ctx.shadowBlur = Math.max(22, size * 2.4);
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.fillStyle = "rgba(120, 220, 255, 0.16)";
-    ctx.beginPath();
-    ctx.arc(0, 0, radius * 1.75, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  // Selection glow: every HOME has a small halo; selected HOME gets a much wider bloom.
+  ctx.save();
+  ctx.shadowColor = active ? SETTINGS.SELECTION_GLOW_COLOR : "rgba(120, 220, 255, 0.78)";
+  ctx.shadowBlur = active ? Math.max(42, size * 4.8) : Math.max(9, size * 0.95);
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.fillStyle = active ? "rgba(120, 220, 255, 0.24)" : "rgba(120, 220, 255, 0.08)";
+  ctx.beginPath();
+  ctx.arc(0, 0, radius * (active ? 2.85 : 1.18), 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
 
   // Outer ring
   ctx.lineWidth = Math.max(2, size * 0.12);
