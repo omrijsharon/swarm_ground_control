@@ -34,8 +34,9 @@ Goal: address the first field-test findings without expanding this branch into m
 
 ## Milestone 3: Touch-Friendly Local Operator Tools
 
-- [x] Add a live-mode `Home` map tool.
-- [x] Let the operator tap `Home`, then tap the map to place or move HOME.
+- [x] Start live-position mode without a default HOME marker.
+- [x] Add a map long-touch/right-click menu action for HOME placement.
+- [x] Let the operator choose `Set HOME here` or `Move HOME here` from that map menu.
 - [x] Keep HOME local to SGC; do not command drones.
 - [x] Add a live drone action bottom sheet for touch use.
 - [x] Open the drone action sheet from drone-card long press.

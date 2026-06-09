@@ -104,6 +104,8 @@ let editWaypointMenuEl = null;
 let pendingEditWaypoint = null; // { wpId }
 let createWaypointMenuEl = null;
 let pendingCreateWaypoint = null; // { lat, lng }
+let liveMapMenuEl = null;
+let pendingLiveMapPlacement = null; // { lat, lng }
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -5414,23 +5416,85 @@ function toggleLiveMock() {
 
 function renderLiveHomeTool() {
   if (!LIVE_POSITION_MODE) return;
-  const host = document.getElementById("app") || document.body;
   let button = document.getElementById("liveHomeToolBtn");
-  if (!button) {
-    button = document.createElement("button");
-    button.id = "liveHomeToolBtn";
-    button.className = "live-map-tool live-home-tool";
-    button.type = "button";
-    button.addEventListener("click", () => {
-      pendingUserHomePlacement = true;
-      liveState.homePlacementActive = true;
-      openUserHomePrompt("Tap on the map to place HOME");
-      renderLiveHomeTool();
-    });
-    host.appendChild(button);
+  if (button && button.parentNode) button.parentNode.removeChild(button);
+}
+
+function closeLiveMapMenu() {
+  if (liveMapMenuEl && liveMapMenuEl.parentNode) {
+    liveMapMenuEl.parentNode.removeChild(liveMapMenuEl);
   }
-  button.textContent = liveState.homePlacementActive || pendingUserHomePlacement ? "Tap map" : "Home";
-  button.classList.toggle("is-active", liveState.homePlacementActive || pendingUserHomePlacement);
+  liveMapMenuEl = null;
+  pendingLiveMapPlacement = null;
+  document.removeEventListener("pointerdown", handleLiveMapMenuOutsideClick, true);
+}
+
+function handleLiveMapMenuOutsideClick(event) {
+  if (!liveMapMenuEl) return;
+  if (liveMapMenuEl.contains(event.target)) return;
+  closeLiveMapMenu();
+}
+
+function openLiveMapMenu(latlng, containerPoint) {
+  if (!LIVE_POSITION_MODE || !map || !latlng || !containerPoint) return;
+  const lat = Number(latlng.lat);
+  const lng = Number(latlng.lng);
+  if (!isFinite(lat) || !isFinite(lng)) return;
+
+  const host = document.getElementById("app") || document.body;
+  closeLiveMapMenu();
+  closeLiveDroneActionSheet();
+  closeUserHomePrompt();
+  closeGroundStationMenu(false);
+  closeGroundStationNameMenu();
+  closeWaypointMenu(false, true);
+  closeOrbitMenu(false, true);
+  closeHomeMenu(false);
+  closeFollowMenu(false);
+  closeRelationMenu(false);
+  closeSequenceMenu();
+
+  pendingLiveMapPlacement = { lat, lng };
+  liveMapMenuEl = document.createElement("div");
+  liveMapMenuEl.className = "relative-menu";
+  liveMapMenuEl.addEventListener("pointerdown", (event) => event.stopPropagation());
+  host.appendChild(liveMapMenuEl);
+  enableMenuDrag(liveMapMenuEl);
+
+  const hasHome =
+    userGroundStationId !== null &&
+    userGroundStationId !== undefined &&
+    groundStations.some((gs) => Number(gs.id) === Number(userGroundStationId));
+  liveMapMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Map</h4>
+      <span class="menu-eta">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action" data-action="set-live-home" type="button">${
+        hasHome ? "Move HOME here" : "Set HOME here"
+      }</button>
+    </div>
+  `;
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  liveMapMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+  liveMapMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+
+  const setHome = liveMapMenuEl.querySelector("[data-action='set-live-home']");
+  if (setHome) {
+    setHome.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const placement = pendingLiveMapPlacement;
+      if (!placement) return;
+      closeLiveMapMenu();
+      addUserHomeAtLatLng(placement);
+      suppressMapClickUntil = performance.now() + 450;
+      longPressSuppressUntil = performance.now() + 450;
+    });
+  }
+
+  document.addEventListener("pointerdown", handleLiveMapMenuOutsideClick, true);
 }
 
 function closeLiveDroneActionSheet() {
@@ -8487,8 +8551,12 @@ function attemptFollowMenuFromPoint(containerPoint) {
 }
 
 function handleContextMenu(e) {
-  if (LIVE_POSITION_MODE) return;
   e.originalEvent?.preventDefault?.();
+  if (LIVE_POSITION_MODE) {
+    if (pendingUserHomePlacement) return;
+    openLiveMapMenu(e.latlng, e.containerPoint);
+    return;
+  }
   if (pendingUserHomePlacement) return;
   const point = e.containerPoint;
   const near = findNearestDrone(point, getHoverRadius());
@@ -8527,6 +8595,8 @@ function attemptActionLongPress(containerPoint) {
       openLiveDroneActionSheet(near, { x: containerPoint.x, y: containerPoint.y });
       return;
     }
+    const latlng = map.containerPointToLatLng(containerPoint);
+    openLiveMapMenu(latlng, containerPoint);
     return;
   }
   if (pendingUserHomePlacement) return;
@@ -9694,8 +9764,12 @@ function makeMockSwarm() {
 }
 
 function initGroundStations() {
-  // Single Tel Aviv anchor (e.g., HQ/helipad). Can be extended later.
   userGroundStationId = null;
+  if (LIVE_POSITION_MODE) {
+    groundStations = [];
+    return;
+  }
+  // Single Tel Aviv anchor (e.g., HQ/helipad). Can be extended later.
   groundStations = [
     new GroundStation(0, 32.0853, 34.7818, 20, "Tel-Aviv"), // Tel Aviv center-ish
   ];

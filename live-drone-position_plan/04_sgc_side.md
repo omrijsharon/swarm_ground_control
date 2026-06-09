@@ -250,7 +250,8 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Display `ONLINE`, `LOCKING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
-- [x] Add a live-mode Home map tool for local HOME placement.
+- [x] Start live-position mode without a default HOME marker.
+- [x] Add a live map long-press/right-click menu for local HOME placement.
 - [x] Add drone-card long-press action sheet.
 - [x] Add drone-marker long-press action sheet.
 - [x] Add local drone aliases stored in `localStorage`.
