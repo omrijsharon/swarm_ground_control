@@ -39,6 +39,27 @@ const LIVE_RELOCK_TIMEOUT_MS = 8000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 const LIVE_GC_DIAGNOSTIC_LOG_LIMIT = cfg("LIVE_GC_DIAGNOSTIC_LOG_LIMIT", 20000);
+const LIVE_DRONE_ALIAS_STORAGE_KEY = "sgc.livePosition.droneAliases.v1";
+const LIVE_DRONE_ACTION_LONGPRESS_MS = 460;
+const LIVE_RELAY_SOURCE_STORAGE_KEY = "sgc.livePosition.telemetrySource.v1";
+const LIVE_RELAY_ENDPOINT_STORAGE_KEY = "sgc.livePosition.relayEndpoint.v1";
+const LIVE_RELAY_SESSION_STORAGE_KEY = "sgc.livePosition.relaySession.v1";
+const LIVE_RELAY_RECONNECT_MS = 1500;
+const LIVE_RELAY_MESSAGE_TYPES = new Set([
+  "drone_telemetry",
+  "gc_status",
+  "channel_table",
+  "assignments",
+  "assignment_event",
+  "search_event",
+  "scanner_event",
+  "drone_link_status",
+  "channel_scan_event",
+  "session_event",
+  "command_ack",
+  "warning",
+  "error",
+]);
 
 let map;
 let overlay, ctx;
@@ -124,11 +145,21 @@ const liveState = {
   sessionEvents: [],
   freshSessionPending: false,
   freshSessionConfirming: false,
+  searchPending: false,
+  searchMode: false,
   profilePickerOpen: false,
   profileDraft: null,
+  profileSimpleMode: true,
+  profileApplyPending: false,
   assignmentEvents: [],
   scannerEvents: [],
+  searchEvents: [],
+  linkStatuses: new Map(),
   relockRequests: new Map(),
+  deleteRequests: new Map(),
+  droneAliases: loadLiveDroneAliases(),
+  droneActionSheet: null,
+  homePlacementActive: false,
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
   mockActive: false,
   mockTimers: [],
@@ -141,8 +172,79 @@ const liveState = {
   gcDiagnosticLog: [],
   gcDiagnosticLineNumber: 0,
   gcDiagnosticStartedAt: Date.now(),
+  telemetrySourceMode: loadLiveStorageValue(LIVE_RELAY_SOURCE_STORAGE_KEY, "usb"),
+  relayEndpoint: loadLiveStorageValue(LIVE_RELAY_ENDPOINT_STORAGE_KEY, getDefaultLiveRelayEndpoint()),
+  relaySessionId: loadLiveStorageValue(LIVE_RELAY_SESSION_STORAGE_KEY, makeDefaultLiveRelaySessionId()),
+  relayPublishToken: "",
+  relaySocket: null,
+  relayConnected: false,
+  relayState: "disconnected",
+  relayRole: null,
+  relayViewerCount: null,
+  relayPublisherConnected: false,
+  relayUserClosed: true,
+  relayReconnectTimer: null,
+  relayReconnectAttempts: 0,
+  relayLastError: "",
 };
 let orbitCloseSuppressUntil = 0;
+
+function loadLiveStorageValue(key, fallback = "") {
+  try {
+    const value = window.localStorage?.getItem(key);
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveLiveStorageValue(key, value) {
+  try {
+    if (value === null || value === undefined || value === "") {
+      window.localStorage?.removeItem(key);
+    } else {
+      window.localStorage?.setItem(key, String(value));
+    }
+  } catch {
+    // Storage is optional; the live relay should still work in private browsing.
+  }
+}
+
+function makeDefaultLiveRelaySessionId() {
+  return `field-${new Date().toISOString().slice(0, 10)}`;
+}
+
+function getDefaultLiveRelayEndpoint() {
+  const fallback = "wss://www.flying-agents.com/swarm_ground_control/live/ws";
+  try {
+    const origin = window.location?.origin || "";
+    const protocol = window.location?.protocol === "https:" ? "wss:" : "ws:";
+    const host = window.location?.host || "";
+    if (!origin || window.location?.protocol === "file:" || /^(localhost|127\.0\.0\.1|\[::1\])(?::|$)/.test(host)) {
+      return fallback;
+    }
+    return `${protocol}//${host}/swarm_ground_control/live/ws`;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeLiveSourceMode(mode) {
+  return ["usb", "live", "broadcast"].includes(mode) ? mode : "usb";
+}
+
+function isLiveRemoteViewerMode() {
+  return liveState.telemetrySourceMode === "live";
+}
+
+function isLiveRelayMode() {
+  return liveState.telemetrySourceMode === "live" || liveState.telemetrySourceMode === "broadcast";
+}
+
+function isLiveRelayBroadcastMode() {
+  return liveState.telemetrySourceMode === "broadcast";
+}
+
 let orbitDroneId = null;
 let orbitTeamId = null;
 let orbitPreview = null; // { key, orbit }
@@ -412,6 +514,7 @@ function openUserHomePrompt(reason = "Location unavailable") {
   const host = document.getElementById("app") || document.body;
   closeUserHomePrompt();
   pendingUserHomePlacement = true;
+  if (LIVE_POSITION_MODE) liveState.homePlacementActive = true;
   userHomePromptEl = document.createElement("div");
   userHomePromptEl.className = "relative-menu";
   userHomePromptEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
@@ -440,7 +543,9 @@ function openUserHomePrompt(reason = "Location unavailable") {
     cancel.addEventListener("click", (e) => {
       e.stopPropagation();
       pendingUserHomePlacement = false;
+      liveState.homePlacementActive = false;
       closeUserHomePrompt();
+      renderLiveHomeTool();
     });
   }
 }
@@ -765,7 +870,9 @@ function addUserHomeAtLatLng(latlng, alt = 0) {
     groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0, null));
   }
   pendingUserHomePlacement = false;
+  liveState.homePlacementActive = false;
   closeUserHomePrompt();
+  renderLiveHomeTool();
   const gs = groundStations.find((g) => g.id === userGroundStationId);
   if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
   forceRedraw();
@@ -2905,11 +3012,97 @@ function renderLiveTimingLine(host, drone, latest, now = Date.now()) {
   host.appendChild(rateEl);
 }
 
+function loadLiveDroneAliases() {
+  try {
+    const raw = window.localStorage?.getItem(LIVE_DRONE_ALIAS_STORAGE_KEY);
+    if (!raw) return new Map();
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+    return new Map(
+      Object.entries(parsed)
+        .map(([nodeId, alias]) => [Number(nodeId), String(alias || "").trim()])
+        .filter(([nodeId, alias]) => Number.isFinite(nodeId) && alias)
+    );
+  } catch {
+    return new Map();
+  }
+}
+
+function saveLiveDroneAliases() {
+  try {
+    const object = {};
+    liveState.droneAliases.forEach((alias, nodeId) => {
+      const clean = String(alias || "").trim();
+      if (clean) object[String(nodeId)] = clean;
+    });
+    window.localStorage?.setItem(LIVE_DRONE_ALIAS_STORAGE_KEY, JSON.stringify(object));
+  } catch {
+    // Local aliases are optional; storage failures should not break the live map.
+  }
+}
+
+function getLiveDroneAlias(nodeId) {
+  return liveState.droneAliases.get(Number(nodeId)) || "";
+}
+
+function setLiveDroneAlias(nodeId, alias) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return;
+  const clean = String(alias || "").trim().slice(0, 28);
+  if (clean) liveState.droneAliases.set(id, clean);
+  else liveState.droneAliases.delete(id);
+  saveLiveDroneAliases();
+  updateStatusList();
+  updateTooltip();
+  draw();
+}
+
+function getLiveDroneDisplayName(nodeId) {
+  return getLiveDroneAlias(nodeId) || `Drone ${nodeId}`;
+}
+
+function getLiveDroneSecondaryName(nodeId) {
+  return getLiveDroneAlias(nodeId) ? `Node ${nodeId}` : "";
+}
+
+function escapeLiveText(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 const LIVE_PROFILE_OPTIONS = {
   spreadingFactors: [7, 8, 9, 10, 11, 12],
   bandwidthHz: [125000, 250000, 500000],
   codingRates: [5, 6, 7, 8],
 };
+
+const LIVE_PROFILE_PRESETS = [
+  {
+    key: "fast",
+    label: "Fast",
+    radioProfileId: 0,
+    description: "Highest update rate",
+    profile: { spreadingFactor: 8, bandwidthHz: 500000, codingRate: 5 },
+  },
+  {
+    key: "balanced",
+    label: "Balanced",
+    radioProfileId: 46,
+    description: "More robust link",
+    profile: { spreadingFactor: 10, bandwidthHz: 500000, codingRate: 6 },
+  },
+  {
+    key: "robust",
+    label: "Robust",
+    radioProfileId: 55,
+    description: "Range first",
+    profile: { spreadingFactor: 11, bandwidthHz: 250000, codingRate: 7 },
+  },
+];
 
 function normalizeLiveRadioProfile(profile = {}) {
   const spreadingFactor = LIVE_PROFILE_OPTIONS.spreadingFactors.includes(Number(profile.spreadingFactor))
@@ -2954,6 +3147,52 @@ function formatLiveRadioProfile(profile = {}) {
   return `SF${normalized.spreadingFactor}/BW${Math.round(normalized.bandwidthHz / 1000)}/CR4/${normalized.codingRate}`;
 }
 
+function findLiveProfilePresetById(profileId) {
+  const id = Number(profileId);
+  return LIVE_PROFILE_PRESETS.find((preset) => preset.radioProfileId === id) || null;
+}
+
+function findLiveProfilePresetByProfile(profile = {}) {
+  const normalized = normalizeLiveRadioProfile(profile);
+  return LIVE_PROFILE_PRESETS.find((preset) => {
+    const presetProfile = normalizeLiveRadioProfile(preset.profile);
+    return (
+      presetProfile.spreadingFactor === normalized.spreadingFactor &&
+      presetProfile.bandwidthHz === normalized.bandwidthHz &&
+      presetProfile.codingRate === normalized.codingRate
+    );
+  }) || null;
+}
+
+function encodeLiveRadioProfileId(profile = {}) {
+  const normalized = normalizeLiveRadioProfile(profile);
+  const preset = findLiveProfilePresetByProfile(normalized);
+  if (preset) return preset.radioProfileId;
+  const sfIndex = normalized.spreadingFactor - 7;
+  const bwIndex = LIVE_PROFILE_OPTIONS.bandwidthHz.indexOf(normalized.bandwidthHz);
+  const crIndex = normalized.codingRate - 5;
+  if (sfIndex < 0 || bwIndex < 0 || crIndex < 0) return 0;
+  return 1 + sfIndex * 12 + bwIndex * 4 + crIndex;
+}
+
+function decodeLiveRadioProfileId(profileId) {
+  const id = Number(profileId);
+  if (!Number.isInteger(id) || id < 0) return null;
+  const preset = findLiveProfilePresetById(id);
+  if (preset) return normalizeLiveRadioProfile(preset.profile);
+  const encoded = id - 1;
+  if (encoded < 0 || encoded >= 72) return null;
+  const sfIndex = Math.floor(encoded / 12);
+  const rem = encoded % 12;
+  const bwIndex = Math.floor(rem / 4);
+  const crIndex = rem % 4;
+  return normalizeLiveRadioProfile({
+    spreadingFactor: 7 + sfIndex,
+    bandwidthHz: LIVE_PROFILE_OPTIONS.bandwidthHz[bwIndex],
+    codingRate: 5 + crIndex,
+  });
+}
+
 function calculateLiveLoRaAirtimeMs(profile = {}, payloadBytes = 20) {
   const normalized = normalizeLiveRadioProfile(profile);
   const tsymMs = ((1 << normalized.spreadingFactor) / normalized.bandwidthHz) * 1000;
@@ -2980,6 +3219,7 @@ function buildLiveSetRadioProfileCommandPayload(profile = {}, commandId = "sgc-p
     type: "command",
     command: "set_radio_profile",
     commandId,
+    radioProfileId: encodeLiveRadioProfileId(normalized),
     spreadingFactor: normalized.spreadingFactor,
     bandwidthHz: normalized.bandwidthHz,
     codingRate: normalized.codingRate,
@@ -2990,12 +3230,12 @@ function buildLiveSetRadioProfileCommandPayload(profile = {}, commandId = "sgc-p
 function getLiveKnownProfileForId(profileId) {
   const id = Number(profileId);
   if (!Number.isFinite(id)) return null;
-  const status = liveState.gcStatus || {};
-  const statusProfileId = Number(status.radioProfileId ?? 0);
-  if (id === statusProfileId || id === 0) {
-    return liveProfileFromGcStatus();
+  const tableProfiles = Array.isArray(liveState.channelTable?.radioProfiles) ? liveState.channelTable.radioProfiles : [];
+  const tableProfile = tableProfiles.find((profile) => Number(profile.radioProfileId) === id);
+  if (tableProfile) {
+    return normalizeLiveRadioProfile(tableProfile);
   }
-  return null;
+  return decodeLiveRadioProfileId(id);
 }
 
 function getLiveAssignmentForDrone(nodeId) {
@@ -3007,6 +3247,8 @@ function formatLiveDroneProfile(drone, latest = {}) {
   const assignment = getLiveAssignmentForDrone(drone.id);
   const profileId = latest.radioProfileId ?? assignment?.radioProfileId;
   const knownProfile = getLiveKnownProfileForId(profileId);
+  const preset = findLiveProfilePresetById(profileId);
+  if (knownProfile && preset) return `${preset.label} ${formatLiveRadioProfile(knownProfile)}`;
   if (knownProfile) return formatLiveRadioProfile(knownProfile);
   if (profileId !== null && profileId !== undefined) return `Profile ${profileId}`;
   return "N/A";
@@ -3033,20 +3275,32 @@ function isLiveDroneRelocking(nodeId, now = Date.now()) {
 
 function getLiveDisplayState(drone, freshness, now = Date.now()) {
   if (drone && isLiveDroneRelocking(drone.id, now)) return "locking";
+  if (drone) {
+    const linkStatus = liveState.linkStatuses.get(Number(drone.id));
+    const latest = drone.getLatest && drone.getLatest();
+    const statusReceivedAt = Number(linkStatus?.receivedAt);
+    const latestReceivedAt = Number(latest?.receivedAt);
+    if (linkStatus && (!Number.isFinite(latestReceivedAt) || !Number.isFinite(statusReceivedAt) || statusReceivedAt >= latestReceivedAt)) {
+      const state = String(linkStatus.state || "").toLowerCase();
+      if (["locking", "weak", "off", "offline"].includes(state)) return state;
+    }
+  }
   return freshness;
 }
 
 function formatLiveDisplayState(state) {
   if (state === "fresh") return "ONLINE";
   if (state === "locking") return "LOCKING";
+  if (state === "weak") return "WEAK";
+  if (state === "off") return "OFF";
   return String(state || "offline").toUpperCase();
 }
 
 function freshnessLedClass(state) {
   if (state === "fresh") return "green";
   if (state === "locking") return "blue";
-  if (state === "late") return "yellow";
-  if (state === "stale") return "red";
+  if (state === "late" || state === "weak") return "yellow";
+  if (state === "stale" || state === "offline") return "red";
   return "gray";
 }
 
@@ -3062,18 +3316,272 @@ function getLiveBaudRate() {
   return liveState.baudRate;
 }
 
+function applyLiveSearchButtonState(searchBtn) {
+  if (!searchBtn) return;
+  const active = liveState.searchMode || liveState.searchPending;
+  searchBtn.textContent = active ? "Searching..." : "Search";
+  searchBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || active;
+  searchBtn.classList.toggle("is-active", active);
+  searchBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+}
+
+function syncLiveRelayInputsFromState() {
+  const sourceEl = document.getElementById("liveTelemetrySource");
+  const endpointEl = document.getElementById("liveRelayEndpoint");
+  const sessionEl = document.getElementById("liveRelaySessionId");
+  const tokenEl = document.getElementById("liveRelayPublishToken");
+  if (sourceEl) sourceEl.value = normalizeLiveSourceMode(liveState.telemetrySourceMode);
+  if (endpointEl && endpointEl.value !== liveState.relayEndpoint) endpointEl.value = liveState.relayEndpoint;
+  if (sessionEl && sessionEl.value !== liveState.relaySessionId) sessionEl.value = liveState.relaySessionId;
+  if (tokenEl && tokenEl.value !== liveState.relayPublishToken) tokenEl.value = liveState.relayPublishToken;
+}
+
+function readLiveRelayInputs() {
+  const endpointEl = document.getElementById("liveRelayEndpoint");
+  const sessionEl = document.getElementById("liveRelaySessionId");
+  const tokenEl = document.getElementById("liveRelayPublishToken");
+  liveState.relayEndpoint = String(endpointEl?.value || liveState.relayEndpoint || getDefaultLiveRelayEndpoint()).trim();
+  liveState.relaySessionId = String(sessionEl?.value || liveState.relaySessionId || makeDefaultLiveRelaySessionId()).trim();
+  liveState.relayPublishToken = String(tokenEl?.value || "").trim();
+  saveLiveStorageValue(LIVE_RELAY_ENDPOINT_STORAGE_KEY, liveState.relayEndpoint);
+  saveLiveStorageValue(LIVE_RELAY_SESSION_STORAGE_KEY, liveState.relaySessionId);
+}
+
+function formatLiveRelayState() {
+  if (!isLiveRelayMode()) return "Disabled";
+  if (liveState.relayState === "connected") {
+    if (isLiveRelayBroadcastMode()) {
+      return Number.isFinite(Number(liveState.relayViewerCount))
+        ? `Broadcasting (${liveState.relayViewerCount})`
+        : "Broadcasting";
+    }
+    return liveState.relayPublisherConnected ? "Viewing live" : "Waiting";
+  }
+  if (liveState.relayState === "connecting") return "Connecting";
+  if (liveState.relayState === "reconnecting") return "Reconnecting";
+  if (liveState.relayState === "error") return "Error";
+  return "Disconnected";
+}
+
+function buildLiveRelayUrl(role) {
+  const endpoint = liveState.relayEndpoint || getDefaultLiveRelayEndpoint();
+  const baseUrl = new URL(endpoint, window.location.href);
+  if (baseUrl.protocol === "http:") baseUrl.protocol = "ws:";
+  if (baseUrl.protocol === "https:") baseUrl.protocol = "wss:";
+  baseUrl.searchParams.set("role", role);
+  baseUrl.searchParams.set("sessionId", liveState.relaySessionId || "default");
+  if (role === "publisher" && liveState.relayPublishToken) {
+    baseUrl.searchParams.set("token", liveState.relayPublishToken);
+  }
+  return baseUrl.toString();
+}
+
+function scheduleLiveRelayReconnect() {
+  if (liveState.relayUserClosed || !isLiveRelayMode() || liveState.relayReconnectTimer) return;
+  liveState.relayState = "reconnecting";
+  renderLiveControls();
+  liveState.relayReconnectTimer = window.setTimeout(() => {
+    liveState.relayReconnectTimer = null;
+    if (!liveState.relayUserClosed && isLiveRelayMode()) {
+      connectLiveRelay({ auto: true });
+    }
+  }, LIVE_RELAY_RECONNECT_MS);
+}
+
+function clearLiveRelayReconnectTimer() {
+  if (!liveState.relayReconnectTimer) return;
+  window.clearTimeout(liveState.relayReconnectTimer);
+  liveState.relayReconnectTimer = null;
+}
+
+function closeLiveRelayConnection({ user = true, reason = "closed" } = {}) {
+  if (user) liveState.relayUserClosed = true;
+  clearLiveRelayReconnectTimer();
+  const socket = liveState.relaySocket;
+  liveState.relaySocket = null;
+  liveState.relayConnected = false;
+  liveState.relayRole = null;
+  liveState.relayViewerCount = null;
+  liveState.relayPublisherConnected = false;
+  liveState.relayState = "disconnected";
+  if (socket && socket.readyState === WebSocket.OPEN) {
+    socket.close(1000, reason);
+  } else if (socket && socket.readyState === WebSocket.CONNECTING) {
+    socket.close();
+  }
+  renderLiveControls();
+}
+
+function handleLiveRelayEnvelope(raw) {
+  let envelope;
+  try {
+    envelope = JSON.parse(raw);
+  } catch (err) {
+    liveState.relayLastError = `Relay parse error: ${err.message}`;
+    appendLiveDebug(liveState.relayLastError);
+    renderLiveControls();
+    return;
+  }
+
+  if (envelope.kind === "sgc_message" && envelope.message && typeof envelope.message === "object") {
+    if (isLiveRelayBroadcastMode()) return;
+    handleLiveProtocolMessage(envelope.message, "live-endpoint");
+    return;
+  }
+
+  if (envelope.kind === "relay_status") {
+    liveState.relayViewerCount = Number.isFinite(Number(envelope.viewerCount)) ? Number(envelope.viewerCount) : null;
+    liveState.relayPublisherConnected = envelope.publisherConnected !== false;
+    liveState.relayLastError = "";
+    renderLiveControls();
+    return;
+  }
+
+  if (envelope.kind === "relay_error") {
+    liveState.relayLastError = envelope.message || envelope.code || "Relay error";
+    appendLiveDebug(`relay: ${liveState.relayLastError}`);
+    renderLiveControls();
+  }
+}
+
+function publishLiveRelayMessage(message) {
+  if (!isLiveRelayBroadcastMode() || !message || !LIVE_RELAY_MESSAGE_TYPES.has(message.type)) return;
+  const socket = liveState.relaySocket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  try {
+    socket.send(JSON.stringify({
+      kind: "sgc_message",
+      sessionId: liveState.relaySessionId || "default",
+      message,
+      sentAt: Date.now(),
+    }));
+  } catch (err) {
+    liveState.relayLastError = err.message || "Relay publish failed.";
+    appendLiveDebug(`relay publish failed: ${liveState.relayLastError}`);
+    renderLiveControls();
+  }
+}
+
+function connectLiveRelay({ auto = false } = {}) {
+  if (!isLiveRelayMode()) return;
+  if (!("WebSocket" in window)) {
+    liveState.relayState = "error";
+    liveState.relayLastError = "WebSocket is unavailable in this browser.";
+    renderLiveControls();
+    return;
+  }
+  readLiveRelayInputs();
+  const role = isLiveRelayBroadcastMode() ? "publisher" : "viewer";
+  if (role === "publisher" && !liveState.relayPublishToken) {
+    liveState.relayState = "error";
+    liveState.relayLastError = "Publish token is required for broadcasting.";
+    appendLiveDebug("relay unavailable: publish token is required");
+    renderLiveControls();
+    return;
+  }
+
+  closeLiveRelayConnection({ user: false, reason: "reconnect" });
+  liveState.relayUserClosed = false;
+  liveState.relayRole = role;
+  liveState.relayState = auto ? "reconnecting" : "connecting";
+  liveState.relayLastError = "";
+  renderLiveControls();
+
+  let socket;
+  try {
+    socket = new WebSocket(buildLiveRelayUrl(role));
+  } catch (err) {
+    liveState.relayState = "error";
+    liveState.relayLastError = err.message || "Relay URL is invalid.";
+    renderLiveControls();
+    return;
+  }
+
+  liveState.relaySocket = socket;
+  socket.addEventListener("open", () => {
+    liveState.relayConnected = true;
+    liveState.relayState = "connected";
+    liveState.relayReconnectAttempts = 0;
+    liveState.relayLastError = "";
+    appendLiveDebug(role === "publisher" ? "relay broadcasting connected" : "live endpoint connected");
+    renderLiveControls();
+    updateStatusList();
+  });
+  socket.addEventListener("message", (event) => handleLiveRelayEnvelope(String(event.data || "")));
+  socket.addEventListener("error", () => {
+    liveState.relayState = "error";
+    liveState.relayLastError = "Relay socket error.";
+    renderLiveControls();
+  });
+  socket.addEventListener("close", (event) => {
+    if (liveState.relaySocket === socket) liveState.relaySocket = null;
+    liveState.relayConnected = false;
+    liveState.relayRole = null;
+    liveState.relayViewerCount = null;
+    liveState.relayPublisherConnected = false;
+    if (!liveState.relayUserClosed) {
+      liveState.relayLastError = event.reason || (event.code === 1000 ? "" : `Relay closed (${event.code}).`);
+      scheduleLiveRelayReconnect();
+    } else {
+      liveState.relayState = "disconnected";
+      renderLiveControls();
+    }
+    updateStatusList();
+  });
+}
+
+function setLiveTelemetrySourceMode(mode) {
+  const nextMode = normalizeLiveSourceMode(mode);
+  if (liveState.telemetrySourceMode === nextMode) return;
+  liveState.telemetrySourceMode = nextMode;
+  saveLiveStorageValue(LIVE_RELAY_SOURCE_STORAGE_KEY, nextMode);
+  closeLiveRelayConnection({ user: true, reason: "source changed" });
+  syncLiveRelayInputsFromState();
+  renderLiveControls();
+  renderLiveGcStatus();
+  updateStatusList();
+}
+
 function renderLiveControls() {
   const openBtn = document.getElementById("liveSerialOpenBtn");
   const closeBtn = document.getElementById("liveSerialCloseBtn");
   const baudInput = document.getElementById("liveSerialBaud");
   const resetBtn = document.getElementById("liveResetSessionBtn");
+  const searchBtn = document.getElementById("liveSearchBtn");
+  const sourceEl = document.getElementById("liveTelemetrySource");
+  const relayFields = document.getElementById("liveRelayFields");
+  const relayStateEl = document.getElementById("liveRelayState");
+  const relayConnectBtn = document.getElementById("liveRelayConnectBtn");
+  const relayDisconnectBtn = document.getElementById("liveRelayDisconnectBtn");
+  const relayTokenField = document.getElementById("liveRelayTokenField");
   if (openBtn) openBtn.disabled = liveState.connected;
   if (closeBtn) closeBtn.disabled = !liveState.connected;
   if (baudInput) baudInput.disabled = liveState.connected;
   if (resetBtn) {
     resetBtn.textContent = liveState.freshSessionPending ? "Resetting..." : "Reset";
-    resetBtn.disabled = !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
+    resetBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
+    resetBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
   }
+  applyLiveSearchButtonState(searchBtn);
+  syncLiveRelayInputsFromState();
+  if (sourceEl) sourceEl.value = normalizeLiveSourceMode(liveState.telemetrySourceMode);
+  if (relayFields) {
+    const visible = isLiveRelayMode();
+    relayFields.hidden = !visible;
+    relayFields.classList.toggle("is-broadcast", isLiveRelayBroadcastMode());
+  }
+  if (relayTokenField) relayTokenField.hidden = !isLiveRelayBroadcastMode();
+  if (relayStateEl) {
+    relayStateEl.textContent = formatLiveRelayState();
+    relayStateEl.title = liveState.relayLastError || "";
+  }
+  if (relayConnectBtn) {
+    relayConnectBtn.textContent = liveState.relayState === "connecting" || liveState.relayState === "reconnecting"
+      ? "Connecting..."
+      : isLiveRelayBroadcastMode() ? "Broadcast" : "Connect";
+    relayConnectBtn.disabled = !isLiveRelayMode() || liveState.relayConnected || liveState.relayState === "connecting" || liveState.relayState === "reconnecting";
+  }
+  if (relayDisconnectBtn) relayDisconnectBtn.disabled = !isLiveRelayMode() || (!liveState.relayConnected && liveState.relayState !== "reconnecting");
 }
 
 function describeLiveSerialPort(port) {
@@ -3634,6 +4142,10 @@ function cancelLiveSpectrumRescanConfirmation() {
 async function requestLiveDroneRelock(nodeId) {
   const id = Number(nodeId);
   if (!Number.isFinite(id) || id <= 0) return;
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug("relock unavailable: remote live endpoint is read-only");
+    return;
+  }
   if (!liveState.connected) {
     appendLiveDebug(`relock unavailable: connect GC serial first for node ${id}`);
     return;
@@ -3666,8 +4178,44 @@ async function requestLiveDroneRelock(nodeId) {
   }, LIVE_RELOCK_TIMEOUT_MS);
 }
 
+async function startLiveSearchMode() {
+  if (liveState.searchPending || liveState.searchMode) return;
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug("search unavailable: remote live endpoint is read-only");
+    renderLiveControls();
+    return;
+  }
+  if (!liveState.connected) {
+    appendLiveDebug("search unavailable: connect GC serial first");
+    renderLiveControls();
+    return;
+  }
+  liveState.searchPending = true;
+  renderLiveControls();
+  const commandId = await sendLiveSerialCommand("start_search");
+  if (commandId) {
+    window.setTimeout(() => {
+      if (!liveState.pendingCommands.has(commandId)) return;
+      liveState.pendingCommands.delete(commandId);
+      liveState.searchPending = false;
+      appendLiveDebug("command timeout: start_search");
+      renderLiveControls();
+    }, 6000);
+  } else {
+    liveState.searchPending = false;
+    renderLiveControls();
+  }
+}
+
 async function startLiveSpectrumRescan() {
   if (liveState.spectrumRescanPending) return;
+  if (isLiveRemoteViewerMode()) {
+    liveState.spectrumRescanConfirming = false;
+    liveState.spectrumStatus = "Remote live endpoint is read-only.";
+    appendLiveDebug("channel rescan unavailable: remote live endpoint is read-only");
+    renderLiveGcStatus();
+    return;
+  }
   if (!liveState.connected) {
     liveState.spectrumRescanConfirming = false;
     liveState.spectrumStatus = "Connect GC serial before re-scanning.";
@@ -3699,12 +4247,61 @@ async function startLiveSpectrumRescan() {
   }
 }
 
+async function applyLiveProfileDraft() {
+  if (liveState.profileApplyPending) return;
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug("profile update unavailable: remote live endpoint is read-only");
+    renderLiveGcStatus();
+    return;
+  }
+  if (!liveState.connected) {
+    appendLiveDebug("profile update unavailable: connect GC serial first");
+    renderLiveGcStatus();
+    return;
+  }
+  const draft = normalizeLiveRadioProfile(ensureLiveProfileDraft());
+  liveState.profileApplyPending = true;
+  renderLiveGcStatus();
+  const commandId = await sendLiveSerialCommand("set_radio_profile", {
+    radioProfileId: encodeLiveRadioProfileId(draft),
+    spreadingFactor: draft.spreadingFactor,
+    bandwidthHz: draft.bandwidthHz,
+    codingRate: draft.codingRate,
+    persist: true,
+  });
+  if (commandId) {
+    window.setTimeout(() => {
+      if (!liveState.pendingCommands.has(commandId)) return;
+      liveState.pendingCommands.delete(commandId);
+      liveState.profileApplyPending = false;
+      appendLiveDebug("command timeout: set_radio_profile");
+      renderLiveGcStatus();
+    }, 6000);
+  } else {
+    liveState.profileApplyPending = false;
+    renderLiveGcStatus();
+  }
+}
+
 function updateLiveProfileDraft(field, value) {
   const draft = ensureLiveProfileDraft();
   liveState.profileDraft = normalizeLiveRadioProfile({
     ...draft,
     [field]: Number(value),
   });
+  renderLiveGcStatus();
+}
+
+function setLiveProfileMode(simpleMode) {
+  liveState.profileSimpleMode = !!simpleMode;
+  renderLiveGcStatus();
+}
+
+function selectLiveProfilePreset(presetKey) {
+  const preset = LIVE_PROFILE_PRESETS.find((item) => item.key === presetKey);
+  if (!preset) return;
+  liveState.profileDraft = normalizeLiveRadioProfile(preset.profile);
+  liveState.profileSimpleMode = true;
   renderLiveGcStatus();
 }
 
@@ -3741,6 +4338,49 @@ function makeLiveProfileSegment(label, field, options, value, formatter) {
   return wrap;
 }
 
+function renderLiveProfileModeToggle(panel) {
+  const mode = document.createElement("div");
+  mode.className = "live-profile-mode";
+  [
+    ["Simple", true],
+    ["Advanced", false],
+  ].forEach(([label, simpleMode]) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "live-profile-segment";
+    btn.classList.toggle("is-selected", liveState.profileSimpleMode === simpleMode);
+    btn.textContent = label;
+    btn.addEventListener("click", () => setLiveProfileMode(simpleMode));
+    mode.appendChild(btn);
+  });
+  panel.appendChild(mode);
+}
+
+function renderLiveProfilePresets(panel, draft) {
+  const presets = document.createElement("div");
+  presets.className = "live-profile-presets";
+  const selectedId = encodeLiveRadioProfileId(draft);
+  LIVE_PROFILE_PRESETS.forEach((preset) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "live-profile-preset";
+    btn.classList.toggle("is-selected", preset.radioProfileId === selectedId);
+    btn.addEventListener("click", () => selectLiveProfilePreset(preset.key));
+
+    const title = document.createElement("strong");
+    title.textContent = preset.label;
+    const profile = document.createElement("span");
+    profile.textContent = formatLiveRadioProfile(preset.profile);
+    const airtime = document.createElement("span");
+    airtime.textContent = `${calculateLiveLoRaAirtimeMs(preset.profile, 20).toFixed(1)} ms`;
+    btn.appendChild(title);
+    btn.appendChild(profile);
+    btn.appendChild(airtime);
+    presets.appendChild(btn);
+  });
+  panel.appendChild(presets);
+}
+
 function renderLiveProfilePicker(host) {
   if (!liveState.profilePickerOpen) return;
 
@@ -3765,18 +4405,25 @@ function renderLiveProfilePicker(host) {
   header.appendChild(closeBtn);
   panel.appendChild(header);
 
-  const controls = document.createElement("div");
-  controls.className = "live-profile-controls";
-  controls.appendChild(makeLiveProfileSegment("SF", "spreadingFactor", LIVE_PROFILE_OPTIONS.spreadingFactors, draft.spreadingFactor));
-  controls.appendChild(makeLiveProfileSegment("BW", "bandwidthHz", LIVE_PROFILE_OPTIONS.bandwidthHz, draft.bandwidthHz, (hz) => `${Math.round(hz / 1000)}`));
-  controls.appendChild(makeLiveProfileSegment("CR", "codingRate", LIVE_PROFILE_OPTIONS.codingRates, draft.codingRate, (cr) => `4/${cr}`));
-  panel.appendChild(controls);
+  renderLiveProfileModeToggle(panel);
+
+  if (liveState.profileSimpleMode) {
+    renderLiveProfilePresets(panel, draft);
+  } else {
+    const controls = document.createElement("div");
+    controls.className = "live-profile-controls";
+    controls.appendChild(makeLiveProfileSegment("SF", "spreadingFactor", LIVE_PROFILE_OPTIONS.spreadingFactors, draft.spreadingFactor));
+    controls.appendChild(makeLiveProfileSegment("BW", "bandwidthHz", LIVE_PROFILE_OPTIONS.bandwidthHz, draft.bandwidthHz, (hz) => `${Math.round(hz / 1000)}`));
+    controls.appendChild(makeLiveProfileSegment("CR", "codingRate", LIVE_PROFILE_OPTIONS.codingRates, draft.codingRate, (cr) => `4/${cr}`));
+    panel.appendChild(controls);
+  }
 
   const preview = document.createElement("div");
   preview.className = "live-profile-preview";
+  const preset = findLiveProfilePresetByProfile(draft);
   preview.innerHTML = `
     <span>Future assignments only</span>
-    <strong>${formatLiveRadioProfile(draft)}</strong>
+    <strong>${preset ? `${preset.label} ` : ""}${formatLiveRadioProfile(draft)}</strong>
     <span>Airtime ${airtimeMs.toFixed(1)} ms</span>
   `;
   panel.appendChild(preview);
@@ -3784,13 +4431,16 @@ function renderLiveProfilePicker(host) {
   const actions = document.createElement("div");
   actions.className = "live-profile-actions";
   const status = document.createElement("span");
-  status.textContent = "Firmware update required";
+  status.textContent = isLiveRemoteViewerMode()
+    ? "Remote view only"
+    : liveState.connected ? "Applies to new joins" : "Connect GC to apply";
   const applyBtn = document.createElement("button");
   applyBtn.className = "live-btn";
   applyBtn.type = "button";
-  applyBtn.disabled = true;
-  applyBtn.textContent = "Apply";
+  applyBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || liveState.profileApplyPending;
+  applyBtn.textContent = liveState.profileApplyPending ? "Applying..." : "Apply";
   applyBtn.dataset.commandPreview = JSON.stringify(commandPreview);
+  applyBtn.addEventListener("click", applyLiveProfileDraft);
   actions.appendChild(status);
   actions.appendChild(applyBtn);
   panel.appendChild(actions);
@@ -3813,7 +4463,7 @@ function renderLiveGcStatus() {
       ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
       : null;
   const items = [
-    { label: "Serial", value: liveState.connected ? "Connected" : "Disconnected" },
+    { label: "Source", value: isLiveRemoteViewerMode() ? "Live endpoint" : liveState.connected ? "USB connected" : "USB disconnected" },
     { label: "Shared", value: status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A" },
     { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
@@ -3822,6 +4472,7 @@ function renderLiveGcStatus() {
     { label: "Buffer", value: buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
     { label: "Channels", value: clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A", action: "channels" },
+    { label: "Search", value: "", action: "search" },
   ];
 
   const grid = document.createElement("div");
@@ -3856,8 +4507,19 @@ function renderLiveGcStatus() {
     labelEl.textContent = label;
     const valueEl = document.createElement("div");
     valueEl.className = "live-gc-value";
-    valueEl.textContent = value;
-    item.appendChild(labelEl);
+    if (action === "search") {
+      item.classList.add("live-gc-search-item");
+      const searchBtn = document.createElement("button");
+      searchBtn.className = "live-btn live-search-btn live-gc-search-btn";
+      searchBtn.id = "liveSearchBtn";
+      searchBtn.type = "button";
+      searchBtn.addEventListener("click", startLiveSearchMode);
+      applyLiveSearchButtonState(searchBtn);
+      valueEl.appendChild(searchBtn);
+    } else {
+      valueEl.textContent = value;
+    }
+    if (action !== "search") item.appendChild(labelEl);
     item.appendChild(valueEl);
     grid.appendChild(item);
   });
@@ -3982,6 +4644,19 @@ const liveProtocolSchemas = {
     event: "string",
     gcMillis: "integer",
   },
+  search_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  drone_link_status: {
+    type: "string",
+    nodeId: "integer",
+    state: "string",
+    activityDetected: "boolean",
+    txPeriodMs: "integer",
+    gcMillis: "integer",
+  },
   assignments: {
     type: "string",
     assignments: "array",
@@ -4040,7 +4715,7 @@ function getOrCreateLiveDrone(nodeId) {
 }
 
 function applyLiveTelemetry(message, source = "serial") {
-  if (source === "serial" && !liveState.serialTelemetrySeen) {
+  if ((source === "serial" || source === "live-endpoint") && !liveState.serialTelemetrySeen) {
     stopLivePositionMock({ clearDrones: true, clearStatus: true });
   }
   if (source === "serial") {
@@ -4049,6 +4724,7 @@ function applyLiveTelemetry(message, source = "serial") {
 
   const drone = getOrCreateLiveDrone(message.nodeId);
   liveState.relockRequests.delete(Number(message.nodeId));
+  liveState.linkStatuses.delete(Number(message.nodeId));
   drone.updateTelemetry(
     {
       uptimeSec: message.gcMillis ? message.gcMillis / 1000 : 0,
@@ -4094,6 +4770,8 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
   liveState.serialTelemetrySeen = false;
   liveState.relockRequests.clear();
+  liveState.linkStatuses.clear();
+  liveState.deleteRequests.clear();
   if (clearAssignments) {
     liveState.assignmentEvents = [];
     if (liveState.channelTable) {
@@ -4109,6 +4787,29 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   }
 }
 
+function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return;
+  const before = drones.length;
+  drones = drones.filter((drone) => Number(drone.id) !== id);
+  liveState.relockRequests.delete(id);
+  liveState.linkStatuses.delete(id);
+  liveState.deleteRequests.delete(id);
+  if (clearAssignment && liveState.channelTable && Array.isArray(liveState.channelTable.assignments)) {
+    liveState.channelTable = {
+      ...liveState.channelTable,
+      assignments: liveState.channelTable.assignments.filter((assignment) => Number(assignment.nodeId) !== id),
+    };
+  }
+  if (pinnedDroneId === id) pinnedDroneId = null;
+  if (hoveredDroneId === id) hoveredDroneId = null;
+  if (before !== drones.length) {
+    updateStatusList();
+    renderLiveGcStatus();
+    draw();
+  }
+}
+
 function handleLiveProtocolMessage(message, source = "serial") {
   const issues = validateLiveProtocolMessage(message);
   if (issues.length) {
@@ -4120,6 +4821,9 @@ function handleLiveProtocolMessage(message, source = "serial") {
     applyLiveTelemetry(message, source);
   } else if (message.type === "gc_status") {
     liveState.gcStatus = message;
+    liveState.searchMode = !!message.searchMode;
+    if (!liveState.searchMode) liveState.searchPending = false;
+    renderLiveControls();
     renderLiveGcStatus();
   } else if (message.type === "assignment_event") {
     liveState.assignmentEvents.push(message);
@@ -4159,6 +4863,17 @@ function handleLiveProtocolMessage(message, source = "serial") {
           } else {
             liveState.relockRequests.delete(nodeId);
           }
+        }
+      } else if (pending.command === "start_search") {
+        liveState.searchPending = false;
+        if (message.accepted) liveState.searchMode = true;
+      } else if (pending.command === "set_radio_profile") {
+        liveState.profileApplyPending = false;
+      } else if (pending.command === "clear_assignment") {
+        const nodeId = Number(message.nodeId ?? pending.nodeId);
+        liveState.deleteRequests.delete(nodeId);
+        if (message.accepted && Number.isFinite(nodeId)) {
+          removeLiveDroneLocally(nodeId, { clearAssignment: true });
         }
       }
     }
@@ -4224,6 +4939,33 @@ function handleLiveProtocolMessage(message, source = "serial") {
     ) {
       appendLiveDebug(`scanner: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}`);
     }
+  } else if (message.type === "search_event") {
+    liveState.searchEvents.push(message);
+    while (liveState.searchEvents.length > 12) liveState.searchEvents.shift();
+    liveState.searchPending = false;
+    if (["search_started", "join_detected", "assignment_completed", "search_telemetry_round"].includes(message.event)) {
+      liveState.searchMode = true;
+    } else if (["search_complete", "search_timeout"].includes(message.event)) {
+      liveState.searchMode = false;
+    }
+    appendLiveDebug(`search: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}`);
+    renderLiveControls();
+    renderLiveGcStatus();
+  } else if (message.type === "drone_link_status") {
+    const nodeId = Number(message.nodeId);
+    if (Number.isFinite(nodeId)) {
+      liveState.linkStatuses.set(nodeId, { ...message, receivedAt: Date.now() });
+      if (message.state === "locking") {
+        liveState.relockRequests.set(nodeId, {
+          expiresAt: Date.now() + LIVE_RELOCK_TIMEOUT_MS,
+          commandId: message.commandId || null,
+        });
+      } else if (message.state === "weak" || message.state === "off" || message.state === "offline") {
+        liveState.relockRequests.delete(nodeId);
+      }
+      updateStatusList();
+      draw();
+    }
   } else if (message.type === "warning" || message.type === "error") {
     appendLiveDebug(`${message.type}: ${message.code || "unknown"} ${message.message || ""}`);
   }
@@ -4244,6 +4986,7 @@ function processLiveSerialLine(line) {
     const parsed = JSON.parse(trimmed);
     recordLiveGcDiagnosticLine(trimmed, { parsed });
     handleLiveProtocolMessage(parsed, "serial");
+    publishLiveRelayMessage(parsed);
   } catch (err) {
     recordLiveGcDiagnosticLine(trimmed, { parseError: err.message });
     appendLiveDebug(`parse error: ${err.message}`);
@@ -4258,9 +5001,21 @@ function processLiveSerialChunk(chunk) {
 }
 
 async function sendLiveSerialCommand(command, fields = {}) {
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug("command rejected locally: remote live endpoint is read-only");
+    renderLiveControls();
+    renderLiveGcStatus();
+    updateStatusList();
+    return null;
+  }
   if (!liveState.connected || !liveState.port?.writable) {
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     if (command === "rescan_channels") liveState.spectrumRescanPending = false;
+    if (command === "start_search") liveState.searchPending = false;
+    if (command === "set_radio_profile") liveState.profileApplyPending = false;
+    if (command === "clear_assignment" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.deleteRequests.delete(Number(fields.nodeId));
+    }
     if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
       liveState.relockRequests.delete(Number(fields.nodeId));
     }
@@ -4294,6 +5049,11 @@ async function sendLiveSerialCommand(command, fields = {}) {
     liveState.pendingCommands.delete(commandId);
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     if (command === "rescan_channels") liveState.spectrumRescanPending = false;
+    if (command === "start_search") liveState.searchPending = false;
+    if (command === "set_radio_profile") liveState.profileApplyPending = false;
+    if (command === "clear_assignment" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.deleteRequests.delete(Number(fields.nodeId));
+    }
     if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
       liveState.relockRequests.delete(Number(fields.nodeId));
     }
@@ -4313,6 +5073,12 @@ async function requestLiveGcSnapshot() {
 
 function requestFreshSessionConfirmation() {
   if (liveState.freshSessionPending) return;
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug("fresh session unavailable: remote live endpoint is read-only");
+    renderLiveControls();
+    renderLiveGcStatus();
+    return;
+  }
   if (!liveState.connected) {
     appendLiveDebug("fresh session unavailable: connect GC serial first");
     renderLiveControls();
@@ -4334,6 +5100,13 @@ function cancelFreshSessionConfirmation() {
 
 async function startFreshSession() {
   if (liveState.freshSessionPending) return;
+  if (isLiveRemoteViewerMode()) {
+    liveState.freshSessionConfirming = false;
+    appendLiveDebug("fresh session unavailable: remote live endpoint is read-only");
+    renderLiveControls();
+    renderLiveGcStatus();
+    return;
+  }
   if (!liveState.connected) {
     liveState.freshSessionConfirming = false;
     appendLiveDebug("fresh session unavailable: connect GC serial first");
@@ -4640,14 +5413,230 @@ function toggleLiveMock() {
   }
 }
 
+function renderLiveHomeTool() {
+  if (!LIVE_POSITION_MODE) return;
+  const host = document.getElementById("app") || document.body;
+  let button = document.getElementById("liveHomeToolBtn");
+  if (!button) {
+    button = document.createElement("button");
+    button.id = "liveHomeToolBtn";
+    button.className = "live-map-tool live-home-tool";
+    button.type = "button";
+    button.addEventListener("click", () => {
+      pendingUserHomePlacement = true;
+      liveState.homePlacementActive = true;
+      openUserHomePrompt("Tap on the map to place HOME");
+      renderLiveHomeTool();
+    });
+    host.appendChild(button);
+  }
+  button.textContent = liveState.homePlacementActive || pendingUserHomePlacement ? "Tap map" : "Home";
+  button.classList.toggle("is-active", liveState.homePlacementActive || pendingUserHomePlacement);
+}
+
+function closeLiveDroneActionSheet() {
+  const sheet = liveState.droneActionSheet;
+  if (sheet && sheet.parentNode) sheet.parentNode.removeChild(sheet);
+  liveState.droneActionSheet = null;
+  document.removeEventListener("pointerdown", handleLiveDroneActionSheetOutsideClick, true);
+}
+
+function handleLiveDroneActionSheetOutsideClick(event) {
+  const sheet = liveState.droneActionSheet;
+  if (!sheet) return;
+  if (sheet.contains(event.target)) return;
+  closeLiveDroneActionSheet();
+}
+
+function canDeleteLiveDrone(drone) {
+  if (!drone) return false;
+  const freshness = getLiveFreshnessState(drone);
+  return getLiveDisplayState(drone, freshness) !== "fresh";
+}
+
+async function requestLiveDroneDelete(nodeId) {
+  const id = Number(nodeId);
+  const drone = getDroneById(id);
+  if (!Number.isFinite(id) || !drone || !canDeleteLiveDrone(drone)) return;
+  if (isLiveRemoteViewerMode()) {
+    appendLiveDebug(`delete unavailable: remote live endpoint is read-only for node ${id}`);
+    return;
+  }
+  if (!liveState.connected) {
+    appendLiveDebug(`delete unavailable: connect GC serial first for node ${id}`);
+    return;
+  }
+  const name = getLiveDroneDisplayName(id);
+  if (!window.confirm(`Delete ${name}'s persisted assignment and remove it from this session?`)) return;
+  liveState.deleteRequests.set(id, { sentAt: Date.now() });
+  updateStatusList();
+  const commandId = await sendLiveSerialCommand("clear_assignment", { nodeId: id });
+  if (commandId) {
+    liveState.deleteRequests.set(id, { sentAt: Date.now(), commandId });
+    window.setTimeout(() => {
+      const pending = liveState.deleteRequests.get(id);
+      if (!pending || pending.commandId !== commandId) return;
+      liveState.deleteRequests.delete(id);
+      if (liveState.pendingCommands.has(commandId)) {
+        liveState.pendingCommands.delete(commandId);
+        appendLiveDebug(`command timeout: clear_assignment node ${id}`);
+      }
+      updateStatusList();
+    }, 8000);
+  } else {
+    liveState.deleteRequests.delete(id);
+    updateStatusList();
+  }
+}
+
+function openLiveDroneActionSheet(drone, anchor = null) {
+  if (!drone) return;
+  closeLiveDroneActionSheet();
+  const host = document.getElementById("app") || document.body;
+  const sheet = document.createElement("div");
+  sheet.className = "live-drone-actions";
+  sheet.addEventListener("pointerdown", (event) => event.stopPropagation());
+
+  const title = document.createElement("div");
+  title.className = "live-drone-actions-title";
+  const secondary = getLiveDroneSecondaryName(drone.id);
+  const titleName = document.createElement("strong");
+  titleName.textContent = getLiveDroneDisplayName(drone.id);
+  title.appendChild(titleName);
+  if (secondary) {
+    const secondaryEl = document.createElement("span");
+    secondaryEl.textContent = secondary;
+    title.appendChild(secondaryEl);
+  }
+  sheet.appendChild(title);
+
+  const actions = document.createElement("div");
+  actions.className = "live-drone-actions-grid";
+
+  const renameBtn = document.createElement("button");
+  renameBtn.className = "live-btn";
+  renameBtn.type = "button";
+  renameBtn.textContent = "Rename";
+  renameBtn.addEventListener("click", () => {
+    const next = window.prompt("Drone name", getLiveDroneAlias(drone.id) || `Drone ${drone.id}`);
+    if (next !== null) setLiveDroneAlias(drone.id, next);
+    closeLiveDroneActionSheet();
+  });
+  actions.appendChild(renameBtn);
+
+  const relockBtn = document.createElement("button");
+  relockBtn.className = "live-btn";
+  relockBtn.type = "button";
+  relockBtn.textContent = "Re-lock";
+  relockBtn.disabled = isLiveRemoteViewerMode();
+  relockBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+  relockBtn.addEventListener("click", () => {
+    requestLiveDroneRelock(drone.id);
+    closeLiveDroneActionSheet();
+  });
+  actions.appendChild(relockBtn);
+
+  if (canDeleteLiveDrone(drone)) {
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "live-btn live-danger-btn";
+    deleteBtn.type = "button";
+    deleteBtn.textContent = liveState.deleteRequests.has(Number(drone.id)) ? "Deleting..." : "Delete";
+    deleteBtn.disabled = isLiveRemoteViewerMode() || liveState.deleteRequests.has(Number(drone.id));
+    deleteBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+    deleteBtn.addEventListener("click", () => {
+      requestLiveDroneDelete(drone.id);
+      closeLiveDroneActionSheet();
+    });
+    actions.appendChild(deleteBtn);
+  }
+
+  sheet.appendChild(actions);
+  host.appendChild(sheet);
+  liveState.droneActionSheet = sheet;
+
+  if (anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y)) {
+    const rect = host.getBoundingClientRect();
+    const w = sheet.offsetWidth || 260;
+    sheet.style.left = `${Math.max(10, Math.min(rect.width - w - 10, anchor.x - w / 2))}px`;
+    sheet.style.transform = "none";
+  }
+
+  setTimeout(() => document.addEventListener("pointerdown", handleLiveDroneActionSheetOutsideClick, true), 0);
+}
+
+function attachLiveDroneLongPress(row, drone) {
+  let timer = null;
+  let start = null;
+  const clear = () => {
+    if (timer) {
+      window.clearTimeout(timer);
+      timer = null;
+    }
+    start = null;
+  };
+  row.addEventListener("pointerdown", (event) => {
+    if (typeof event.button === "number" && event.button !== 0) return;
+    clear();
+    start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
+    timer = window.setTimeout(() => {
+      timer = null;
+      suppressStatusClickUntil = performance.now() + 650;
+      openLiveDroneActionSheet(drone, { x: event.clientX, y: event.clientY });
+    }, LIVE_DRONE_ACTION_LONGPRESS_MS);
+  }, true);
+  row.addEventListener("pointermove", (event) => {
+    if (!timer || !start) return;
+    if (event.pointerId !== undefined && start.pointerId !== undefined && event.pointerId !== start.pointerId) return;
+    if (Math.hypot((event.clientX || 0) - start.x, (event.clientY || 0) - start.y) > 10) clear();
+  }, true);
+  row.addEventListener("pointerup", clear, true);
+  row.addEventListener("pointercancel", clear, true);
+  row.addEventListener("pointerleave", clear, true);
+}
+
+function getLiveEmptyStatusMessage() {
+  if (isLiveRemoteViewerMode()) {
+    if (liveState.relayConnected) return "Waiting for live endpoint telemetry.";
+    return "Connect Live Endpoint to receive telemetry.";
+  }
+  if (isLiveRelayBroadcastMode() && liveState.relayConnected && !liveState.connected) {
+    return "Open USB serial to broadcast telemetry.";
+  }
+  return liveState.connected ? "Waiting for drone telemetry." : "Open USB serial to receive telemetry.";
+}
+
 function initLivePositionUi() {
   if (!LIVE_POSITION_MODE) return;
   const openBtn = document.getElementById("liveSerialOpenBtn");
   const closeBtn = document.getElementById("liveSerialCloseBtn");
   const resetBtn = document.getElementById("liveResetSessionBtn");
+  const searchBtn = document.getElementById("liveSearchBtn");
+  const sourceEl = document.getElementById("liveTelemetrySource");
+  const relayConnectBtn = document.getElementById("liveRelayConnectBtn");
+  const relayDisconnectBtn = document.getElementById("liveRelayDisconnectBtn");
+  const endpointEl = document.getElementById("liveRelayEndpoint");
+  const sessionEl = document.getElementById("liveRelaySessionId");
+  const tokenEl = document.getElementById("liveRelayPublishToken");
   openBtn?.addEventListener("click", () => openLiveSerialPort());
   closeBtn?.addEventListener("click", closeLiveSerialPort);
   resetBtn?.addEventListener("click", requestFreshSessionConfirmation);
+  searchBtn?.addEventListener("click", startLiveSearchMode);
+  sourceEl?.addEventListener("change", () => setLiveTelemetrySourceMode(sourceEl.value));
+  relayConnectBtn?.addEventListener("click", () => connectLiveRelay());
+  relayDisconnectBtn?.addEventListener("click", () => closeLiveRelayConnection({ user: true }));
+  endpointEl?.addEventListener("input", () => {
+    liveState.relayEndpoint = String(endpointEl.value || "").trim();
+  });
+  endpointEl?.addEventListener("change", readLiveRelayInputs);
+  sessionEl?.addEventListener("input", () => {
+    liveState.relaySessionId = String(sessionEl.value || "").trim();
+  });
+  sessionEl?.addEventListener("change", readLiveRelayInputs);
+  tokenEl?.addEventListener("input", () => {
+    liveState.relayPublishToken = String(tokenEl.value || "").trim();
+  });
+  syncLiveRelayInputsFromState();
+  renderLiveHomeTool();
   if ("serial" in navigator) {
     navigator.serial.addEventListener?.("disconnect", handleLiveSerialBrowserDisconnect);
     navigator.serial.addEventListener?.("connect", handleLiveSerialBrowserConnect);
@@ -4671,7 +5660,7 @@ function renderLiveStatusList() {
   if (!sorted.length) {
     const empty = document.createElement("div");
     empty.className = "status-entry live-entry";
-    empty.textContent = liveState.connected ? "Waiting for drone telemetry." : "Open USB serial to receive telemetry.";
+    empty.textContent = getLiveEmptyStatusMessage();
     host.appendChild(empty);
     return;
   }
@@ -4694,7 +5683,14 @@ function renderLiveStatusList() {
     main.className = "live-entry-main";
     const label = document.createElement("div");
     label.className = "status-label";
-    label.textContent = `Drone ${d.id}`;
+    label.textContent = getLiveDroneDisplayName(d.id);
+    const secondaryName = getLiveDroneSecondaryName(d.id);
+    if (secondaryName) {
+      const secondary = document.createElement("span");
+      secondary.className = "live-drone-secondary";
+      secondary.textContent = secondaryName;
+      label.appendChild(secondary);
+    }
     const detail = document.createElement("div");
     renderLiveTimingLine(detail, d, latest, now);
     const grid = document.createElement("div");
@@ -4718,10 +5714,11 @@ function renderLiveStatusList() {
     main.appendChild(grid);
     row.appendChild(main);
 
-    const badge = document.createElement(displayState === "offline" ? "button" : "div");
+    const actionableBadge = !isLiveRemoteViewerMode() && (displayState === "offline" || displayState === "weak");
+    const badge = document.createElement(actionableBadge ? "button" : "div");
     badge.className = `live-freshness ${displayState}`;
     badge.textContent = formatLiveDisplayState(displayState);
-    if (displayState === "offline") {
+    if (actionableBadge) {
       badge.type = "button";
       badge.classList.add("live-freshness-action");
       badge.title = "Try to re-lock this drone's telemetry timing";
@@ -4733,12 +5730,14 @@ function renderLiveStatusList() {
     row.appendChild(badge);
 
     row.addEventListener("click", () => {
+      if (performance.now() < suppressStatusClickUntil) return;
       if (pinnedDroneId === d.id) {
         setPinnedDrone(null);
       } else {
         focusDroneById(d.id);
       }
     });
+    attachLiveDroneLongPress(row, d);
     host.appendChild(row);
   });
 }
@@ -4994,8 +5993,11 @@ function renderLiveTooltip(el, target, latest) {
   const age = formatLiveAge(target.lastReceivedAt, now);
   const speed = Number(latest.groundSpeed);
   const freq = latest.frequencyMhz !== null && latest.frequencyMhz !== undefined ? `${Number(latest.frequencyMhz).toFixed(1)} MHz` : "N/A";
+  const secondary = getLiveDroneSecondaryName(target.id);
+  const displayName = escapeLiveText(getLiveDroneDisplayName(target.id));
+  const secondaryText = secondary ? ` (${escapeLiveText(secondary)})` : "";
   el.innerHTML = `
-    <div class="row battery-row"><strong>Drone ${target.id}</strong><span class="live-freshness ${displayState}">${formatLiveDisplayState(displayState)}</span></div>
+    <div class="row battery-row"><strong>${displayName}${secondaryText}</strong><span class="live-freshness ${displayState}">${formatLiveDisplayState(displayState)}</span></div>
     <div class="row"><span>Age</span><strong>${age}</strong></div>
     <div class="row"><span>Altitude</span><strong>${Number(latest.alt || 0).toFixed(1)} m</strong></div>
     <div class="row"><span>Speed</span><strong>${Number.isFinite(speed) ? `${(speed * 3.6).toFixed(0)} km/h` : "N/A"}</strong></div>
@@ -5392,6 +6394,11 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  // If we're asking the user to place their Home, the next click places it.
+  if (pendingUserHomePlacement) {
+    addUserHomeAtLatLng(e.latlng);
+    return;
+  }
   if (LIVE_POSITION_MODE) {
     const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
     if (nearest) {
@@ -5445,11 +6452,6 @@ function handleMapClick(e) {
     }
   }
   // Flank bearing is controlled only by the knob (no map click behavior).
-  // If we're asking the user to place their Home, the next click places it.
-  if (pendingUserHomePlacement) {
-    addUserHomeAtLatLng(e.latlng);
-    return;
-  }
   // A completed long-press should not also trigger a click action when the finger/mouse is released.
   if (suppressNextMapClick) {
     suppressNextMapClick = false;
@@ -7513,7 +8515,20 @@ function handleContextMenu(e) {
 }
 
 function attemptActionLongPress(containerPoint) {
-  if (LIVE_POSITION_MODE) return;
+  if (LIVE_POSITION_MODE) {
+    if (pendingUserHomePlacement) {
+      const latlng = map.containerPointToLatLng(containerPoint);
+      addUserHomeAtLatLng(latlng);
+      return;
+    }
+    const near = findNearestDrone(containerPoint, getHoverRadius());
+    if (near) {
+      setPinnedDrone(near.id);
+      openLiveDroneActionSheet(near, { x: containerPoint.x, y: containerPoint.y });
+      return;
+    }
+    return;
+  }
   if (pendingUserHomePlacement) return;
   const hitWp = findNearestWaypoint(containerPoint, 16);
   const near = findNearestDrone(containerPoint, getHoverRadius());
@@ -8804,7 +9819,8 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(((headingDeg || 0) * Math.PI) / 180);
-  if (freshness === "offline") ctx.globalAlpha = 0.32;
+  if (freshness === "off") ctx.globalAlpha = 0.25;
+  else if (freshness === "offline") ctx.globalAlpha = 0.32;
   else if (freshness === "stale") ctx.globalAlpha = 0.45;
   else if (freshness === "late") ctx.globalAlpha = 0.72;
 
@@ -8848,8 +9864,10 @@ function drawDroneIcon(x, y, size = 10, headingDeg = 0, options = {}) {
   ctx.stroke();
 
   const liveFill =
-    freshness === "late"
+    freshness === "late" || freshness === "weak"
       ? "rgba(255, 211, 108, 0.88)"
+      : freshness === "off"
+        ? "rgba(190, 196, 202, 0.70)"
       : freshness === "stale" || freshness === "offline"
         ? "rgba(255, 138, 138, 0.82)"
         : null;
@@ -9051,16 +10069,17 @@ function drawLivePositionDrones(zoom) {
     if (!latest) return;
     const p = latLngToScreen(latest.lat, latest.lng);
     const freshness = getLiveFreshnessState(d, now);
+    const displayState = getLiveDisplayState(d, freshness, now);
     const isHighlighted = pinnedDroneId !== null && d.id === pinnedDroneId;
     if (isHighlighted) {
       drawSelectionHighlight(p.x, p.y, droneSize, latest.heading || 0);
     }
     drawDroneIcon(p.x, p.y, droneSize, latest.heading || 0, {
-      freshness,
-      isStale: freshness === "stale" || freshness === "offline",
+      freshness: displayState,
+      isStale: ["stale", "offline", "weak", "off"].includes(displayState),
       isLanded: false,
     });
-    if (freshness !== "fresh") {
+    if (displayState !== "fresh") {
       const age = d.getSecondsSinceLastUpdate(now);
       if (age !== null) drawStaleLabel(p.x, p.y - droneSize * 1.25, age);
     }

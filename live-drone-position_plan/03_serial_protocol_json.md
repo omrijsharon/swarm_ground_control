@@ -416,3 +416,34 @@ Candidate extension:
 - [x] simple-mesh `seeed-xiao-s3` firmware was uploaded to the connected ESP32 on `COM18`.
 - [x] Direct `COM18` serial read parsed live smoke JSON from the ESP32: 10 `drone_telemetry` lines and 4 `gc_status` lines in a 6 second sample, mixed with 3 raw firmware log lines.
 - [x] Browser Web Serial read after this smoke firmware flash is confirmed in `serial_probe.html` with live JSON appearing in the Parsed JSON panel.
+
+## Field Follow-Up Serial Extensions
+
+These tasks mirror `08_field_test_followups.md`.
+
+- [x] Add SGC-to-GC `start_search`.
+- [x] Add `gc_status.searchMode`.
+- [x] Add `search_event` lifecycle messages: `search_started`, `join_detected`, `assignment_completed`, `search_telemetry_round`, `search_complete`, and `search_timeout`.
+- [x] Add `drone_link_status` with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
+- [x] Define link states `locking`, `weak`, `offline`, and `off`.
+- [x] Add SGC-to-GC `clear_assignment` for deleting one persisted assignment.
+- [x] Add SGC-to-GC `set_radio_profile` for future assignments.
+- [x] Include default-assignment profile information in `gc_status`.
+- [x] Include supported radio profile metadata in `channel_table` where useful.
+- [ ] Bench-verify `start_search`, `clear_assignment`, and `set_radio_profile` from the browser against a flashed GC.
+
+## Cloudflare Live Relay Extension
+
+These tasks mirror `09_cloudflare_live_relay.md`.
+
+- [x] Keep USB serial JSON as the authoritative operator-browser ingress from the GC ESP32.
+- [x] Relay parsed GC-to-SGC JSON through a Cloudflare WebSocket endpoint for remote viewers.
+- [x] Use `wss://www.flying-agents.com/swarm_ground_control/live/ws` as the live endpoint.
+- [x] Use `role=publisher` for the operator browser and `role=viewer` for remote browsers.
+- [x] Use `sessionId` to separate field-test sessions.
+- [x] Require a Cloudflare Worker `PUBLISH_TOKEN` secret for publisher connections.
+- [x] Keep viewer connections read-only.
+- [x] Relay display-oriented message types such as `drone_telemetry`, `gc_status`, `channel_table`, assignment/search/scanner/link/scan/session events, and `command_ack`.
+- [x] Do not relay raw firmware log text.
+- [x] Deploy and verify the Worker live endpoint with a direct WebSocket publisher/viewer smoke test.
+- [ ] Verify a remote SGC browser can display relayed telemetry from an operator browser.

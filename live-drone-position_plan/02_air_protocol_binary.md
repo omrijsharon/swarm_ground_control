@@ -480,3 +480,21 @@ GC scan timing:
 - Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
 - If shared discovery is badly overdue, use a `720 ms` forced shared listen window.
 - High-rate per-packet scanner debug should stay off by default because serial JSON output can otherwise block the receive loop.
+
+## Field Follow-Up Protocol Changes
+
+These tasks mirror `08_field_test_followups.md`.
+
+- [x] Replace automatic periodic shared-channel visits during active tracking with operator-controlled Search mode.
+- [x] Keep shared-channel discovery automatic only when no drones are assigned.
+- [x] In Search mode, stop after one shared dwell with no valid `JOIN_REQUEST` and no LoRa CAD activity.
+- [x] After a successful Search assignment, run one assigned-telemetry scanner round before returning to shared discovery.
+- [x] Add assigned-channel link diagnosis using LoRa CAD/activity detection plus packet receive.
+- [x] Use `3 * tx_period_ms` as the recovery listen window for stale/offline assigned drones.
+- [x] Classify recovery results as valid telemetry, `weak` activity without decode, or `off` with no LoRa activity.
+- [x] Keep radio profile ID `0` as Fast: `SF8 / BW500 / CR4/5`.
+- [x] Add deterministic radio profile IDs for SF `7-12`, BW `125/250/500 kHz`, and CR `4/5-4/8`.
+- [x] Add preset profile IDs for Balanced and Robust.
+- [x] Keep `JOIN_ASSIGN.radio_profile_id` as the assigned telemetry profile selector.
+- [x] Keep shared discovery profile fixed at `SF11 / BW250 / CR4/8`.
+- [ ] Field-verify Fast, Balanced, and Robust behavior with real drones.

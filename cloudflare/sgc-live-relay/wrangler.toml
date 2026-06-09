@@ -1,0 +1,15 @@
+name = "sgc-github-pages-proxy"
+main = "worker.js"
+compatibility_date = "2026-06-09"
+
+routes = [
+  { pattern = "www.flying-agents.com/swarm_ground_control*", zone_name = "flying-agents.com" }
+]
+
+[[durable_objects.bindings]]
+name = "LIVE_RELAY"
+class_name = "LiveRelaySession"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["LiveRelaySession"]

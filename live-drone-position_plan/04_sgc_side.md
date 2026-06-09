@@ -233,8 +233,58 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 - Mock mode now starts off by default; the browser attempts to auto-open a single remembered Web Serial port.
 - The production operator UI hides serial debug text, assigned-count debug text, and last-command debug text.
 - Drone cards and tooltips keep the operator-facing essentials: timing/update rate, altitude, speed, RSSI/SNR, satellite count, and channel/sequence details where applicable.
-- The GC profile picker is UI-prep only until firmware implements `set_radio_profile` and runtime scanner profile switching.
+- The GC profile picker now sends `set_radio_profile`; profile changes apply only to future assignments.
 - Browser smoke check after adding heading-fusion debug fields passed manually in SGC.
 - Production UI first pass static verification completed: `node --check script.js`, `git diff --check`, and local static fetch confirmed `Reset` exists and the visible mock toggle is absent.
 - Verification completed in this implementation pass: `node --check script.js`, `node --check serial_probe.js`, and static HTTP fetch of `http://localhost:8000/`.
 - Browser visual verification could not be completed in this session because the in-app browser backend was unavailable.
+
+## Field Follow-Up UI
+
+These tasks mirror `08_field_test_followups.md`.
+
+- [x] Add a `Search` button to the USB Serial panel.
+- [x] Disable and style Search while the GC reports active Search mode.
+- [x] Parse `search_event` and `gc_status.searchMode`.
+- [x] Parse `drone_link_status`.
+- [x] Display `ONLINE`, `LOCKING`, `WEAK`, `OFFLINE`, and `OFF`.
+- [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
+- [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
+- [x] Add a live-mode Home map tool for local HOME placement.
+- [x] Add drone-card long-press action sheet.
+- [x] Add drone-marker long-press action sheet.
+- [x] Add local drone aliases stored in `localStorage`.
+- [x] Hide Delete while a drone is `ONLINE`.
+- [x] Delete a non-online drone only through `clear_assignment` and GC ACK.
+- [x] Replace the profile picker preview with an active Simple/Advanced profile selector.
+- [x] Add Fast, Balanced, and Robust preset buttons.
+- [x] Send `set_radio_profile` for future assignments only.
+- [x] Decode deterministic profile IDs for drone-card profile display.
+- [ ] Browser-verify Search mode with a flashed GC.
+- [ ] Browser-verify Home placement on the target touchscreen.
+- [ ] Browser-verify Rename persistence after reload.
+- [ ] Browser-verify Delete is hidden for online drones and works for offline/stale drones.
+- [ ] Browser-verify profile Apply changes the profile used by future assignments only.
+
+## Cloudflare Live Relay UI
+
+These tasks mirror `09_cloudflare_live_relay.md`.
+
+- [x] Add a compact telemetry source selector.
+- [x] Support `USB Serial`, `Live Endpoint`, and `USB + Broadcast`.
+- [x] Default to `USB Serial`.
+- [x] Add relay endpoint, session ID, and publish-token controls.
+- [x] Hide publish-token input unless `USB + Broadcast` is selected.
+- [x] Store source mode, endpoint, and session ID in localStorage.
+- [x] Keep publish token in page memory only.
+- [x] Connect to the live relay as a viewer in `Live Endpoint` mode.
+- [x] Connect to the live relay as a publisher in `USB + Broadcast` mode.
+- [x] Publish parsed GC JSON after local serial handling.
+- [x] Consume relay messages through the same live protocol handler used by USB serial.
+- [x] Show live relay connection state.
+- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply in viewer mode.
+- [x] Show viewer-friendly empty-state text when no relay telemetry has arrived.
+- [ ] Browser-verify the operator can use USB Serial normally after adding source modes.
+- [ ] Browser-verify `USB + Broadcast` publishes telemetry to Cloudflare.
+- [ ] Browser-verify a second browser in `Live Endpoint` mode sees the same drones.
+- [ ] Browser-verify remote command controls are unavailable.

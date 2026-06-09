@@ -462,3 +462,31 @@ The firmware has two runtime roles in this branch:
 - [ ] Do not implement arm/disarm/takeoff/land from SGC.
 - [ ] Do not implement flood forwarding in this branch protocol.
 - [ ] Do not implement multi-GC coordination in this branch.
+
+## Field Follow-Up Firmware
+
+These tasks mirror `08_field_test_followups.md`.
+
+- [x] Implement `start_search`.
+- [x] Report Search state in `gc_status`.
+- [x] Emit `search_event` messages.
+- [x] Disable routine shared-channel visits while assigned drones exist and Search is inactive.
+- [x] Keep shared discovery automatic when no drones are assigned.
+- [x] After a Search assignment/timing lock, run one scanner round across existing assigned drones.
+- [x] Add `scanChannelActivity()` to the radio backend interface.
+- [x] Implement SX1262 LoRa CAD/activity detection with RadioLib `scanChannel()`.
+- [x] Add assigned-channel recovery classification using valid decode, CAD activity, or no activity.
+- [x] Emit `drone_link_status`.
+- [x] Implement `clear_assignment` for one node.
+- [x] Implement deterministic radio profile ID decoding.
+- [x] Implement `set_radio_profile` for future assignments.
+- [x] Persist the default future-assignment radio profile.
+- [x] Allocate new assignments with the selected radio profile ID.
+- [x] Apply the assigned profile on drone timing proposal and telemetry TX.
+- [x] Apply each drone's assigned profile while the GC scanner listens.
+- [x] Build-check firmware after field follow-up changes.
+- [ ] Flash GC and all drone ESP32s with the profile-ID/search/link-diagnosis firmware.
+- [ ] Bench-verify Search admits a new drone without periodic shared-channel lag during normal tracking.
+- [ ] Bench-verify `clear_assignment` removes the selected node from `/live_assignments.json`.
+- [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.
+- [ ] Field-verify `WEAK` and `OFF` classification with real link conditions.

@@ -83,15 +83,16 @@ This file is for features that are useful for the live-position system but are n
   - [ ] Verify production mode still emits enough diagnostics for support: `gc_status`, `assignment_event`, `scanner_event`, `channel_table`, warnings, and errors.
 
 - [ ] Milestone 4: Advanced radio profile and assignment maintenance
-  - [ ] Implement operator-controlled `set_radio_profile` if field tests prove the default profile is not enough.
-    - Supported knobs already defined in the serial plan: spreading factor, bandwidth, coding rate, and airtime buffer.
-    - Apply changes only at a safe GC radio idle boundary.
+  - [x] Implement operator-controlled `set_radio_profile` if field tests prove the default profile is not enough.
+    - Implemented in the field-follow-up slice as a future-assignments-only default profile.
+    - Supported knobs: spreading factor, bandwidth, and coding rate.
     - Persist settings only when `persist:true`.
-  - [ ] Add SGC controls for radio profile changes only after the safety and validation rules are clear.
+  - [x] Add SGC controls for radio profile changes only after the safety and validation rules are clear.
+    - SGC now exposes Simple presets and Advanced SF/BW/CR controls.
   - [ ] Implement single-drone assignment maintenance commands as operator tools.
-    - `clear_assignment`
-    - `rescan_channels`
-    - `reassign_drone`
+    - [x] `clear_assignment`
+    - [x] `rescan_channels`
+    - [ ] `reassign_drone`
   - [ ] Reassign a persisted drone automatically when its stored channel is now noisy or invalid.
   - [ ] Reassign a persisted drone automatically when its stored radio profile is no longer supported.
   - [ ] Make drone nodes return to shared-channel join if an assignment expires or an explicit radio config change invalidates the current assignment.
@@ -139,6 +140,14 @@ This file is for features that are useful for the live-position system but are n
   - [ ] Treat multi-GC coordination as a separate future protocol branch, not part of the current single-GC live-position v1.
   - [ ] Treat flood forwarding or a true mesh protocol as a separate future branch, not part of the current star assignment design.
   - [ ] Keep mission commands, arming, takeoff, landing, and other vehicle-actuation controls out of this live-position branch.
+
+- [ ] Milestone 10: Remote SGC control over the Cloudflare relay
+  - [ ] Keep v1 remote browsers read-only until live mirroring is field-proven.
+  - [ ] Design an operator authorization model before allowing remote Search, Reset, Re-lock, Delete, or Profile Apply.
+  - [ ] Decide whether remote control requires per-session invite tokens, named operators, or a separate admin URL.
+  - [ ] Add command direction to the relay only after replay protection and command audit logging are designed.
+  - [ ] Preserve the local USB operator as the default authority over the GC ESP32.
+  - [ ] Keep arming, takeoff, landing, and mission commands out of scope even if remote GC maintenance controls are later added.
 
 ## Notes
 
