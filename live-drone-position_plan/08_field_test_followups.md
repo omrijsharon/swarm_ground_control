@@ -39,7 +39,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Let the operator choose `Set HOME here` or `Move HOME here` from that map menu.
 - [x] Allow multiple local HOME markers.
 - [x] Select HOME with long-touch/right-click on the HOME icon.
-- [x] Make selected HOME visually larger with stronger glow.
+- [x] Keep HOME icon size constant and expand only the selected glow radius.
 - [x] Keep a smaller glow around deselected HOME markers.
 - [x] Deselect HOME on empty-map click.
 - [x] Add selected-HOME `Move HOME` and `Delete HOME` actions.

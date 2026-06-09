@@ -10262,9 +10262,8 @@ function draw() {
   groundStations.forEach((gs) => {
     const p = latLngToScreen(gs.lat, gs.lng);
     const active = activeGroundStationId === gs.id;
-    const displaySize = active ? gsSize * 1.75 : gsSize;
-    drawGroundStationIcon(p.x, p.y, displaySize, { active });
-    drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, displaySize);
+    drawGroundStationIcon(p.x, p.y, gsSize, { active });
+    drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, gsSize);
   });
 
   if (LIVE_POSITION_MODE) {
