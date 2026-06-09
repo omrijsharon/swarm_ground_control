@@ -43,6 +43,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Keep a smaller glow around deselected HOME markers.
 - [x] Deselect HOME on empty-map click.
 - [x] Add selected-HOME `Move HOME` and `Delete HOME` actions.
+- [x] Add selected-HOME `Center` action.
 - [x] Hide the selected-HOME menu when the rename menu opens.
 - [x] Require confirmation before deleting a HOME marker.
 - [x] Show a top helper while choosing the moved HOME coordinate.
