@@ -703,6 +703,26 @@ function handleGsMenuOutsideClick(e) {
   closeGroundStationMenu(false);
 }
 
+function positionGroundStationMenuForStation(station) {
+  if (!map || !gsMenuEl || !station) return;
+  const lat = Number(station.lat);
+  const lng = Number(station.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+  const host = document.getElementById("app") || document.body;
+  const hostRect = host.getBoundingClientRect();
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const point = map.latLngToContainerPoint([lat, lng]);
+  const pad = 8;
+  const menuW = gsMenuEl.offsetWidth || 220;
+  const menuH = gsMenuEl.offsetHeight || 160;
+  let left = mapRect.left - hostRect.left + point.x + 12;
+  let top = mapRect.top - hostRect.top + point.y - 10;
+  left = Math.max(pad, Math.min(hostRect.width - menuW - pad, left));
+  top = Math.max(pad, Math.min(hostRect.height - menuH - pad, top));
+  gsMenuEl.style.left = `${left}px`;
+  gsMenuEl.style.top = `${top}px`;
+}
+
 function stopGsDynamicUpdates() {
   if (gsWatchId !== null && gsWatchId !== undefined && typeof navigator !== "undefined" && navigator.geolocation) {
     try {
@@ -877,15 +897,6 @@ function openGroundStationMenu(station, containerPoint) {
 
   activeGroundStationId = station.id;
   gsRelocate = null;
-  if (LIVE_POSITION_MODE && Number.isFinite(Number(station.lat)) && Number.isFinite(Number(station.lng))) {
-    const zoom = map.getZoom ? map.getZoom() : undefined;
-    if (typeof map.flyTo === "function") {
-      map.flyTo([station.lat, station.lng], zoom, { duration: 0.45 });
-    } else {
-      map.setView([station.lat, station.lng], zoom, { animate: true });
-    }
-    suppressMapClickUntil = performance.now() + 450;
-  }
 
   gsMenuEl = document.createElement("div");
   gsMenuEl.className = "relative-menu";
@@ -893,11 +904,38 @@ function openGroundStationMenu(station, containerPoint) {
   gsMenuEl.addEventListener("pointerdown", (ev) => ev.stopPropagation());
   enableMenuDrag(gsMenuEl);
 
-  const mapRect = map.getContainer().getBoundingClientRect();
-  gsMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
-  gsMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+  if (LIVE_POSITION_MODE) {
+    positionGroundStationMenuForStation(station);
+  } else {
+    const mapRect = map.getContainer().getBoundingClientRect();
+    gsMenuEl.style.left = `${mapRect.left + containerPoint.x + 12}px`;
+    gsMenuEl.style.top = `${mapRect.top + containerPoint.y - 10}px`;
+  }
 
   renderGroundStationMenu();
+  if (LIVE_POSITION_MODE) {
+    positionGroundStationMenuForStation(station);
+    if (Number.isFinite(Number(station.lat)) && Number.isFinite(Number(station.lng))) {
+      const zoom = map.getZoom ? map.getZoom() : undefined;
+      let tracking = true;
+      const updatePosition = () => positionGroundStationMenuForStation(station);
+      const stopTracking = () => {
+        if (!tracking) return;
+        tracking = false;
+        map.off("move", updatePosition);
+        positionGroundStationMenuForStation(station);
+      };
+      map.on("move", updatePosition);
+      map.once("moveend", stopTracking);
+      if (typeof map.flyTo === "function") {
+        map.flyTo([station.lat, station.lng], zoom, { duration: 0.45 });
+      } else {
+        map.setView([station.lat, station.lng], zoom, { animate: true });
+      }
+      window.setTimeout(stopTracking, 800);
+      suppressMapClickUntil = performance.now() + 450;
+    }
+  }
   document.addEventListener("pointerdown", handleGsMenuOutsideClick, true);
   updateCommandSequencePanel();
   forceRedraw();

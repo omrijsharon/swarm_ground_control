@@ -44,6 +44,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Deselect HOME on empty-map click.
 - [x] Add selected-HOME `Move HOME` and `Delete HOME` actions.
 - [x] Automatically center the map when HOME is selected.
+- [x] Keep the selected-HOME menu anchored next to HOME after auto-centering.
 - [x] Hide the selected-HOME menu when the rename menu opens.
 - [x] Require confirmation before deleting a HOME marker.
 - [x] Show a top helper while choosing the moved HOME coordinate.
