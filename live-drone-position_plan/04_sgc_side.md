@@ -252,6 +252,11 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
 - [x] Start live-position mode without a default HOME marker.
 - [x] Add a live map long-press/right-click menu for local HOME placement.
+- [x] Allow multiple local HOME markers.
+- [x] Select HOME from long-press/right-click on the HOME icon.
+- [x] Show a stronger selected-HOME glow.
+- [x] Add selected-HOME actions for move and delete.
+- [x] Show a top helper while moving HOME.
 - [x] Add drone-card long-press action sheet.
 - [x] Add drone-marker long-press action sheet.
 - [x] Add local drone aliases stored in `localStorage`.
@@ -263,6 +268,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Decode deterministic profile IDs for drone-card profile display.
 - [ ] Browser-verify Search mode with a flashed GC.
 - [ ] Browser-verify Home placement on the target touchscreen.
+- [ ] Browser-verify multiple HOME creation, selection, move, and delete.
 - [ ] Browser-verify Rename persistence after reload.
 - [ ] Browser-verify Delete is hidden for online drones and works for offline/stale drones.
 - [ ] Browser-verify profile Apply changes the profile used by future assignments only.

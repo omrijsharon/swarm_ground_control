@@ -1789,6 +1789,25 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   gap: 10px;
 }
 
+.relative-menu.live-placement-helper{
+  min-width: 280px;
+  max-width: min(420px, calc(100vw - 32px));
+  text-align: center;
+  border-color: rgba(120,220,255,0.28);
+  background: rgba(18, 24, 32, 0.92);
+  box-shadow: 0 14px 32px rgba(0,0,0,0.38), 0 0 22px rgba(120,220,255,0.18);
+}
+
+.relative-menu.live-placement-helper .menu-head{
+  justify-content: center;
+}
+
+.relative-menu.live-placement-helper .status-mission{
+  color: rgba(255,255,255,0.88);
+  font-weight: 800;
+  line-height: 1.35;
+}
+
 .relative-menu .sync-btn{
   border: 1px solid rgba(255,255,255,0.25);
   background: rgba(120,220,255,0.12);
@@ -1866,6 +1885,12 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   border-color: rgba(120,220,255,0.55);
   background: rgba(120,220,255,0.12);
   box-shadow: 0 0 0 1px rgba(120,220,255,0.22);
+}
+
+.relative-menu .cmd-chip.danger{
+  border-color: rgba(255,138,138,0.35);
+  background: rgba(255,138,138,0.10);
+  color: rgba(255,235,235,0.95);
 }
 
 .status-member-menu{

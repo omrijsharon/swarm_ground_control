@@ -748,24 +748,37 @@ function renderGroundStationMenu() {
   if (!gsMenuEl) return;
   const gs = groundStations.find((g) => g.id === activeGroundStationId);
   if (!gs) return;
-  const isUser = userGroundStationId !== null && Number(userGroundStationId) === Number(gs.id);
+  const isUser = LIVE_POSITION_MODE || (userGroundStationId !== null && Number(userGroundStationId) === Number(gs.id));
   const relocating = gsRelocate && Number(gsRelocate.stationId) === Number(gs.id);
   const isDynamic = !!gs.isDynamic;
+  const name = (gs.name || `Home #${gs.id + 1}`).trim();
 
   if (relocating) {
+    gsMenuEl.classList.add("live-placement-helper");
     gsMenuEl.innerHTML = `
       <div class="menu-head">
-        <span class="menu-eta" style="display:block;">Tap map to place</span>
+        <h4>Move HOME</h4>
       </div>
+      <div class="status-mission">Choose a new coordinate for ${name}</div>
     `;
+    if (LIVE_POSITION_MODE) {
+      const host = document.getElementById("app") || document.body;
+      requestAnimationFrame(() => {
+        if (!gsMenuEl) return;
+        const hostRect = host.getBoundingClientRect();
+        const menuW = gsMenuEl.offsetWidth || 280;
+        gsMenuEl.style.left = `${Math.max(12, (hostRect.width - menuW) / 2)}px`;
+        gsMenuEl.style.top = "18px";
+      });
+    }
     return;
   }
 
-  const name = (gs.name || `Home #${gs.id + 1}`).trim();
+  gsMenuEl.classList.remove("live-placement-helper");
   gsMenuEl.innerHTML = `
     <div class="menu-head">
       <h4>${name}</h4>
-      <span class="menu-eta">Ground Station</span>
+      <span class="menu-eta">${LIVE_POSITION_MODE ? "HOME" : "Ground Station"}</span>
     </div>
     <div class="command-list cmd-action-list column" style="margin-top:2px;">
       ${isUser ? `<button class="cmd-chip cmd-action" data-action="gs-rename" type="button">Change name</button>` : ""}
@@ -773,12 +786,15 @@ function renderGroundStationMenu() {
         isUser
           ? `<button class="cmd-chip cmd-action" data-action="gs-move" type="button" ${
               isDynamic ? "disabled" : ""
-            } style="${isDynamic ? "opacity:0.45; cursor:not-allowed;" : ""}">Change location</button>`
+            } style="${isDynamic ? "opacity:0.45; cursor:not-allowed;" : ""}">${
+              LIVE_POSITION_MODE ? "Move HOME" : "Change location"
+            }</button>`
           : ""
       }
+      ${LIVE_POSITION_MODE ? `<button class="cmd-chip cmd-action danger" data-action="gs-delete" type="button">Delete HOME</button>` : ""}
     </div>
     ${
-      isUser
+      isUser && !LIVE_POSITION_MODE
         ? `<div class="seg-wrap" style="margin-top:10px;">
             <div class="seg">
               <button class="seg-btn${!isDynamic ? " is-active" : ""}" data-gs-mode="static" type="button">Static</button>
@@ -804,6 +820,23 @@ function renderGroundStationMenu() {
       if (isDynamic) return;
       gsRelocate = { stationId: gs.id };
       renderGroundStationMenu();
+      forceRedraw();
+    });
+  }
+
+  const deleteBtn = gsMenuEl.querySelector("[data-action='gs-delete']");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const currentName = (gs.name || `Home #${gs.id + 1}`).trim();
+      if (!window.confirm(`Delete ${currentName}? This only removes the local HOME marker.`)) return;
+      groundStations = groundStations.filter((g) => Number(g.id) !== Number(gs.id));
+      if (Number(userGroundStationId) === Number(gs.id)) {
+        userGroundStationId = groundStations.length ? groundStations[0].id : null;
+      }
+      activeGroundStationId = null;
+      gsRelocate = null;
+      closeGroundStationMenu(false);
       forceRedraw();
     });
   }
@@ -859,12 +892,20 @@ function openGroundStationMenu(station, containerPoint) {
   forceRedraw();
 }
 
-function addUserHomeAtLatLng(latlng, alt = 0) {
+function addUserHomeAtLatLng(latlng, alt = 0, options = {}) {
   if (!latlng) return;
   const lat = Number(latlng.lat);
   const lng = Number(latlng.lng);
   if (!isFinite(lat) || !isFinite(lng)) return;
-  if (userGroundStationId !== null && userGroundStationId !== undefined) {
+  const stationId = options && options.stationId !== undefined && options.stationId !== null ? Number(options.stationId) : null;
+  const forceCreate = LIVE_POSITION_MODE && !Number.isFinite(stationId);
+  if (!forceCreate && Number.isFinite(stationId)) {
+    const existing = groundStations.find((g) => Number(g.id) === stationId);
+    if (existing) {
+      existing.updatePosition({ lat, lng, alt: isFinite(Number(alt)) ? Number(alt) : existing.alt });
+      userGroundStationId = existing.id;
+    }
+  } else if (!forceCreate && userGroundStationId !== null && userGroundStationId !== undefined) {
     const existing = groundStations.find((g) => g.id === userGroundStationId);
     if (existing) {
       existing.updatePosition({ lat, lng, alt: isFinite(Number(alt)) ? Number(alt) : existing.alt });
@@ -872,7 +913,8 @@ function addUserHomeAtLatLng(latlng, alt = 0) {
   } else {
     const nextId = groundStations.reduce((m, g) => Math.max(m, g.id), -1) + 1;
     userGroundStationId = nextId;
-    groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0, null));
+    const name = LIVE_POSITION_MODE ? `Home ${groundStations.length + 1}` : null;
+    groundStations.push(new GroundStation(nextId, lat, lng, isFinite(Number(alt)) ? Number(alt) : 0, name));
   }
   pendingUserHomePlacement = false;
   liveState.homePlacementActive = false;
@@ -880,6 +922,7 @@ function addUserHomeAtLatLng(latlng, alt = 0) {
   renderLiveHomeTool();
   const gs = groundStations.find((g) => g.id === userGroundStationId);
   if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
+  activeGroundStationId = gs ? gs.id : activeGroundStationId;
   forceRedraw();
 }
 
@@ -5461,19 +5504,13 @@ function openLiveMapMenu(latlng, containerPoint) {
   host.appendChild(liveMapMenuEl);
   enableMenuDrag(liveMapMenuEl);
 
-  const hasHome =
-    userGroundStationId !== null &&
-    userGroundStationId !== undefined &&
-    groundStations.some((gs) => Number(gs.id) === Number(userGroundStationId));
   liveMapMenuEl.innerHTML = `
     <div class="menu-head">
       <h4>Map</h4>
       <span class="menu-eta">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>
     </div>
     <div class="command-list cmd-action-list column" style="margin-top:2px;">
-      <button class="cmd-chip cmd-action" data-action="set-live-home" type="button">${
-        hasHome ? "Move HOME here" : "Set HOME here"
-      }</button>
+      <button class="cmd-chip cmd-action" data-action="set-live-home" type="button">Set HOME here</button>
     </div>
   `;
 
@@ -6462,6 +6499,20 @@ function handleMapClick(e) {
   if (pendingUserHomePlacement) {
     addUserHomeAtLatLng(e.latlng);
     return;
+  }
+  if (gsMenuEl && gsRelocate && activeGroundStationId !== null && activeGroundStationId !== undefined) {
+    const stationId = Number(activeGroundStationId);
+    if (Number(gsRelocate.stationId) === stationId) {
+      const gs = groundStations.find((g) => Number(g.id) === stationId);
+      if (gs) {
+        gs.updatePosition({ lat: e.latlng.lat, lng: e.latlng.lng });
+      }
+      gsRelocate = null;
+      closeGroundStationMenu();
+      updateTooltip();
+      draw();
+      return;
+    }
   }
   if (LIVE_POSITION_MODE) {
     const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
@@ -8554,7 +8605,12 @@ function handleContextMenu(e) {
   e.originalEvent?.preventDefault?.();
   if (LIVE_POSITION_MODE) {
     if (pendingUserHomePlacement) return;
-    openLiveMapMenu(e.latlng, e.containerPoint);
+    const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius() + 6);
+    if (nearGs) {
+      openGroundStationMenu(nearGs, e.containerPoint);
+    } else {
+      openLiveMapMenu(e.latlng, e.containerPoint);
+    }
     return;
   }
   if (pendingUserHomePlacement) return;
@@ -8587,6 +8643,11 @@ function attemptActionLongPress(containerPoint) {
     if (pendingUserHomePlacement) {
       const latlng = map.containerPointToLatLng(containerPoint);
       addUserHomeAtLatLng(latlng);
+      return;
+    }
+    const nearGs = findNearestGroundStation(containerPoint, getHoverRadius() + 6);
+    if (nearGs) {
+      openGroundStationMenu(nearGs, containerPoint);
       return;
     }
     const near = findNearestDrone(containerPoint, getHoverRadius());
@@ -9828,9 +9889,13 @@ function drawGroundStationIcon(x, y, size = 18, { active = false } = {}) {
   // Selection glow (cyan) when active.
   if (active) {
     ctx.shadowColor = SETTINGS.SELECTION_GLOW_COLOR;
-    ctx.shadowBlur = Math.max(12, size * 1.35);
+    ctx.shadowBlur = Math.max(22, size * 2.4);
     ctx.shadowOffsetX = 0;
     ctx.shadowOffsetY = 0;
+    ctx.fillStyle = "rgba(120, 220, 255, 0.16)";
+    ctx.beginPath();
+    ctx.arc(0, 0, radius * 1.75, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // Outer ring
@@ -10191,8 +10256,10 @@ function draw() {
   const gsSize = Math.max(14, Math.min(26, zoom * 1.45)) * 0.75;
   groundStations.forEach((gs) => {
     const p = latLngToScreen(gs.lat, gs.lng);
-    drawGroundStationIcon(p.x, p.y, gsSize, { active: activeGroundStationId === gs.id });
-    drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, gsSize);
+    const active = activeGroundStationId === gs.id;
+    const displaySize = active ? gsSize * 1.75 : gsSize;
+    drawGroundStationIcon(p.x, p.y, displaySize, { active });
+    drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, displaySize);
   });
 
   if (LIVE_POSITION_MODE) {

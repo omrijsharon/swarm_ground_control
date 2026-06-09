@@ -37,6 +37,12 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Start live-position mode without a default HOME marker.
 - [x] Add a map long-touch/right-click menu action for HOME placement.
 - [x] Let the operator choose `Set HOME here` or `Move HOME here` from that map menu.
+- [x] Allow multiple local HOME markers.
+- [x] Select HOME with long-touch/right-click on the HOME icon.
+- [x] Make selected HOME visually larger with stronger glow.
+- [x] Add selected-HOME `Move HOME` and `Delete HOME` actions.
+- [x] Require confirmation before deleting a HOME marker.
+- [x] Show a top helper while choosing the moved HOME coordinate.
 - [x] Keep HOME local to SGC; do not command drones.
 - [x] Add a live drone action bottom sheet for touch use.
 - [x] Open the drone action sheet from drone-card long press.
@@ -48,6 +54,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add GC `clear_assignment` command support.
 - [x] Delete a non-online drone only after operator confirmation and GC ACK.
 - [ ] Browser-verify Home placement on the target touchscreen.
+- [ ] Browser-verify multiple HOME creation, HOME selection, HOME move, and HOME delete.
 - [ ] Browser-verify rename persists after page reload.
 - [ ] Bench-verify Delete removes a stale/offline assignment from GC flash and SGC.
 
