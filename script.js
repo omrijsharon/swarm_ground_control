@@ -822,6 +822,8 @@ function renderGroundStationMenu() {
               <button class="seg-btn${isDynamic ? " is-active" : ""}" data-gs-mode="dynamic" type="button">Dynamic</button>
             </div>
           </div>`
+        : LIVE_POSITION_MODE
+          ? ""
         : `<div class="status-mission" style="line-height:1.35; opacity:0.85; margin-top:10px;">Read-only.</div>`
     }
   `;
