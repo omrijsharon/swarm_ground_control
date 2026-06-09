@@ -41,9 +41,8 @@ const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 const LIVE_GC_DIAGNOSTIC_LOG_LIMIT = cfg("LIVE_GC_DIAGNOSTIC_LOG_LIMIT", 20000);
 const LIVE_DRONE_ALIAS_STORAGE_KEY = "sgc.livePosition.droneAliases.v1";
 const LIVE_DRONE_ACTION_LONGPRESS_MS = 460;
-const LIVE_RELAY_SOURCE_STORAGE_KEY = "sgc.livePosition.telemetrySource.v1";
 const LIVE_RELAY_ENDPOINT_STORAGE_KEY = "sgc.livePosition.relayEndpoint.v1";
-const LIVE_RELAY_SESSION_STORAGE_KEY = "sgc.livePosition.relaySession.v1";
+const LIVE_RELAY_PUBLIC_SESSION_ID = "public";
 const LIVE_RELAY_RECONNECT_MS = 1500;
 const LIVE_RELAY_MESSAGE_TYPES = new Set([
   "drone_telemetry",
@@ -172,9 +171,9 @@ const liveState = {
   gcDiagnosticLog: [],
   gcDiagnosticLineNumber: 0,
   gcDiagnosticStartedAt: Date.now(),
-  telemetrySourceMode: loadLiveStorageValue(LIVE_RELAY_SOURCE_STORAGE_KEY, "usb"),
+  telemetrySourceMode: "auto",
   relayEndpoint: loadLiveStorageValue(LIVE_RELAY_ENDPOINT_STORAGE_KEY, getDefaultLiveRelayEndpoint()),
-  relaySessionId: loadLiveStorageValue(LIVE_RELAY_SESSION_STORAGE_KEY, makeDefaultLiveRelaySessionId()),
+  relaySessionId: LIVE_RELAY_PUBLIC_SESSION_ID,
   relayPublishToken: "",
   relaySocket: null,
   relayConnected: false,
@@ -211,7 +210,7 @@ function saveLiveStorageValue(key, value) {
 }
 
 function makeDefaultLiveRelaySessionId() {
-  return `field-${new Date().toISOString().slice(0, 10)}`;
+  return LIVE_RELAY_PUBLIC_SESSION_ID;
 }
 
 function getDefaultLiveRelayEndpoint() {
@@ -230,19 +229,23 @@ function getDefaultLiveRelayEndpoint() {
 }
 
 function normalizeLiveSourceMode(mode) {
-  return ["usb", "live", "broadcast"].includes(mode) ? mode : "usb";
+  return ["auto", "usb", "live", "broadcast"].includes(mode) ? mode : "auto";
 }
 
 function isLiveRemoteViewerMode() {
-  return liveState.telemetrySourceMode === "live";
+  return liveState.telemetrySourceMode === "live" || (liveState.telemetrySourceMode === "auto" && !liveState.connected);
 }
 
 function isLiveRelayMode() {
-  return liveState.telemetrySourceMode === "live" || liveState.telemetrySourceMode === "broadcast";
+  return liveState.telemetrySourceMode === "auto" || liveState.telemetrySourceMode === "live" || liveState.telemetrySourceMode === "broadcast";
 }
 
 function isLiveRelayBroadcastMode() {
-  return liveState.telemetrySourceMode === "broadcast";
+  return liveState.telemetrySourceMode === "broadcast" || (liveState.telemetrySourceMode === "auto" && liveState.connected);
+}
+
+function getLiveRelayDesiredRole() {
+  return isLiveRelayBroadcastMode() ? "publisher" : "viewer";
 }
 
 let orbitDroneId = null;
@@ -3326,11 +3329,9 @@ function applyLiveSearchButtonState(searchBtn) {
 }
 
 function syncLiveRelayInputsFromState() {
-  const sourceEl = document.getElementById("liveTelemetrySource");
   const endpointEl = document.getElementById("liveRelayEndpoint");
   const sessionEl = document.getElementById("liveRelaySessionId");
   const tokenEl = document.getElementById("liveRelayPublishToken");
-  if (sourceEl) sourceEl.value = normalizeLiveSourceMode(liveState.telemetrySourceMode);
   if (endpointEl && endpointEl.value !== liveState.relayEndpoint) endpointEl.value = liveState.relayEndpoint;
   if (sessionEl && sessionEl.value !== liveState.relaySessionId) sessionEl.value = liveState.relaySessionId;
   if (tokenEl && tokenEl.value !== liveState.relayPublishToken) tokenEl.value = liveState.relayPublishToken;
@@ -3338,13 +3339,10 @@ function syncLiveRelayInputsFromState() {
 
 function readLiveRelayInputs() {
   const endpointEl = document.getElementById("liveRelayEndpoint");
-  const sessionEl = document.getElementById("liveRelaySessionId");
-  const tokenEl = document.getElementById("liveRelayPublishToken");
   liveState.relayEndpoint = String(endpointEl?.value || liveState.relayEndpoint || getDefaultLiveRelayEndpoint()).trim();
-  liveState.relaySessionId = String(sessionEl?.value || liveState.relaySessionId || makeDefaultLiveRelaySessionId()).trim();
-  liveState.relayPublishToken = String(tokenEl?.value || "").trim();
+  liveState.relaySessionId = LIVE_RELAY_PUBLIC_SESSION_ID;
+  liveState.relayPublishToken = "";
   saveLiveStorageValue(LIVE_RELAY_ENDPOINT_STORAGE_KEY, liveState.relayEndpoint);
-  saveLiveStorageValue(LIVE_RELAY_SESSION_STORAGE_KEY, liveState.relaySessionId);
 }
 
 function formatLiveRelayState() {
@@ -3355,7 +3353,7 @@ function formatLiveRelayState() {
         ? `Broadcasting (${liveState.relayViewerCount})`
         : "Broadcasting";
     }
-    return liveState.relayPublisherConnected ? "Viewing live" : "Waiting";
+    return liveState.relayPublisherConnected ? "Viewing live" : "Waiting for GC";
   }
   if (liveState.relayState === "connecting") return "Connecting";
   if (liveState.relayState === "reconnecting") return "Reconnecting";
@@ -3369,10 +3367,7 @@ function buildLiveRelayUrl(role) {
   if (baseUrl.protocol === "http:") baseUrl.protocol = "ws:";
   if (baseUrl.protocol === "https:") baseUrl.protocol = "wss:";
   baseUrl.searchParams.set("role", role);
-  baseUrl.searchParams.set("sessionId", liveState.relaySessionId || "default");
-  if (role === "publisher" && liveState.relayPublishToken) {
-    baseUrl.searchParams.set("token", liveState.relayPublishToken);
-  }
+  baseUrl.searchParams.set("sessionId", LIVE_RELAY_PUBLIC_SESSION_ID);
   return baseUrl.toString();
 }
 
@@ -3424,7 +3419,7 @@ function handleLiveRelayEnvelope(raw) {
   }
 
   if (envelope.kind === "sgc_message" && envelope.message && typeof envelope.message === "object") {
-    if (isLiveRelayBroadcastMode()) return;
+    if (liveState.relayRole === "publisher") return;
     handleLiveProtocolMessage(envelope.message, "live-endpoint");
     return;
   }
@@ -3445,13 +3440,13 @@ function handleLiveRelayEnvelope(raw) {
 }
 
 function publishLiveRelayMessage(message) {
-  if (!isLiveRelayBroadcastMode() || !message || !LIVE_RELAY_MESSAGE_TYPES.has(message.type)) return;
+  if (liveState.relayRole !== "publisher" || !message || !LIVE_RELAY_MESSAGE_TYPES.has(message.type)) return;
   const socket = liveState.relaySocket;
   if (!socket || socket.readyState !== WebSocket.OPEN) return;
   try {
     socket.send(JSON.stringify({
       kind: "sgc_message",
-      sessionId: liveState.relaySessionId || "default",
+      sessionId: LIVE_RELAY_PUBLIC_SESSION_ID,
       message,
       sentAt: Date.now(),
     }));
@@ -3471,14 +3466,8 @@ function connectLiveRelay({ auto = false } = {}) {
     return;
   }
   readLiveRelayInputs();
-  const role = isLiveRelayBroadcastMode() ? "publisher" : "viewer";
-  if (role === "publisher" && !liveState.relayPublishToken) {
-    liveState.relayState = "error";
-    liveState.relayLastError = "Publish token is required for broadcasting.";
-    appendLiveDebug("relay unavailable: publish token is required");
-    renderLiveControls();
-    return;
-  }
+  const role = getLiveRelayDesiredRole();
+  if (liveState.relaySocket && liveState.relayConnected && liveState.relayRole === role) return;
 
   closeLiveRelayConnection({ user: false, reason: "reconnect" });
   liveState.relayUserClosed = false;
@@ -3534,12 +3523,19 @@ function setLiveTelemetrySourceMode(mode) {
   const nextMode = normalizeLiveSourceMode(mode);
   if (liveState.telemetrySourceMode === nextMode) return;
   liveState.telemetrySourceMode = nextMode;
-  saveLiveStorageValue(LIVE_RELAY_SOURCE_STORAGE_KEY, nextMode);
   closeLiveRelayConnection({ user: true, reason: "source changed" });
   syncLiveRelayInputsFromState();
   renderLiveControls();
   renderLiveGcStatus();
   updateStatusList();
+}
+
+function ensureLiveRelayForCurrentState() {
+  if (!isLiveRelayMode()) return;
+  const desiredRole = getLiveRelayDesiredRole();
+  if (liveState.relayConnected && liveState.relayRole === desiredRole) return;
+  liveState.relayUserClosed = false;
+  connectLiveRelay({ auto: true });
 }
 
 function renderLiveControls() {
@@ -5175,6 +5171,7 @@ function markLiveSerialDisconnected(reason) {
   renderLiveControls();
   renderLiveGcStatus();
   scheduleLiveSerialReconnect(reason);
+  ensureLiveRelayForCurrentState();
 }
 
 async function openLiveSerialPort({ port = null, auto = false } = {}) {
@@ -5213,6 +5210,7 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
     renderLiveControls();
     readLiveSerialLoop();
     window.setTimeout(requestLiveGcSnapshot, 150);
+    ensureLiveRelayForCurrentState();
   } catch (err) {
     liveState.connected = false;
     liveState.keepReading = false;
@@ -5275,6 +5273,7 @@ async function closeLiveSerialPort() {
   setLiveSerialState("waiting", "Disconnected", "Ready to open the GC ESP32 serial port.");
   renderLiveControls();
   renderLiveGcStatus();
+  ensureLiveRelayForCurrentState();
 }
 
 function stopLivePositionMock({ clearDrones = false, clearStatus = false } = {}) {
@@ -5646,6 +5645,7 @@ function initLivePositionUi() {
     setLiveSerialState("error", "Unsupported", "Use desktop Chrome or Edge for USB serial.");
     if (openBtn) openBtn.disabled = true;
   }
+  window.setTimeout(ensureLiveRelayForCurrentState, 500);
   renderLiveControls();
   renderLiveGcStatus();
 }

@@ -270,21 +270,20 @@ These tasks mirror `08_field_test_followups.md`.
 
 These tasks mirror `09_cloudflare_live_relay.md`.
 
-- [x] Add a compact telemetry source selector.
-- [x] Support `USB Serial`, `Live Endpoint`, and `USB + Broadcast`.
-- [x] Default to `USB Serial`.
-- [x] Add relay endpoint, session ID, and publish-token controls.
-- [x] Hide publish-token input unless `USB + Broadcast` is selected.
-- [x] Store source mode, endpoint, and session ID in localStorage.
-- [x] Keep publish token in page memory only.
-- [x] Connect to the live relay as a viewer in `Live Endpoint` mode.
-- [x] Connect to the live relay as a publisher in `USB + Broadcast` mode.
+- [x] Add automatic live relay behavior.
+- [x] Start as a public relay viewer when USB Serial is not connected.
+- [x] Switch to public relay publisher when USB Serial connects.
+- [x] Switch back to public relay viewer when USB Serial disconnects.
+- [x] Remove visible source/session/token controls from the normal operator path.
+- [x] Store only the relay endpoint override in localStorage.
+- [x] Do not ask for or store a publish token in SGC.
+- [x] Use the fixed public session `public`.
 - [x] Publish parsed GC JSON after local serial handling.
 - [x] Consume relay messages through the same live protocol handler used by USB serial.
 - [x] Show live relay connection state.
-- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply in viewer mode.
+- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Show viewer-friendly empty-state text when no relay telemetry has arrived.
-- [ ] Browser-verify the operator can use USB Serial normally after adding source modes.
-- [ ] Browser-verify `USB + Broadcast` publishes telemetry to Cloudflare.
-- [ ] Browser-verify a second browser in `Live Endpoint` mode sees the same drones.
+- [ ] Browser-verify the operator can use USB Serial normally after adding automatic relay.
+- [ ] Browser-verify USB Serial connection automatically broadcasts telemetry to Cloudflare.
+- [ ] Browser-verify a second browser automatically views the same drones.
 - [ ] Browser-verify remote command controls are unavailable.

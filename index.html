@@ -24,9 +24,9 @@
     defer
   ></script>
 
-  <link rel="stylesheet" href="./style.css?v=live-position-relay-1" />
+  <link rel="stylesheet" href="./style.css?v=live-position-relay-2" />
   <script src="./config.js" defer></script>
-  <script src="./script.js?v=live-position-relay-1" defer></script>
+  <script src="./script.js?v=live-position-relay-2" defer></script>
 </head>
 
 <body>
@@ -87,36 +87,12 @@
             <button class="live-btn" id="liveSerialCloseBtn" type="button" disabled>Close</button>
             <button class="live-btn live-danger-btn" id="liveResetSessionBtn" type="button" disabled>Reset</button>
           </div>
-          <div class="live-relay-panel" aria-label="Telemetry source">
-            <div class="live-relay-top">
-              <label class="live-field live-source-field">
-                <span>Source</span>
-                <select id="liveTelemetrySource">
-                  <option value="usb">USB Serial</option>
-                  <option value="live">Live Endpoint</option>
-                  <option value="broadcast">USB + Broadcast</option>
-                </select>
-              </label>
+          <div class="live-relay-panel" aria-label="Live relay">
+            <div class="live-relay-top live-relay-top-simple">
               <div class="live-relay-state">
-                <span>Relay</span>
-                <strong id="liveRelayState">Disconnected</strong>
+                <span>Online Relay</span>
+                <strong id="liveRelayState">Starting</strong>
               </div>
-            </div>
-            <div class="live-relay-fields" id="liveRelayFields" hidden>
-              <label class="live-field live-relay-endpoint-field">
-                <span>Endpoint</span>
-                <input id="liveRelayEndpoint" type="url" autocomplete="off" />
-              </label>
-              <label class="live-field">
-                <span>Session</span>
-                <input id="liveRelaySessionId" type="text" autocomplete="off" />
-              </label>
-              <label class="live-field" id="liveRelayTokenField">
-                <span>Publish token</span>
-                <input id="liveRelayPublishToken" type="password" autocomplete="off" />
-              </label>
-              <button class="live-btn live-btn-primary" id="liveRelayConnectBtn" type="button">Connect</button>
-              <button class="live-btn" id="liveRelayDisconnectBtn" type="button" disabled>Disconnect</button>
             </div>
           </div>
         </section>

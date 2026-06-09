@@ -37,6 +37,10 @@ function normalizeSecret(value) {
   return String(value || "").trim();
 }
 
+function isPublicPublishEnabled(env) {
+  return String(env.PUBLIC_PUBLISH || "").trim().toLowerCase() === "true";
+}
+
 function isLiveRelayPath(pathname) {
   return pathname === `${APP_PREFIX}/live/ws` || pathname === `${APP_PREFIX}/live/status`;
 }
@@ -120,6 +124,7 @@ export class LiveRelaySession {
       publisherConnected: Boolean(this.publisher),
       viewerCount: this.viewers.size,
       lastMessageAt: this.lastMessageAt,
+      publicPublish: isPublicPublishEnabled(this.env),
       publishTokenConfigured: Boolean(normalizeSecret(this.env.PUBLISH_TOKEN)),
     };
   }
@@ -127,7 +132,7 @@ export class LiveRelaySession {
   acceptPublisher(request, url) {
     const token = normalizeSecret(url.searchParams.get("token") || request.headers.get("x-publish-token") || "");
     const expectedToken = normalizeSecret(this.env.PUBLISH_TOKEN);
-    if (!expectedToken || token !== expectedToken) {
+    if (!isPublicPublishEnabled(this.env) && (!expectedToken || token !== expectedToken)) {
       return new Response("Unauthorized publisher", { status: 401 });
     }
     if (this.publisher) {

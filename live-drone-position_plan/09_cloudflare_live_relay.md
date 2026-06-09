@@ -1,6 +1,6 @@
 # Part 9: Cloudflare Live Relay Plan
 
-Goal: let one operator SGC browser read the GC ESP32 over USB Serial and broadcast the same parsed live-position JSON stream to remote SGC browsers.
+Goal: let one operator SGC browser read the GC ESP32 over USB Serial and automatically broadcast the same parsed live-position JSON stream to remote SGC browsers.
 
 The static app remains available at:
 
@@ -23,28 +23,27 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Allow one `publisher` per session.
 - [x] Allow multiple `viewer` connections per session.
 - [x] Reject a second publisher for the same session.
-- [x] Require a `PUBLISH_TOKEN` secret for publisher connections.
-- [x] Keep viewer URLs token-free.
+- [x] Switch to one public session named `public`.
+- [x] Allow public publisher connection for the single-session field setup.
+- [x] Keep only one active publisher so a second broadcaster cannot replace an active operator session.
 - [x] Reject viewer-originated WebSocket messages as read-only.
 - [x] Relay only display-oriented SGC JSON message types.
 - [x] Deploy the Worker with the Durable Object binding and route.
-- [x] Set the Cloudflare `PUBLISH_TOKEN` secret.
 - [x] Verify `/swarm_ground_control/` still serves the GitHub Pages app through the Worker.
 - [x] Verify `/swarm_ground_control/live/ws` accepts WebSocket upgrades.
 
 ## Milestone 2: SGC Source Modes
 
-- [x] Add `USB Serial` source mode.
-- [x] Add `Live Endpoint` source mode.
-- [x] Add `USB + Broadcast` source mode.
-- [x] Keep `USB Serial` as the default mode.
-- [x] Add endpoint, session ID, and publish token controls.
-- [x] Store endpoint, session ID, and selected source mode in browser localStorage.
-- [x] Do not store the publish token.
-- [x] Connect to the relay as `viewer` in `Live Endpoint` mode.
-- [x] Connect to the relay as `publisher` in `USB + Broadcast` mode.
+- [x] Add automatic source mode.
+- [x] Start as a public live endpoint viewer when USB serial is not connected.
+- [x] Switch to public broadcaster when USB serial connects.
+- [x] Switch back to viewer if USB serial disconnects.
+- [x] Remove visible endpoint, session ID, source mode, and publish token controls from the normal operator path.
+- [x] Store only the relay endpoint override in browser localStorage.
+- [x] Do not store or ask for a publish token in the operator UI.
+- [x] Connect to the relay as `viewer` when USB Serial is not connected.
+- [x] Connect to the relay as `publisher` when USB Serial is connected.
 - [x] Reconnect the relay automatically after unexpected socket close.
-- [x] Let the user explicitly disconnect from the relay.
 - [x] Show relay connection state in the live control panel.
 
 ## Milestone 3: Relay Data Flow
@@ -55,8 +54,8 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Stop mock telemetry when live endpoint telemetry arrives.
 - [x] Display remote drone telemetry with the same map/card path as USB serial telemetry.
 - [x] Keep command state local to the operator browser.
-- [x] Disable operator commands in `Live Endpoint` viewer mode.
-- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply in viewer mode.
+- [x] Disable operator commands while acting as a viewer.
+- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Verify a remote WebSocket viewer receives relayed `drone_telemetry` from a publisher smoke test.
 - [ ] Verify a remote browser receives live drone telemetry from an operator browser.
 - [ ] Verify relay disconnect/reconnect does not break USB serial reading.
@@ -64,9 +63,8 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 ## Milestone 4: Field Verification
 
 - [ ] Operator laptop reads GC ESP32 over USB Serial.
-- [ ] Operator selects `USB + Broadcast`.
+- [ ] Operator opens the online SGC app and connects the GC ESP32 over USB Serial.
 - [ ] Remote laptop/phone opens the same SGC app URL.
-- [ ] Remote browser selects `Live Endpoint`.
 - [ ] Remote browser sees the same drones and status updates.
 - [ ] Remote command controls are unavailable in viewer mode.
 - [ ] If the publisher disconnects, viewers show stale/offline state without crashing.
@@ -83,7 +81,6 @@ Suggested deploy commands:
 
 ```powershell
 cd C:\Users\tamipinhasi\Documents\repos\swarm_ground_control\cloudflare\sgc-live-relay
-npx wrangler secret put PUBLISH_TOKEN
 npx wrangler deploy
 ```
 

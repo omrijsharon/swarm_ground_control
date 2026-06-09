@@ -440,8 +440,8 @@ These tasks mirror `09_cloudflare_live_relay.md`.
 - [x] Relay parsed GC-to-SGC JSON through a Cloudflare WebSocket endpoint for remote viewers.
 - [x] Use `wss://www.flying-agents.com/swarm_ground_control/live/ws` as the live endpoint.
 - [x] Use `role=publisher` for the operator browser and `role=viewer` for remote browsers.
-- [x] Use `sessionId` to separate field-test sessions.
-- [x] Require a Cloudflare Worker `PUBLISH_TOKEN` secret for publisher connections.
+- [x] Use one public `sessionId` named `public`.
+- [x] Allow one public publisher connection for the field laptop.
 - [x] Keep viewer connections read-only.
 - [x] Relay display-oriented message types such as `drone_telemetry`, `gc_status`, `channel_table`, assignment/search/scanner/link/scan/session events, and `command_ack`.
 - [x] Do not relay raw firmware log text.

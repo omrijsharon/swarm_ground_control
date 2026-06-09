@@ -7,28 +7,27 @@ This Worker serves two roles under the same Cloudflare route:
 
 The live relay uses a Durable Object. One browser connects as `publisher` from the field laptop, and remote browsers connect as `viewer`.
 
+The current deployment uses one public session named `public`. Viewers do not need a token, and the operator UI auto-switches between viewer and publisher based on whether USB Serial is connected.
+
 ## Deploy
 
 ```powershell
 cd C:\Users\tamipinhasi\Documents\repos\swarm_ground_control\cloudflare\sgc-live-relay
-npx wrangler secret put PUBLISH_TOKEN
 npx wrangler deploy
 ```
-
-Use the same publish token in SGC when selecting `USB + Broadcast`.
 
 ## Manual Smoke Test
 
 Publisher URL:
 
 ```text
-wss://www.flying-agents.com/swarm_ground_control/live/ws?role=publisher&sessionId=field-test-001
+wss://www.flying-agents.com/swarm_ground_control/live/ws?role=publisher&sessionId=public
 ```
 
 Viewer URL:
 
 ```text
-wss://www.flying-agents.com/swarm_ground_control/live/ws?role=viewer&sessionId=field-test-001
+wss://www.flying-agents.com/swarm_ground_control/live/ws?role=viewer&sessionId=public
 ```
 
-Only the publisher may send `sgc_message` envelopes. Viewers are read-only.
+Only one publisher may connect at a time. Viewers are read-only.
