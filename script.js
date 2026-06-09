@@ -6517,6 +6517,13 @@ function handleMapClick(e) {
       return;
     }
   }
+  // A completed long-press opens a menu; the release may still produce a click.
+  // Suppress that click before live-mode selection/deselection can close the menu.
+  if (suppressNextMapClick) {
+    suppressNextMapClick = false;
+    return;
+  }
+  if (performance.now() < longPressSuppressUntil) return;
   if (LIVE_POSITION_MODE) {
     const nearest = findNearestDrone(e.containerPoint, getHoverRadius());
     if (nearest) {
