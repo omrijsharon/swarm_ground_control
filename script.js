@@ -4509,7 +4509,8 @@ function renderLiveProfilePicker(host) {
   if (liveState.profileSimpleMode && preset) {
     preview.innerHTML = `
       <span>Future assignments only</span>
-      <strong>${preset.label}</strong>
+      <strong>${preset.label} ${formatLiveRadioProfile(draft)}</strong>
+      <span>Airtime ${airtimeMs.toFixed(1)} ms</span>
     `;
   } else {
     preview.innerHTML = `
