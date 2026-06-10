@@ -4435,18 +4435,32 @@ function makeLiveProfileSegment(label, field, options, value, formatter) {
 function renderLiveProfileModeToggle(panel) {
   const mode = document.createElement("div");
   mode.className = "live-profile-mode";
-  [
-    ["Simple", true],
-    ["Advanced", false],
-  ].forEach(([label, simpleMode]) => {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "live-profile-segment";
-    btn.classList.toggle("is-selected", liveState.profileSimpleMode === simpleMode);
-    btn.textContent = label;
-    btn.addEventListener("click", () => setLiveProfileMode(simpleMode));
-    mode.appendChild(btn);
-  });
+
+  const switchLabel = document.createElement("label");
+  switchLabel.className = "live-profile-switch";
+
+  const text = document.createElement("span");
+  text.className = "live-profile-switch-label";
+  text.textContent = "Advanced";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !liveState.profileSimpleMode;
+  input.setAttribute("role", "switch");
+  input.setAttribute("aria-label", "Advanced profile mode");
+  input.addEventListener("change", () => setLiveProfileMode(!input.checked));
+
+  const track = document.createElement("span");
+  track.className = "live-profile-switch-track";
+
+  const thumb = document.createElement("span");
+  thumb.className = "live-profile-switch-thumb";
+  track.appendChild(thumb);
+
+  switchLabel.appendChild(text);
+  switchLabel.appendChild(input);
+  switchLabel.appendChild(track);
+  mode.appendChild(switchLabel);
   panel.appendChild(mode);
 }
 
