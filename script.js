@@ -4362,6 +4362,8 @@ async function applyLiveProfileDraft() {
     persist: true,
   });
   if (commandId) {
+    liveState.profilePickerOpen = false;
+    renderLiveGcStatus();
     window.setTimeout(() => {
       if (!liveState.pendingCommands.has(commandId)) return;
       liveState.pendingCommands.delete(commandId);
@@ -4458,16 +4460,7 @@ function renderLiveProfilePresets(panel, draft) {
     btn.className = "live-profile-preset";
     btn.classList.toggle("is-selected", preset.radioProfileId === selectedId);
     btn.addEventListener("click", () => selectLiveProfilePreset(preset.key));
-
-    const title = document.createElement("strong");
-    title.textContent = preset.label;
-    const profile = document.createElement("span");
-    profile.textContent = formatLiveRadioProfile(preset.profile);
-    const airtime = document.createElement("span");
-    airtime.textContent = `${calculateLiveLoRaAirtimeMs(preset.profile, 20).toFixed(1)} ms`;
-    btn.appendChild(title);
-    btn.appendChild(profile);
-    btn.appendChild(airtime);
+    btn.textContent = preset.label;
     presets.appendChild(btn);
   });
   panel.appendChild(presets);
@@ -4513,11 +4506,18 @@ function renderLiveProfilePicker(host) {
   const preview = document.createElement("div");
   preview.className = "live-profile-preview";
   const preset = findLiveProfilePresetByProfile(draft);
-  preview.innerHTML = `
-    <span>Future assignments only</span>
-    <strong>${preset ? `${preset.label} ` : ""}${formatLiveRadioProfile(draft)}</strong>
-    <span>Airtime ${airtimeMs.toFixed(1)} ms</span>
-  `;
+  if (liveState.profileSimpleMode && preset) {
+    preview.innerHTML = `
+      <span>Future assignments only</span>
+      <strong>${preset.label}</strong>
+    `;
+  } else {
+    preview.innerHTML = `
+      <span>Future assignments only</span>
+      <strong>${preset ? `${preset.label} ` : ""}${formatLiveRadioProfile(draft)}</strong>
+      <span>Airtime ${airtimeMs.toFixed(1)} ms</span>
+    `;
+  }
   panel.appendChild(preview);
 
   const actions = document.createElement("div");
@@ -4961,6 +4961,9 @@ function handleLiveProtocolMessage(message, source = "serial") {
         if (message.accepted) liveState.searchMode = true;
       } else if (pending.command === "set_radio_profile") {
         liveState.profileApplyPending = false;
+        if (message.accepted) {
+          closeLiveProfilePicker();
+        }
       } else if (pending.command === "clear_assignment") {
         const nodeId = Number(message.nodeId ?? pending.nodeId);
         liveState.deleteRequests.delete(nodeId);

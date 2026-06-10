@@ -269,7 +269,9 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Delete a non-online drone only through `clear_assignment` and GC ACK.
 - [x] Replace the profile picker preview with an active Simple/Advanced profile selector.
 - [x] Add Fast, Balanced, and Robust preset buttons.
+- [x] Render simple preset buttons in one row with profile names only.
 - [x] Send `set_radio_profile` for future assignments only.
+- [x] Close the profile picker after `set_radio_profile` is successfully sent.
 - [x] Decode deterministic profile IDs for drone-card profile display.
 - [ ] Browser-verify Search mode with a flashed GC.
 - [ ] Browser-verify Home placement on the target touchscreen.

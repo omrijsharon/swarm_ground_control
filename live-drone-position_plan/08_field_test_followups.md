@@ -14,8 +14,11 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] In search mode, listen on the shared channel for join requests.
 - [x] After a successful assignment/timing lock, run one telemetry scanner round before returning to shared discovery.
 - [x] Stop search after a shared dwell with no valid join request and no LoRa CAD activity.
+- [x] Compute Search shared dwell from `3 * max discovery control packet airtime + guard` instead of a fixed magic value.
+- [x] Emit `gc_status.searchSharedDwellMs`.
 - [ ] Bench-verify active drones do not lag from periodic shared-channel visits while Search is off.
 - [ ] Bench-verify Search admits a new drone and then stops after the shared channel is packet-free.
+- [ ] Bench-verify Search dwell is about `900-920 ms` with the current discovery profile.
 
 ## Milestone 2: Link Diagnosis And Recovery
 
@@ -24,6 +27,9 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add GC link states: `locking`, `weak`, `offline`, and `off`.
 - [x] When assigned telemetry is missed, spend `3 * txPeriodMs` trying to reacquire that drone.
 - [x] During recovery, use CAD/activity detection plus normal packet receive.
+- [x] Increase predicted assigned-channel receive tolerance to `22 ms` pre-tune guard and `12 ms` post guard.
+- [x] Use a broad one-drone assigned-channel listen window when Search is inactive.
+- [x] Replace the old two-second missed-telemetry defer with immediate bounded recovery.
 - [x] Emit `drone_link_status` JSON with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Show `LOCKING`, `WEAK`, `OFFLINE`, and `OFF` in SGC.
 - [x] Use orange for `WEAK`, red for `OFFLINE`, and gray for `OFF`.
@@ -77,7 +83,9 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Have the drone decode and apply the assigned telemetry profile after assignment.
 - [x] Have the GC switch to each drone's assigned profile while scanning.
 - [x] Add SGC simple/advanced profile UI.
+- [x] Render simple profile presets as one row of name-only buttons.
 - [x] Make SGC Apply send `set_radio_profile` for future assignments only.
+- [x] Close the profile picker after `set_radio_profile` is successfully sent.
 - [x] Show each drone's assigned profile on its card.
 - [ ] Reflash GC and all drone ESP32s after the profile-ID change.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.

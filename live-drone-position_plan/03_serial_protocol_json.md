@@ -423,6 +423,7 @@ These tasks mirror `08_field_test_followups.md`.
 
 - [x] Add SGC-to-GC `start_search`.
 - [x] Add `gc_status.searchMode`.
+- [x] Add `gc_status.searchSharedDwellMs` so SGC/debug can verify the discovery Search dwell.
 - [x] Add `search_event` lifecycle messages: `search_started`, `join_detected`, `assignment_completed`, `search_telemetry_round`, `search_complete`, and `search_timeout`.
 - [x] Add `drone_link_status` with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Define link states `locking`, `weak`, `offline`, and `off`.

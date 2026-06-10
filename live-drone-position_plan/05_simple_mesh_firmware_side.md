@@ -469,13 +469,18 @@ These tasks mirror `08_field_test_followups.md`.
 
 - [x] Implement `start_search`.
 - [x] Report Search state in `gc_status`.
+- [x] Report computed `searchSharedDwellMs` in `gc_status`.
 - [x] Emit `search_event` messages.
 - [x] Disable routine shared-channel visits while assigned drones exist and Search is inactive.
 - [x] Keep shared discovery automatic when no drones are assigned.
 - [x] After a Search assignment/timing lock, run one scanner round across existing assigned drones.
+- [x] Compute Search shared dwell from discovery control packet airtime instead of a fixed constant.
 - [x] Add `scanChannelActivity()` to the radio backend interface.
 - [x] Implement SX1262 LoRa CAD/activity detection with RadioLib `scanChannel()`.
 - [x] Add assigned-channel recovery classification using valid decode, CAD activity, or no activity.
+- [x] Increase assigned-channel predicted receive guard to `22 ms` before TST and `12 ms` after airtime.
+- [x] Add one-drone broad assigned-channel listening while Search is inactive.
+- [x] Replace two-second assigned recovery defer with immediate bounded recovery.
 - [x] Emit `drone_link_status`.
 - [x] Implement `clear_assignment` for one node.
 - [x] Implement deterministic radio profile ID decoding.
