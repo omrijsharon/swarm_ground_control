@@ -89,7 +89,7 @@ Candidate:
 Required common fields:
 
 - `type`: always `assignment_event`.
-- `event`: one of `join_request_received`, `silence_sent`, `assign_sent`, `join_ack_received`, `assignment_active`, `assignment_expired`, `assignment_removed`.
+- `event`: one of `join_request_received`, `silence_sent`, `assign_sent`, `join_ack_received`, `late_join_ack_received`, `assignment_active`, `assignment_expired`, `assignment_removed`.
 - Timing handshake events also use this type: `tx_period_proposal_received`, `tx_period_ack_sent`, `tx_period_ack_send_failed`, and `tx_period_proposal_ignored`.
 - `gcMillis`: firmware-relative GC timestamp.
 
@@ -114,6 +114,7 @@ Examples:
 {"type":"assignment_event","event":"silence_sent","recipientNodeId":255,"attempt":1,"gcMillis":123470}
 {"type":"assignment_event","event":"assign_sent","nodeId":2,"recipientNodeId":2,"frequencyMhz":916.0,"channelIndex":27,"attempt":1,"gcMillis":123500}
 {"type":"assignment_event","event":"join_ack_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"rssi":-63,"snr":10.8,"gcMillis":123540}
+{"type":"assignment_event","event":"late_join_ack_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"join_ack","rssi":-63,"snr":10.8,"gcMillis":123900}
 {"type":"assignment_event","event":"assignment_active","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"leaseSeconds":60,"gcMillis":123550}
 {"type":"assignment_event","event":"assignment_removed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"operator_clear","gcMillis":183550}
 {"type":"assignment_event","event":"tx_period_proposal_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"measuredCycleMs":58,"proposedPeriodMs":73,"mspBatchMs":19,"txDurationMs":38,"mspFlags":6,"gcMillis":123620}
@@ -121,6 +122,8 @@ Examples:
 ```
 
 Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`. The GC accepts protocol-valid proposals but clamps the accepted period to at least `100 ms`.
+
+Protocol note: live-position air control packets now use high-range packet IDs `0xA1-0xA6`. These IDs are not exposed directly in serial JSON, but the change prevents assigned-channel telemetry from node IDs such as `6` from being mistaken for legacy timing-control packets. This is a breaking firmware change; the GC and all drone ESP32s must be reflashed together.
 
 - [x] Milestone 3b: Define scanner event JSON
   - [x] Emit scheduler state changes and timing corrections as `scanner_event`.
@@ -150,6 +153,11 @@ Default firmware behavior suppresses high-rate scanner events such as `assigned_
   - [x] Keep a silent in-browser rolling diagnostic log of the Web Serial stream while SGC owns the port.
     - It records incoming GC lines and outgoing SGC commands with a `direction` field.
     - Browser console helpers: `downloadLiveGcLog()` exports JSONL, and `getLiveGcLog()` returns the current in-memory entries.
+  - [x] Temporarily expose the in-browser diagnostic log in the SGC USB panel for field debugging.
+    - `Download` exported JSONL with a leading snapshot of current drones, assignments, link states, pending commands, recent scanner/search/assignment events, and GC status.
+    - `Clear` reset the capture before reproducing a field issue.
+    - Local UI actions such as Search, Re-lock, serial open/close, and command timeouts are recorded alongside serial lines.
+    - After the two-node Search/scheduler issue was diagnosed, the visible USB-panel controls were removed from the production operator UI. Console helpers remain for bench use.
   - [ ] Use a long capture during a multi-drone failure and attach the generated JSONL/summary notes to the scheduler bench results.
 
 - [x] Milestone 4: Define channel table JSON

@@ -36,6 +36,8 @@ const LIVE_FRESHNESS_MS = {
   stale: 5000,
 };
 const LIVE_RELOCK_TIMEOUT_MS = 8000;
+const LIVE_LINK_RECOVERY_CONFIRM_PACKETS = 2;
+const LIVE_LINK_RECOVERY_CONFIRM_MS = 2000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 const LIVE_GC_DIAGNOSTIC_LOG_LIMIT = cfg("LIVE_GC_DIAGNOSTIC_LOG_LIMIT", 20000);
@@ -158,6 +160,7 @@ const liveState = {
   linkStatuses: new Map(),
   relockRequests: new Map(),
   deleteRequests: new Map(),
+  assignmentTelemetryWatchdogs: new Map(),
   droneAliases: loadLiveDroneAliases(),
   droneActionSheet: null,
   homePlacementActive: false,
@@ -2968,15 +2971,27 @@ function pickLiveDiagnosticFields(message) {
     "commandId",
     "accepted",
     "reason",
+    "state",
+    "activityDetected",
+    "searchMode",
+    "assignedDrones",
     "gcMillis",
     "sequenceId",
     "frequencyMhz",
     "channelIndex",
+    "radioProfileId",
+    "defaultAssignmentRadioProfileId",
+    "spreadingFactor",
+    "bandwidthHz",
+    "codingRate",
     "txPeriodMs",
     "telemetryAirtimeMs",
+    "searchSharedDwellMs",
     "rssi",
     "snr",
     "missCount",
+    "timingAccepted",
+    "lastSequenceId",
     "nextTstGcMillis",
     "estimatedTstGcMillis",
     "listenStartGcMillis",
@@ -2985,18 +3000,31 @@ function pickLiveDiagnosticFields(message) {
   return Object.fromEntries(keys.filter((key) => message[key] !== undefined).map((key) => [key, message[key]]));
 }
 
+function pushLiveGcDiagnosticEntry(entry) {
+  liveState.gcDiagnosticLog.push(entry);
+  while (liveState.gcDiagnosticLog.length > LIVE_GC_DIAGNOSTIC_LOG_LIMIT) {
+    liveState.gcDiagnosticLog.shift();
+  }
+}
+
+function makeLiveDiagnosticBaseEntry({ source = "sgc-web-serial", direction = "local" } = {}) {
+  return {
+    pcTimeIso: new Date().toISOString(),
+    pcElapsedMs: Date.now() - liveState.gcDiagnosticStartedAt,
+    source,
+    direction,
+    baud: liveState.baudRate,
+    port: liveState.portLabel,
+    lineNumber: ++liveState.gcDiagnosticLineNumber,
+  };
+}
+
 function recordLiveGcDiagnosticLine(rawLine, { parsed = null, parseError = null, direction = "gc_to_sgc" } = {}) {
   const line = String(rawLine || "").trim();
   if (!line) return;
 
   const entry = {
-    pcTimeIso: new Date().toISOString(),
-    pcElapsedMs: Date.now() - liveState.gcDiagnosticStartedAt,
-    source: "sgc-web-serial",
-    direction,
-    baud: liveState.baudRate,
-    port: liveState.portLabel,
-    lineNumber: ++liveState.gcDiagnosticLineNumber,
+    ...makeLiveDiagnosticBaseEntry({ source: "sgc-web-serial", direction }),
     raw: line,
     isJson: Boolean(parsed),
     ...pickLiveDiagnosticFields(parsed),
@@ -3004,10 +3032,65 @@ function recordLiveGcDiagnosticLine(rawLine, { parsed = null, parseError = null,
   if (parsed) entry.json = parsed;
   if (parseError) entry.parseError = parseError;
 
-  liveState.gcDiagnosticLog.push(entry);
-  while (liveState.gcDiagnosticLog.length > LIVE_GC_DIAGNOSTIC_LOG_LIMIT) {
-    liveState.gcDiagnosticLog.shift();
-  }
+  pushLiveGcDiagnosticEntry(entry);
+}
+
+function recordLiveGcDiagnosticEvent(diagnosticEvent, detail = {}) {
+  pushLiveGcDiagnosticEntry({
+    ...makeLiveDiagnosticBaseEntry({ source: "sgc-ui", direction: "local" }),
+    diagnosticEvent,
+    ...detail,
+  });
+}
+
+function makeLiveGcDiagnosticSnapshotEntry() {
+  const assignments = Array.isArray(liveState.channelTable?.assignments)
+    ? liveState.channelTable.assignments.map((assignment) => ({
+        nodeId: assignment.nodeId,
+        frequencyMhz: assignment.frequencyMhz,
+        radioProfileId: assignment.radioProfileId,
+        txPeriodMs: assignment.txPeriodMs,
+        timingAccepted: assignment.timingAccepted,
+        linkState: assignment.linkState,
+        missCount: assignment.missCount,
+        lastSequenceValid: assignment.lastSequenceValid,
+        lastSequenceId: assignment.lastSequenceId,
+      }))
+    : [];
+  const droneSummaries = drones.map((drone) => {
+    const latest = drone.getLatest?.() || {};
+    const now = Date.now();
+    const freshness = getLiveFreshnessState(drone, now);
+    return {
+      nodeId: drone.id,
+      label: getLiveDroneDisplayName(drone.id),
+      lastReceivedAt: drone.lastReceivedAt,
+      ageMs: drone.lastReceivedAt ? now - drone.lastReceivedAt : null,
+      displayState: getLiveDisplayState(drone, freshness, now),
+      sequenceId: latest.sequenceId,
+      frequencyMhz: latest.frequencyMhz,
+      radioProfileId: latest.radioProfileId,
+      txPeriodMs: latest.txPeriodMs,
+      rssi: latest.rssi,
+      snr: latest.snr,
+    };
+  });
+  return {
+    ...makeLiveDiagnosticBaseEntry({ source: "sgc-ui", direction: "local" }),
+    diagnosticEvent: "export_snapshot",
+    connected: liveState.connected,
+    searchPending: liveState.searchPending,
+    searchMode: liveState.searchMode,
+    relayState: liveState.relayState,
+    gcStatus: liveState.gcStatus,
+    assignments,
+    drones: droneSummaries,
+    pendingCommands: [...liveState.pendingCommands.entries()].map(([commandId, command]) => ({ commandId, ...command })),
+    recentAssignmentEvents: liveState.assignmentEvents.slice(-8),
+    recentSearchEvents: liveState.searchEvents.slice(-8),
+    recentScannerEvents: liveState.scannerEvents.slice(-8),
+    linkStatuses: [...liveState.linkStatuses.entries()].map(([nodeId, status]) => ({ nodeId, ...status })),
+  };
 }
 
 function exportLiveGcDiagnosticLog() {
@@ -3015,7 +3098,8 @@ function exportLiveGcDiagnosticLog() {
     appendLiveDebug("diagnostic log is empty");
     return;
   }
-  const jsonl = `${liveState.gcDiagnosticLog.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+  const entries = [makeLiveGcDiagnosticSnapshotEntry(), ...liveState.gcDiagnosticLog];
+  const jsonl = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const filename = `sgc_gc_serial_${stamp}.jsonl`;
   const blob = new Blob([jsonl], { type: "application/x-ndjson" });
@@ -3030,7 +3114,15 @@ function exportLiveGcDiagnosticLog() {
   appendLiveDebug(`diagnostic log exported: ${filename}`);
 }
 
+function clearLiveGcDiagnosticLog() {
+  liveState.gcDiagnosticLog = [];
+  liveState.gcDiagnosticLineNumber = 0;
+  liveState.gcDiagnosticStartedAt = Date.now();
+  appendLiveDebug("diagnostic log cleared");
+}
+
 window.downloadLiveGcLog = exportLiveGcDiagnosticLog;
+window.clearLiveGcLog = clearLiveGcDiagnosticLog;
 window.getLiveGcLog = () => liveState.gcDiagnosticLog.slice();
 
 function formatLiveAge(receivedAt = null, now = Date.now()) {
@@ -3107,7 +3199,16 @@ function renderLiveTimingLine(host, drone, latest, now = Date.now()) {
 
   const rateEl = document.createElement("span");
   rateEl.className = "live-timing-rate";
-  rateEl.textContent = updateRateHz === null ? "-- Hz" : `${updateRateHz.toFixed(1)} Hz`;
+  const rateValueEl = document.createElement("span");
+  rateValueEl.className = "live-timing-rate-value";
+  rateValueEl.textContent = updateRateHz === null ? "--" : updateRateHz.toFixed(1);
+  rateEl.appendChild(rateValueEl);
+
+  const rateUnitEl = document.createElement("span");
+  rateUnitEl.className = "live-timing-rate-unit";
+  rateUnitEl.textContent = "Hz";
+  rateEl.appendChild(rateUnitEl);
+
   host.appendChild(rateEl);
 }
 
@@ -3372,6 +3473,17 @@ function isLiveDroneRelocking(nodeId, now = Date.now()) {
   return true;
 }
 
+function isLiveTerminalLinkState(state) {
+  return ["weak", "off", "offline"].includes(String(state || "").toLowerCase());
+}
+
+function noteLiveTelemetryForLinkStatus(nodeId, previousReceivedAt = null, now = Date.now()) {
+  const id = Number(nodeId);
+  const linkStatus = liveState.linkStatuses.get(id);
+  if (!linkStatus) return;
+  liveState.linkStatuses.delete(id);
+}
+
 function getLiveDisplayState(drone, freshness, now = Date.now()) {
   if (drone && isLiveDroneRelocking(drone.id, now)) return "locking";
   if (drone) {
@@ -3379,8 +3491,14 @@ function getLiveDisplayState(drone, freshness, now = Date.now()) {
     const latest = drone.getLatest && drone.getLatest();
     const statusReceivedAt = Number(linkStatus?.receivedAt);
     const latestReceivedAt = Number(latest?.receivedAt);
+    const state = String(linkStatus?.state || "").toLowerCase();
+    if (linkStatus?.holdUntilRecovered && isLiveTerminalLinkState(state)) {
+      return state;
+    }
+    if (state === "offline" && Number.isFinite(latestReceivedAt) && ["fresh", "late"].includes(freshness)) {
+      return freshness;
+    }
     if (linkStatus && (!Number.isFinite(latestReceivedAt) || !Number.isFinite(statusReceivedAt) || statusReceivedAt >= latestReceivedAt)) {
-      const state = String(linkStatus.state || "").toLowerCase();
       if (["locking", "weak", "off", "offline"].includes(state)) return state;
     }
   }
@@ -4234,11 +4352,14 @@ function cancelLiveSpectrumRescanConfirmation() {
 async function requestLiveDroneRelock(nodeId) {
   const id = Number(nodeId);
   if (!Number.isFinite(id) || id <= 0) return;
+  recordLiveGcDiagnosticEvent("ui_relock_requested", { nodeId: id });
   if (isLiveRemoteViewerMode()) {
+    recordLiveGcDiagnosticEvent("ui_relock_rejected", { nodeId: id, reason: "remote_view_only" });
     appendLiveDebug("relock unavailable: remote live endpoint is read-only");
     return;
   }
   if (!liveState.connected) {
+    recordLiveGcDiagnosticEvent("ui_relock_rejected", { nodeId: id, reason: "serial_disconnected" });
     appendLiveDebug(`relock unavailable: connect GC serial first for node ${id}`);
     return;
   }
@@ -4264,6 +4385,7 @@ async function requestLiveDroneRelock(nodeId) {
     liveState.relockRequests.delete(id);
     if (liveState.pendingCommands.has(commandId)) {
       liveState.pendingCommands.delete(commandId);
+      recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "relock_drone", commandId, nodeId: id });
       appendLiveDebug(`command timeout: relock_drone node ${id}`);
     }
     updateStatusList();
@@ -4271,13 +4393,20 @@ async function requestLiveDroneRelock(nodeId) {
 }
 
 async function startLiveSearchMode() {
+  recordLiveGcDiagnosticEvent("ui_search_requested", {
+    searchPending: liveState.searchPending,
+    searchMode: liveState.searchMode,
+    assignedDrones: Number(liveState.gcStatus?.assignedDrones),
+  });
   if (liveState.searchPending || liveState.searchMode) return;
   if (isLiveRemoteViewerMode()) {
+    recordLiveGcDiagnosticEvent("ui_search_rejected", { reason: "remote_view_only" });
     appendLiveDebug("search unavailable: remote live endpoint is read-only");
     renderLiveControls();
     return;
   }
   if (!liveState.connected) {
+    recordLiveGcDiagnosticEvent("ui_search_rejected", { reason: "serial_disconnected" });
     appendLiveDebug("search unavailable: connect GC serial first");
     renderLiveControls();
     return;
@@ -4290,6 +4419,7 @@ async function startLiveSearchMode() {
       if (!liveState.pendingCommands.has(commandId)) return;
       liveState.pendingCommands.delete(commandId);
       liveState.searchPending = false;
+      recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "start_search", commandId });
       appendLiveDebug("command timeout: start_search");
       renderLiveControls();
     }, 6000);
@@ -4329,6 +4459,7 @@ async function startLiveSpectrumRescan() {
       liveState.pendingCommands.delete(commandId);
       liveState.spectrumRescanPending = false;
       liveState.spectrumStatus = "Re-scan command timed out. The GC firmware may need to be updated.";
+      recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "rescan_channels", commandId });
       appendLiveDebug("command timeout: rescan_channels");
       renderLiveGcStatus();
     }, 12000);
@@ -4830,8 +4961,18 @@ function applyLiveTelemetry(message, source = "serial") {
   }
 
   const drone = getOrCreateLiveDrone(message.nodeId);
+  const latest = drone.getLatest && drone.getLatest();
+  const incomingSequenceId = Number(message.sequenceId);
+  const latestSequenceId = Number(latest?.sequenceId);
+  if (Number.isFinite(incomingSequenceId) && Number.isFinite(latestSequenceId) && incomingSequenceId === latestSequenceId) {
+    return;
+  }
+
+  const now = Date.now();
+  const previousReceivedAt = Number(drone.lastReceivedAt);
+  clearLiveAssignmentTelemetryWatchdog(message.nodeId);
   liveState.relockRequests.delete(Number(message.nodeId));
-  liveState.linkStatuses.delete(Number(message.nodeId));
+  noteLiveTelemetryForLinkStatus(message.nodeId, previousReceivedAt, now);
   drone.updateTelemetry(
     {
       uptimeSec: message.gcMillis ? message.gcMillis / 1000 : 0,
@@ -4864,7 +5005,7 @@ function applyLiveTelemetry(message, source = "serial") {
       command: "Live telemetry",
       armed: true,
     },
-    Date.now()
+    now
   );
   updateStatusList();
   draw();
@@ -4879,6 +5020,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   liveState.relockRequests.clear();
   liveState.linkStatuses.clear();
   liveState.deleteRequests.clear();
+  clearAllLiveAssignmentTelemetryWatchdogs();
   if (clearAssignments) {
     liveState.assignmentEvents = [];
     if (liveState.channelTable) {
@@ -4917,6 +5059,39 @@ function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
   }
 }
 
+function clearLiveAssignmentTelemetryWatchdog(nodeId) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return;
+  const timer = liveState.assignmentTelemetryWatchdogs.get(id);
+  if (timer) {
+    window.clearTimeout(timer);
+    liveState.assignmentTelemetryWatchdogs.delete(id);
+  }
+}
+
+function clearAllLiveAssignmentTelemetryWatchdogs() {
+  liveState.assignmentTelemetryWatchdogs.forEach((timer) => window.clearTimeout(timer));
+  liveState.assignmentTelemetryWatchdogs.clear();
+}
+
+function scheduleLiveAssignmentTelemetryWatchdog(message) {
+  const nodeId = Number(message?.nodeId);
+  if (!Number.isFinite(nodeId) || isLiveRemoteViewerMode()) return;
+  clearLiveAssignmentTelemetryWatchdog(nodeId);
+  const startedAt = Date.now();
+  const timer = window.setTimeout(async () => {
+    liveState.assignmentTelemetryWatchdogs.delete(nodeId);
+    const drone = getDroneById(nodeId);
+    if (drone?.lastReceivedAt && drone.lastReceivedAt >= startedAt) return;
+    if (!liveState.connected) return;
+    appendLiveDebug(`assignment watchdog: no telemetry after ACK for node ${nodeId}`);
+    await sendLiveSerialCommand("get_status");
+    await sendLiveSerialCommand("get_channel_table");
+    await sendLiveSerialCommand("relock_drone", { nodeId });
+  }, 2200);
+  liveState.assignmentTelemetryWatchdogs.set(nodeId, timer);
+}
+
 function handleLiveProtocolMessage(message, source = "serial") {
   const issues = validateLiveProtocolMessage(message);
   if (issues.length) {
@@ -4935,6 +5110,9 @@ function handleLiveProtocolMessage(message, source = "serial") {
   } else if (message.type === "assignment_event") {
     liveState.assignmentEvents.push(message);
     while (liveState.assignmentEvents.length > 8) liveState.assignmentEvents.shift();
+    if (message.event === "tx_period_ack_sent") {
+      scheduleLiveAssignmentTelemetryWatchdog(message);
+    }
     renderLiveGcStatus();
   } else if (message.type === "command_ack") {
     liveState.lastCommandAck = message;
@@ -4999,9 +5177,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     if (message.event === "fresh_session_complete" || message.event === "fresh_session_failed") {
       liveState.freshSessionPending = false;
     }
-    if (message.event === "fresh_session_complete") {
-      clearLiveSerialDrones({ clearAssignments: true });
-    }
     appendLiveDebug(`session: ${message.event}${message.reason ? ` (${message.reason})` : ""}`);
     renderLiveControls();
     renderLiveGcStatus();
@@ -5053,7 +5228,9 @@ function handleLiveProtocolMessage(message, source = "serial") {
     liveState.searchEvents.push(message);
     while (liveState.searchEvents.length > 12) liveState.searchEvents.shift();
     liveState.searchPending = false;
-    if (["search_started", "join_detected", "assignment_completed", "search_telemetry_round"].includes(message.event)) {
+    if (typeof message.searchMode === "boolean") {
+      liveState.searchMode = message.searchMode;
+    } else if (["search_started", "join_detected", "assignment_completed", "search_telemetry_round"].includes(message.event)) {
       liveState.searchMode = true;
     } else if (["search_complete", "search_timeout"].includes(message.event)) {
       liveState.searchMode = false;
@@ -5064,6 +5241,13 @@ function handleLiveProtocolMessage(message, source = "serial") {
   } else if (message.type === "drone_link_status") {
     const nodeId = Number(message.nodeId);
     if (Number.isFinite(nodeId)) {
+      const drone = drones.find((d) => d.id === nodeId);
+      const latest = drone && typeof drone.getLatest === "function" ? drone.getLatest() : null;
+      const latestGcMillis = Number(latest?.gcMillis);
+      const statusGcMillis = Number(message.gcMillis);
+      if (Number.isFinite(latestGcMillis) && Number.isFinite(statusGcMillis) && statusGcMillis <= latestGcMillis) {
+        return;
+      }
       liveState.linkStatuses.set(nodeId, { ...message, receivedAt: Date.now() });
       if (message.state === "locking") {
         liveState.relockRequests.set(nodeId, {
@@ -5237,6 +5421,7 @@ async function startFreshSession() {
       if (!liveState.pendingCommands.has(commandId)) return;
       liveState.pendingCommands.delete(commandId);
       liveState.freshSessionPending = false;
+      recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "clear_all_assignments", commandId });
       appendLiveDebug("command timeout: clear_all_assignments");
       renderLiveControls();
       renderLiveGcStatus();
@@ -5275,6 +5460,7 @@ async function readLiveSerialLoop() {
 }
 
 function markLiveSerialDisconnected(reason) {
+  recordLiveGcDiagnosticEvent("serial_disconnected", { reason });
   liveState.keepReading = false;
   liveState.connected = false;
   liveState.port = null;
@@ -5289,7 +5475,9 @@ function markLiveSerialDisconnected(reason) {
 }
 
 async function openLiveSerialPort({ port = null, auto = false } = {}) {
+  recordLiveGcDiagnosticEvent("serial_open_requested", { auto });
   if (!("serial" in navigator)) {
+    recordLiveGcDiagnosticEvent("serial_open_rejected", { reason: "web_serial_unavailable" });
     setLiveSerialState("error", "Unsupported", "Web Serial is unavailable in this browser.");
     return;
   }
@@ -5321,6 +5509,12 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
       "Connected",
       `${auto ? "Auto-connected. " : ""}Reading USB serial at ${baudRate} baud.`
     );
+    recordLiveGcDiagnosticEvent("serial_opened", {
+      auto,
+      baudRate,
+      port: liveState.portLabel,
+      portInfo: liveState.lastSerialPortInfo,
+    });
     renderLiveControls();
     readLiveSerialLoop();
     window.setTimeout(requestLiveGcSnapshot, 150);
@@ -5332,6 +5526,7 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
       ? "Failed to open serial port. Another app may already own it."
       : err.message || "Serial open failed.";
     setLiveSerialState("error", "Disconnected", auto ? `Auto-connect failed: ${detail}` : detail);
+    recordLiveGcDiagnosticEvent("serial_open_failed", { auto, reason: detail });
     renderLiveControls();
     if (auto && !liveState.userClosedSerial) {
       scheduleLiveSerialReconnect("auto-connect failed");
@@ -5365,6 +5560,7 @@ async function autoConnectRememberedLiveSerialPort() {
 }
 
 async function closeLiveSerialPort() {
+  recordLiveGcDiagnosticEvent("serial_close_requested");
   liveState.userClosedSerial = true;
   liveState.reconnecting = false;
   clearLiveSerialReconnectTimer();

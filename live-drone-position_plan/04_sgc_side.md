@@ -246,10 +246,20 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add a `Search` button to the USB Serial panel.
 - [x] Disable and style Search while the GC reports active Search mode.
 - [x] Parse `search_event` and `gc_status.searchMode`.
+- [x] Honor explicit `search_event.searchMode` instead of inferring Search state from event names.
+  - Field log `sgc_gc_serial_2026-06-10T22-11-31-922Z.jsonl` showed automatic no-assignment discovery emitted `join_detected` / `assignment_completed` with `searchMode:false`, but SGC inferred Search was active and left the button pressed. SGC now trusts the firmware boolean when present.
 - [x] Parse `drone_link_status`.
 - [x] Display `ONLINE`, `LOCKING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
+- [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.
+  - Any valid `drone_telemetry` clears stored `LOCKING`/`WEAK`/`OFF`/`OFFLINE` link status for that node immediately.
+  - Ignore `drone_link_status` events whose `gcMillis` is older than or equal to the latest accepted telemetry for that node.
+- [x] Add temporary visible GC diagnostic log controls to the USB panel.
+  - `Download` exported the rolling serial/UI JSONL capture with a current-state snapshot.
+  - `Clear` let the operator reset the capture before reproducing a Search/relock failure.
+  - After the Search/scheduler issue was reproduced and fixed, the visible controls were removed from the production operator UI. The silent in-memory capture/debug helpers remain available for future bench troubleshooting.
+- [ ] Manually verify disconnecting a drone leaves it in a stable non-online state.
 - [x] Start live-position mode without a default HOME marker.
 - [x] Add a live map long-press/right-click menu for local HOME placement.
 - [x] Allow multiple local HOME markers.

@@ -156,27 +156,31 @@ Invalid-field encoding:
 Packet type IDs:
 
 ```text
-0x01  JOIN_REQUEST
-0x02  SILENCE
-0x03  JOIN_ASSIGN
-0x04  JOIN_ACK
-0x05  TX_PERIOD_PROPOSAL
-0x06  TX_PERIOD_ACK
-0x07-0x7F  reserved for future branch protocol packets
-0x80-0xFF  reserved for debug/vendor/experimental packets
+0xA1  JOIN_REQUEST
+0xA2  SILENCE
+0xA3  JOIN_ASSIGN
+0xA4  JOIN_ACK
+0xA5  TX_PERIOD_PROPOSAL
+0xA6  TX_PERIOD_ACK
+0x01-0x9F  reserved away from control packets because assigned telemetry starts with `node_id`
+0xA7-0xFF  reserved for future branch protocol packets
 ```
+
+Implementation note: field testing with node `6` exposed why low control IDs are unsafe. A telemetry packet from node `6` starts with `0x06`, which collided with the old legacy timing-proposal ID. Current firmware uses the high `0xA*` control namespace and requires all live-position ESP32s to be reflashed together.
 
 - [x] Milestone 5: Define `JOIN_REQUEST`
   - [x] Include packet type.
   - [x] Include drone node ID.
   - [x] Include a random join nonce.
   - [x] Include capability flags.
+    - `JOIN_CAP_RADIO_PROFILE_SWITCH` indicates the drone can apply non-Fast assigned telemetry profiles. If this bit is missing, the GC falls back to Fast profile `0` for compatibility.
+    - `JOIN_CAP_EXTENDED_TX_PERIOD` indicates the drone accepts assigned periods above the old `250 ms` ceiling. If the selected future profile needs a longer period and this bit is missing, the GC falls back to Fast profile `0` instead of sending an assignment the drone will reject.
   - [x] Keep the packet near `5 bytes`.
 
 Final layout:
 
 ```text
-type               uint8    1    # 0x01
+type               uint8    1    # 0xA1
 node_id            uint8    1
 nonce              uint16   2
 cap_flags          uint8    1
@@ -190,7 +194,9 @@ total                       5 bytes
 bit 0      supports live-position v1
 bit 1      supports MSP attitude/yaw
 bit 2      supports GPS course/speed
-bits 3-7   reserved, must be 0 in v1
+bit 3      supports assigned radio profile switching
+bit 4      supports assigned TX periods above 250 ms
+bits 5-7   reserved
 ```
 
 - [x] Milestone 6: Define `SILENCE`
@@ -203,7 +209,7 @@ bits 3-7   reserved, must be 0 in v1
 Final layout:
 
 ```text
-type               uint8    1    # 0x02
+type               uint8    1    # 0xA2
 silence_seq        uint8    1
 quiet_ms           uint16   2
 -----------------------------
@@ -229,7 +235,7 @@ Rules:
 Final layout:
 
 ```text
-type               uint8    1    # 0x03
+type               uint8    1    # 0xA3
 target_node_id     uint8    1
 nonce              uint16   2
 channel_index      uint8    1
@@ -256,7 +262,7 @@ Notes:
 Final layout:
 
 ```text
-type               uint8    1    # 0x04
+type               uint8    1    # 0xA4
 node_id            uint8    1
 nonce              uint16   2
 channel_index      uint8    1
@@ -270,7 +276,7 @@ total                       5 bytes
   - [x] Keep the proposal on the assigned channel after `JOIN_ACK`.
   - [x] Drone measures one `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX` probe cycle.
   - [x] Drone proposes `measured_cycle_ms + 15 ms`.
-  - [x] GC accepts periods from `45-250 ms`.
+  - [x] GC accepts periods from `45-1000 ms` so Balanced/Robust profile timing proposals are valid.
   - [x] GC clamps accepted periods to at least `100 ms` so the single-radio scanner has enough margin.
   - [x] GC ignores the first 20-byte probe telemetry for SGC output and TST lock.
   - [x] GC persists the accepted period but keeps TST/RSSI/SNR/miss counters in RAM only.
@@ -278,7 +284,7 @@ total                       5 bytes
 `TX_PERIOD_PROPOSAL` layout:
 
 ```text
-type                 uint8    1    # 0x05
+type                 uint8    1    # 0xA5
 node_id              uint8    1
 sequence_id          uint8    1
 measured_cycle_ms    uint16   2
@@ -293,7 +299,7 @@ total                        12 bytes
 `TX_PERIOD_ACK` layout:
 
 ```text
-type                 uint8    1    # 0x06
+type                 uint8    1    # 0xA6
 node_id              uint8    1
 sequence_id          uint8    1
 accepted_period_ms   uint16   2

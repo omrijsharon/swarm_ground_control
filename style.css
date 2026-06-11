@@ -1607,13 +1607,14 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   display: flex;
   align-items: baseline;
   gap: 3px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   min-width: 0;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .live-timing-frequency{
-  flex: 0 0 auto;
+  flex: 0 0 9.4ch;
 }
 
 .live-timing-separator,
@@ -1632,7 +1633,22 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-timing-rate{
-  flex: 0 0 5.5ch;
+  flex: 0 0 6.4ch;
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 2px;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+.live-timing-rate-value{
+  flex: 0 0 4ch;
+  text-align: right;
+}
+
+.live-timing-rate-unit{
+  flex: 0 0 auto;
 }
 
 .status-battery{

@@ -246,7 +246,8 @@ The firmware has two runtime roles in this branch:
   - [x] Measure one probe cycle before steady telemetry.
     - The measured cycle is `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX`.
   - [x] Send `TX_PERIOD_PROPOSAL` with measured cycle time, proposed period, MSP batch time, TX duration, and MSP flags.
-  - [x] Retry the same timing proposal up to five times while waiting `50 ms` for ACK.
+  - [x] Retry the same timing proposal while waiting for a profile-aware ACK timeout.
+    - The original fixed `50 ms` wait was too tight once flash persistence and slower profiles were added. The drone now waits for `TX_PERIOD_ACK` airtime plus guard time.
   - [x] Enter steady telemetry only after accepted `TX_PERIOD_ACK`.
   - [x] Schedule steady cycles from cycle start using the accepted period.
   - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
@@ -275,10 +276,12 @@ The firmware has two runtime roles in this branch:
   - [x] Ignore the first 20-byte probe telemetry while waiting for a timing proposal.
     - If a probe or invalid packet is ignored during acquisition, the GC immediately restarts RX so it can still catch the following `TX_PERIOD_PROPOSAL`.
     - The drone waits `30 ms` after the probe telemetry before sending `TX_PERIOD_PROPOSAL`, giving the GC time to re-arm RX without changing steady telemetry timing.
-  - [x] Validate proposed TX periods in the `45-250 ms` range.
+  - [x] Validate proposed TX periods in the `45-1000 ms` range.
+    - The upper bound was raised from `250 ms` so Balanced/Robust profile timing proposals are valid.
     - GC accepts only protocol-valid proposals, then clamps the accepted operating period to at least `100 ms`.
   - [x] Send `TX_PERIOD_ACK` with the accepted period.
     - `TX_PERIOD_ACK` is `6 bytes`: type, node ID, sequence ID, accepted period, and status.
+    - GC now sends this ACK before saving the accepted timing to flash, so LittleFS latency cannot make a rejoining drone time out after `tx_period_ack_sent` appears in SGC.
   - [x] Persist accepted `txPeriodMs` and `timingAccepted`.
   - [x] Normalize persisted assignments from older timing schemes when loading from flash.
     - Channels are kept, but old saved `250 ms` timing from the temporary slot firmware does not remain timing-accepted.
@@ -441,7 +444,9 @@ The firmware has two runtime roles in this branch:
     - Relock now reserves assigned-channel listen time for up to `GC_MANUAL_RELOCK_ACTIVE_MS = 1200`, with `GC_MANUAL_RELOCK_LISTEN_MS = 180` listen slices and `20 ms` retry spacing. This intentionally comes at the expense of normal known-phase drone listening while the operator-requested relock is active.
     - Runtime-only; the manual relock window is not persisted to flash and clears immediately after valid telemetry reacquires TST.
   - [x] Make post-ACK first-telemetry lock preemptive for reset/rejoined drones.
-    - After `tx_period_ack_sent`, the GC now reserves assigned-channel listen time for up to `GC_POST_ACK_LOCK_ACTIVE_MS = 1500`, using `180 ms` listen slices and `20 ms` retry spacing until the first steady telemetry packet reacquires TST.
+    - After `tx_period_ack_sent`, the GC now reserves assigned-channel listen time for up to `GC_POST_ACK_LOCK_ACTIVE_MS = 1500`, using profile-aware listen slices and `20 ms` retry spacing until the first steady telemetry packet reacquires TST.
+  - [x] Fix Search-mode stale-assignment rejoin probing.
+    - The scheduler had a `findRejoinProbeAssignment(...)` helper but did not assign its result, so reset drones on the shared channel were not actually rediscovered during Search. Node `6` was verified after clearing its stale assignment: Search assigned `904.0 MHz`, accepted timing, and emitted steady `drone_telemetry`.
     - This fixes the case where SGC shows `Last assignment: tx_period_ack_sent node N` but the node never becomes `ONLINE` because the first steady telemetry lock was starved by already-online drones.
   - [x] Bench-test late SGC connection by requesting status and channel table after GC boot.
     - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
@@ -473,8 +478,17 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Emit `search_event` messages.
 - [x] Disable routine shared-channel visits while assigned drones exist and Search is inactive.
 - [x] Keep shared discovery automatic when no drones are assigned.
+- [x] Make operator Search preempt regular assigned-channel telemetry windows so the GC actually dwells on the shared discovery channel.
+  - Without this, a healthy `100 ms` assigned drone can keep winning every scheduler decision, making Search appear active while the radio remains on the assigned channel.
 - [x] After a Search assignment/timing lock, run one scanner round across existing assigned drones.
+- [x] Advance stale known-phase TST predictions before selecting post-Search telemetry-round slots.
+  - Field log `sgc_gc_serial_2026-06-10T23-58-12-628Z.jsonl` showed the GC could assign the second node, but then immediately marked the first node missed/offline because `search_telemetry_round` used a receive window whose predicted TST had expired during the shared-channel Search dwell.
 - [x] Compute Search shared dwell from discovery control packet airtime instead of a fixed constant.
+- [x] Keep operator Search alive for a minimum reboot/rejoin window.
+  - Superseded by the field-test hard cap below. The earlier `10 s` minimum made the UI look stuck in Search while assigned telemetry was already flowing.
+- [x] Limit operator Search to a hard maximum of `3 s`.
+  - Earlier builds stopped after one packet-free shared dwell, but a direct node `6` serial capture showed JOIN retries about every `1.6 s`; one `911 ms` dwell can miss by phase.
+  - Search now keeps shared RX windows active until it finds a join or emits `search_timeout` with reason `max_duration_elapsed`, clears `searchMode`, and returns to normal tracking no later than `GC_SEARCH_MAX_ACTIVE_MS = 3000`.
 - [x] Add `scanChannelActivity()` to the radio backend interface.
 - [x] Implement SX1262 LoRa CAD/activity detection with RadioLib `scanChannel()`.
 - [x] Add assigned-channel recovery classification using valid decode, CAD activity, or no activity.
@@ -487,10 +501,59 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Implement `set_radio_profile` for future assignments.
 - [x] Persist the default future-assignment radio profile.
 - [x] Allocate new assignments with the selected radio profile ID.
+- [x] Add `JOIN_CAP_RADIO_PROFILE_SWITCH` and fall back to Fast profile `0` when a joining drone does not advertise profile switching.
+- [x] Add `JOIN_CAP_EXTENDED_TX_PERIOD` and fall back to Fast profile `0` when the selected profile needs a period above `250 ms` but the joining drone only advertises the older profile-switch capability.
+- [x] Reassign a rediscovered node if the selected future profile differs from its existing assignment profile.
 - [x] Apply the assigned profile on drone timing proposal and telemetry TX.
 - [x] Apply each drone's assigned profile while the GC scanner listens.
+- [x] Keep GC scanner control packets separate from real telemetry so `TX_PERIOD_PROPOSAL` handling does not falsely create an online drone state.
+- [x] Resend duplicate `TX_PERIOD_ACK` without rewriting assignment flash when a drone repeats the same timing proposal.
+- [x] Reject duplicate assigned-channel telemetry `sequence_id` values before updating TST or emitting `drone_telemetry`.
+- [x] Use a bounded `500 ms` LoRa activity lock probe after a missed assigned listen window, classify no activity as `OFF`, and stop automatic assigned-channel locking for terminal `OFF` drones.
+- [x] When all active assignments are terminal `OFF`, stop idling and listen on shared discovery for reset-drone rejoin requests.
+  - This preserves the no-periodic-shared-scan policy while healthy drones are online, but fixes the one-drone reset case where Delete made rejoin work only because it removed the last active assignment.
+- [x] Clear terminal `OFF` runtime state when the node is rediscovered through shared-channel Search or sends a timing proposal, so fresh rejoin/acquisition is not blocked.
+- [x] Roll back pending assignments when `JOIN_ACK` retries are exhausted.
+  - Failed ACK now restores a previous assignment or removes the new pending assignment from RAM and `/live_assignments.json`, instead of leaving `timingAccepted=false` assignments that flicker `LOCKING`/`WEAK`.
+- [x] Move live-position control packet IDs out of the telemetry node-ID range.
+  - Control packets now use `0xA1-0xA6` so assigned-channel telemetry starting with node IDs such as `6` cannot be misread as control packets.
+  - This is a breaking air-protocol change; GC and every drone ESP32 must be reflashed together.
+- [x] Accept matching late JOIN_ACK packets during assigned-channel acquisition.
+  - The GC stores the active join nonce in RAM for the pending assignment. If a matching JOIN_ACK arrives after the strict ACK wait but before timing lock, the GC treats it as a control packet, emits `late_join_ack_received`, and keeps listening for the timing proposal instead of chasing it as wrong-size telemetry.
+- [x] Clamp timing proposals to the assigned radio profile's safe minimum period.
+  - A Robust-profile diagnostic accepted `256 ms` even though its 20-byte telemetry airtime is about `395 ms`. Both drone proposal generation and GC proposal acceptance now floor the period at `telemetryTxPeriodMs(assigned_profile)`.
+- [x] Give drones a larger profile-aware wait for `TX_PERIOD_ACK`.
+  - Slow-profile ACK airtime plus firmware/radio turnaround can exceed the old Fast-oriented guard. The drone now uses a larger timing ACK guard before retrying a proposal.
+- [x] Require exact 6-byte `TX_PERIOD_ACK` packets on the drone.
+  - Malformed or wrong-size timing ACKs are rejected.
+- [x] Remove legacy `0x06` timing-proposal compatibility.
+  - The field log `sgc_gc_serial_2026-06-10T19-57-32-998Z.jsonl` showed repeated `tx_period_proposal_received` / `tx_period_ack_sent` events after `timingAccepted=true`. The old `0x06` proposal path was removed in favor of the high `0xA5` current proposal ID.
+- [x] Validate persisted assignment timing against the stored radio profile on boot.
+  - A stored period shorter than `telemetryTxPeriodMs(profile)` now keeps the assignment but invalidates timing, forcing safe reacquisition.
+- [x] Make unknown-phase reacquire windows profile-aware.
+  - Robust/profile-slow nodes no longer use the fixed `140 ms` unknown-phase acquisition window.
+- [x] Guard GC post-ACK acquisition against ACK-shaped stale/control packets.
+  - Field log `sgc_gc_serial_2026-06-10T21-10-59-288Z.jsonl` showed `tx_period_ack_sent node 6` followed by repeated assigned-channel packets with `packetLen=12` and `firstByte=0xA6`, so the GC never emitted `drone_telemetry`.
+  - After sending `TX_PERIOD_ACK`, the GC now forces a clean assigned-channel profile/frequency RX retune.
+  - If an ACK-shaped packet appears during assigned telemetry receive, the GC logs `timing_ack_echo_ignored`, retunes assigned RX again, and continues acquisition instead of treating it as telemetry.
+- [x] Clear stale receive flags around GC LoRa CAD/activity scans.
+  - Field log `sgc_gc_serial_2026-06-10T21-27-09-251Z.jsonl` showed CAD/activity probing could leave the shared radio receive flag set, causing the GC to reread old packets as if they were fresh receive events. Symptoms included repeated `telemetry_duplicate_sequence_ignored` on the old assignment and repeated `timing_ack_echo_ignored` after a new assignment.
+  - `SimpleMesh::scanChannelActivity()` now clears the pending receive flag before CAD and again after restarting RX, so activity detection cannot feed stale FIFO/control packets back into telemetry acquisition.
+- [x] Keep CAD/activity probing out of active assigned-channel RX windows.
+  - Field log `sgc_gc_serial_2026-06-10T21-40-11-023Z.jsonl` showed Search assigned node `6` and sent `TX_PERIOD_ACK`, but the GC then emitted repeated `cad_activity_detected` / `activity_without_valid_packet` instead of receiving telemetry until the serial close/open reset the GC.
+  - On SX1262, CAD is not passive while receiving; it moves the radio out of RX. The scanner now keeps post-ACK/manual lock windows in normal RX and only classifies link state after those forced acquisition windows are no longer active.
+- [x] Keep CAD/activity probing out of active shared-channel Search RX windows.
+  - Field logs `sgc_gc_serial_2026-06-10T23-07-48-914Z.jsonl` and `sgc_gc_serial_2026-06-10T23-16-15-771Z.jsonl` showed Search did dwell on the shared channel but never received the second node. Direct node `6` serial showed repeated `join_request_sent` / `join_assign_timeout`, so the drone was transmitting. The GC now keeps shared Search windows in continuous RX instead of running 40 ms CAD probes that can pull the SX1262 out of receive.
 - [x] Build-check firmware after field follow-up changes.
 - [ ] Flash GC and all drone ESP32s with the profile-ID/search/link-diagnosis firmware.
+  - GC `COM18` was flashed after adding pending-assignment rollback, legacy/late JOIN_ACK handling, and the `10 s` minimum Search window. Keep this unchecked until the drone ESP32s are also flashed with the matching profile/search firmware.
+  - GC `COM18` was flashed again after adding profile-safe timing proposal floors and the longer drone `TX_PERIOD_ACK` wait guard. Node firmware still needs this image before retesting Robust assignments.
+  - GC `COM18` was flashed after moving control packet IDs to `0xA1-0xA6`, removing legacy `0x06` proposal compatibility, validating persisted timing against profile minimums, and making unknown-phase reacquire windows profile-aware. All drone ESP32s must be reflashed with this same air-protocol image before join/search testing.
+  - GC `COM18` was flashed after clearing stale receive flags around CAD/activity scans. Drone firmware does not need reflashing for this GC-only scanner fix.
+  - GC `COM18` was flashed after removing CAD/activity probing from active assigned-channel RX/post-ACK lock windows. Drone firmware does not need reflashing for this GC-only scanner fix.
+  - GC `COM18` was flashed after changing terminal-`OFF` scanner behavior so all-off active assignments fall back to shared-channel rejoin discovery instead of idling. Drone firmware does not need reflashing for this GC-only scanner fix.
+  - GC `COM18` was flashed after making operator Search preempt regular assigned-channel telemetry slots. Drone firmware does not need reflashing for this GC-only scheduler fix.
+  - GC firmware now also keeps active shared-channel Search windows as continuous RX and avoids periodic CAD probes during those windows. Drone firmware does not need reflashing for this GC-only scanner fix.
 - [ ] Bench-verify Search admits a new drone without periodic shared-channel lag during normal tracking.
 - [ ] Bench-verify `clear_assignment` removes the selected node from `/live_assignments.json`.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.
