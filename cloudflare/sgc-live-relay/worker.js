@@ -1,5 +1,6 @@
 const APP_PREFIX = "/swarm_ground_control";
 const GITHUB_PAGES_ORIGIN = "https://omrijsharon.github.io";
+const APP_ASSET_VERSION = "live-scene-relay-2";
 const MAX_RELAY_MESSAGE_BYTES = 64 * 1024;
 const ALLOWED_SGC_MESSAGE_TYPES = new Set([
   "drones_state",
@@ -34,6 +35,16 @@ function isLiveRelayPath(pathname) {
   return pathname === `${APP_PREFIX}/live/ws` || pathname === `${APP_PREFIX}/live/status`;
 }
 
+function isHtmlPath(pathname) {
+  return pathname === "/" || pathname.endsWith("/");
+}
+
+function rewriteAppHtml(html) {
+  return String(html || "")
+    .replace(/\.\/style\.css\?v=[^"']+/g, `./style.css?v=${APP_ASSET_VERSION}`)
+    .replace(/\.\/script\.js\?v=[^"']+/g, `./script.js?v=${APP_ASSET_VERSION}`);
+}
+
 async function proxyGithubPages(request) {
   const url = new URL(request.url);
   if (url.pathname === APP_PREFIX) {
@@ -59,8 +70,23 @@ async function proxyGithubPages(request) {
   });
 
   const upstreamResponse = await fetch(upstreamRequest);
+  if (isHtmlPath(upstreamPath)) {
+    const headers = new Headers(upstreamResponse.headers);
+    headers.set("content-type", "text/html; charset=utf-8");
+    headers.set("cache-control", "no-store");
+    headers.set("x-sgc-proxy", "cloudflare-worker");
+    return new Response(rewriteAppHtml(await upstreamResponse.text()), {
+      status: upstreamResponse.status,
+      statusText: upstreamResponse.statusText,
+      headers,
+    });
+  }
+
   const response = new Response(upstreamResponse.body, upstreamResponse);
   response.headers.set("x-sgc-proxy", "cloudflare-worker");
+  if (/\.(?:js|css)$/i.test(upstreamPath)) {
+    response.headers.set("cache-control", "no-cache");
+  }
   return response;
 }
 
