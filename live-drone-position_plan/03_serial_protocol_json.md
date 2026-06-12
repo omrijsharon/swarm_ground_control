@@ -144,8 +144,8 @@ Examples:
 {"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
 {"type":"scanner_event","event":"phase_preserved_after_miss","nodeId":2,"missCount":1,"reason":"known_tst_preserved","gcMillis":123520}
 {"type":"scanner_event","event":"cad_recovery_queued","nodeId":2,"missCount":3,"reason":"missed_expected_windows","gcMillis":123900}
-{"type":"scanner_event","event":"cad_recovery_probe","nodeId":2,"activityDetected":false,"cadStatus":"free","noActivityProbeCount":1,"reason":"no_activity_probe_pending","gcMillis":124000}
-{"type":"scanner_event","event":"auto_relock_scheduled","nodeId":2,"autoRelockAttempt":0,"autoRelockMaxAttempts":5,"nextAutoRelockInMs":0,"reason":"weak_rssi_link_loss","gcMillis":124010}
+{"type":"scanner_event","event":"cad_recovery_probe","nodeId":2,"activityDetected":false,"cadStatus":"free","autoRelockAttempt":1,"noActivityProbeCount":1,"reason":"no_activity_probe_pending","gcMillis":124000}
+{"type":"scanner_event","event":"auto_relock_scheduled","nodeId":2,"autoRelockAttempt":1,"autoRelockMaxAttempts":5,"nextAutoRelockInMs":0,"reason":"weak_rssi_link_loss","gcMillis":124010}
 {"type":"scanner_event","event":"auto_relock_listen","nodeId":2,"autoRelockAttempt":1,"reason":"cad_gated_auto_relock","gcMillis":124020}
 {"type":"scanner_event","event":"search_skip_no_miss","nodeId":2,"skippedSlots":9,"reason":"shared_search_dwell","gcMillis":124200}
 ```
@@ -187,7 +187,7 @@ Examples:
   - [x] Expose the in-browser diagnostic log in the SGC USB panel for field debugging.
     - `Download` exported JSONL with a leading snapshot of current drones, assignments, link states, pending commands, recent scanner/search/assignment events, and GC status.
     - `Clear` reset the capture before reproducing a field issue.
-    - Local UI actions such as Search, Re-lock, serial open/close, and command timeouts are recorded alongside serial lines.
+    - Local UI actions such as Bind, Re-bind, serial open/close, and command timeouts are recorded alongside serial lines.
     - The visible controls were restored for the four-drone scheduler investigation.
   - [ ] Use a long capture during a multi-drone failure and attach the generated JSONL/summary notes to the scheduler bench results.
 
@@ -488,6 +488,7 @@ These tasks mirror `08_field_test_followups.md`.
   - Last RSSI `<= -114 dBm` or unknown keeps the missing drone `offline` rather than `off`.
 - [x] Add CAD-gated auto relock diagnostics to `drone_link_status`.
   - Optional fields include `lastRssi`, `recoveryPhase`, `autoRelockAttempt`, `autoRelockMaxAttempts`, `nextAutoRelockInMs`, and `noActivityProbeCount`.
+  - `autoRelockAttempt` now represents the CAD recovery slot number. A full RX re-bind listen is a pending action from that slot, not a periodic timer.
 - [x] Add SGC-to-GC `clear_assignment` for deleting one persisted assignment.
 - [x] Add SGC-to-GC `set_radio_profile` for future assignments.
 - [x] Include default-assignment profile information in `gc_status`.

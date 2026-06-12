@@ -483,8 +483,8 @@ GC scan timing:
 - Group candidates by overlapping receive windows and select by normalized update age, miss priority, and near-future listen start.
 - If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
 - The first two listened misses preserve phase and only advance to the next catchable predicted slot.
-- After three consecutive listened misses, run a short CAD/LBT probe on the assigned channel/profile before spending full RX relock time.
-- Full automatic RX relock is scheduled only after CAD/LBT activity, plus one immediate weak-link attempt when last RSSI was `<= -114 dBm`.
+- After three consecutive listened misses, queue an event-driven recovery slot on the assigned channel/profile. Each slot runs exactly one CAD/LBT probe before returning to normal scheduler selection.
+- Full automatic RX relock is scheduled only when a recovery-slot CAD/LBT probe detects activity, plus one immediate first-slot weak-link attempt when last RSSI was `<= -114 dBm` or unknown.
 - Classify `WEAK` when activity is detected but telemetry does not decode.
 - Classify `OFF` only after `2` separate no-activity CAD/LBT probes when last RSSI was stronger than `-114 dBm`; weak or unknown last RSSI stays `OFFLINE`.
 - Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
@@ -501,7 +501,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] After a successful Search assignment, run one assigned-telemetry scanner round before returning to shared discovery.
 - [x] Add assigned-channel link diagnosis using LoRa CAD/activity detection plus packet receive.
 - [x] Gate stale/offline assigned-drone RX relock with CAD/LBT.
-- [x] Cap automatic RX relock at `5` failed attempts with `1s` to `5s` backoff.
+- [x] Cap automatic recovery at `5` CAD recovery slots; failed RX listens schedule the next CAD slot with `1s` to `4s` backoff.
 - [x] Classify recovery results as valid telemetry, `weak` activity without decode, `offline` weak-link loss, or `off` confirmed no-activity.
 - [x] Keep radio profile ID `0` as Fast: `SF8 / BW500 / CR4/5`.
 - [x] Add deterministic radio profile IDs for SF `7-12`, BW `125/250/500 kHz`, and CR `4/5-4/8`.

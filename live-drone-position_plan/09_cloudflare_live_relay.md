@@ -63,7 +63,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Keep HOME snapshots altitude-free.
 - [x] Keep command state local to the operator browser.
 - [x] Disable operator commands while acting as a viewer.
-- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
+- [x] Disable Reset, Bind, Re-bind, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Disable local drone rename and HOME editing while acting as a viewer.
 - [ ] Verify a remote WebSocket viewer receives relayed `drones_state` from a publisher smoke test.
 - [ ] Verify a remote browser receives live drone telemetry from an operator browser.

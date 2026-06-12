@@ -4,7 +4,7 @@ Goal: address the first field-test findings without expanding this branch into m
 
 ## Milestone 1: Operator-Controlled Search Mode
 
-- [x] Add an SGC `Search` button in the USB Serial panel above `Open` and `Close`.
+- [x] Add an SGC `Bind` button in the USB Serial panel above `Open` and `Close`.
 - [x] Add SGC command support for `start_search`.
 - [x] Add GC command support for `start_search`.
 - [x] Add `gc_status.searchMode`.
@@ -40,14 +40,14 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Preserve TST phase after the first two missed assigned-channel listen windows.
   - The GC now treats early misses as scheduler misses, advances to the next catchable predicted slot, and does not clear runtime TST state.
 - [x] After three consecutive listened misses, run CAD/LBT first on that drone's assigned channel/profile.
-  - Full automatic RX relock is CAD-gated and capped; manual relock remains operator-requested.
+  - The GC queues event-driven CAD recovery slots. Each slot runs one automatic CAD/LBT probe for one stale assignment; full automatic RX relock is CAD-gated and capped. Manual relock remains operator-requested.
 - [x] During recovery, use CAD/activity detection as the cheap gate and valid telemetry as the only proof of recovery.
 - [x] If CAD/LBT sees no LoRa activity, avoid full RX relock unless the last RSSI was weak enough to justify one immediate link-loss relock.
 - [x] Emit `OFF` only after confirmed no-activity evidence.
   - Confirmation requires `2` separate CAD/LBT no-activity probes and last RSSI stronger than `-114 dBm`.
   - Last RSSI `<= -114 dBm` or unknown is classified as `OFFLINE`, not `OFF`.
-- [x] Stop automatic full RX relock after `5` failed attempts.
-  - Failed automatic attempts back off by `1s`, `2s`, `3s`, `4s`, then `5s`; manual relock resets the recovery counters.
+- [x] Stop automatic recovery after `5` CAD recovery slots.
+  - Failed RX listens back off to later CAD slots by `1s`, `2s`, `3s`, then `4s`; manual relock resets the recovery counters.
 - [x] If the completed recovery probe sees LoRa activity but no valid telemetry, emit `WEAK`.
 - [x] Treat malformed assigned-channel packets, wrong-node packets, duplicate packets, control echoes, and CAD hits as activity evidence.
   - These do not count as valid telemetry, but they prevent one negative recovery window from falsely proving the drone is powered off.
@@ -104,7 +104,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add an SGC post-assignment telemetry watchdog after `tx_period_ack_sent`.
   - If the browser sees the ACK event but no `drone_telemetry` for that node within about two seconds, SGC requests `get_status`, `get_channel_table`, and `relock_drone` instead of requiring a manual serial close/open.
 - [x] Add visible SGC diagnostic-log controls for reproducing Search/relock failures.
-  - The exported JSONL includes GC serial lines, outgoing SGC commands, local Search/Re-lock click markers, serial open/close events, command timeouts, and a current-state snapshot.
+  - The exported JSONL includes GC serial lines, outgoing SGC commands, local Bind/Re-bind click markers, serial open/close events, command timeouts, and a current-state snapshot.
   - The visible logger row was restored for the four-drone scheduler investigation.
 - [x] Do not clear newly rejoined drones on `fresh_session_complete`.
   - Local drone clearing already happens when assignments are actually cleared; clearing again at completion can remove a drone that rejoined quickly during reset/search testing.

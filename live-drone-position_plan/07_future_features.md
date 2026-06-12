@@ -143,7 +143,7 @@ This file is for features that are useful for the live-position system but are n
 
 - [ ] Milestone 10: Remote SGC control over the Cloudflare relay
   - [ ] Keep v1 remote browsers read-only until live mirroring is field-proven.
-  - [ ] Design an operator authorization model before allowing remote Search, Reset, Re-lock, Delete, or Profile Apply.
+  - [ ] Design an operator authorization model before allowing remote Bind, Reset, Re-bind, Delete, or Profile Apply.
   - [ ] Decide whether remote control requires per-session invite tokens, named operators, or a separate admin URL.
   - [ ] Add command direction to the relay only after replay protection and command audit logging are designed.
   - [ ] Preserve the local USB operator as the default authority over the GC ESP32.

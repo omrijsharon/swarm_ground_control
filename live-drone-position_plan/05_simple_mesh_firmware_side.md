@@ -308,9 +308,10 @@ The firmware has two runtime roles in this branch:
   - [x] Preserve known TST phase after the first two listened misses.
     - Early misses advance the predicted slot and emit `phase_preserved_after_miss`; they do not clear TST or start CAD/OFF classification.
   - [x] Start automatic link recovery only after three consecutive listened misses.
-    - Automatic recovery first runs short CAD/LBT probes on the assigned channel/profile. Full RX relock is scheduled only when CAD/LBT detects activity, or once immediately for a weak last RSSI of `<= -114 dBm`.
-  - [x] Cap automatic RX relock attempts and back off failed attempts.
-    - Automatic RX relock stops after `5` attempts. Failed attempts schedule the next possible RX attempt with `1s`, `2s`, `3s`, `4s`, then `5s` backoff, while CAD/LBT remains the cheap activity gate.
+    - Automatic recovery queues event-driven CAD/LBT recovery slots on the assigned channel/profile. Each scheduler pass can run at most one automatic CAD/LBT probe for one stale assignment.
+    - Full RX relock is scheduled only when CAD/LBT detects activity, or once immediately from the first slot for a weak or unknown last RSSI (`<= -114 dBm` or unavailable).
+  - [x] Cap automatic recovery slots and back off failed attempts.
+    - Automatic recovery stops after `5` CAD recovery slots. Failed RX listens schedule the next CAD slot with `1s`, `2s`, `3s`, then `4s` backoff; RX is not retried during backoff unless a later CAD slot detects activity.
   - [x] Classify strong-link silence as `OFF` and weak-link loss as `OFFLINE`.
     - Two separate CAD/LBT no-activity probes mark a strong-link drone `OFF`. Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.

@@ -216,7 +216,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [ ] Manually verify canceling `Re-scan` sends no command.
   - [ ] Manually verify confirming `Re-scan` fills the spectrum live and telemetry recovers after scan.
 
-- [ ] Milestone 18: Drone TST re-lock UI
+- [ ] Milestone 18: Drone TST re-bind UI
   - [x] Add transient `LOCKING` display state for manual TST recovery.
   - [x] Make only the `OFFLINE` badge clickable.
   - [x] Clicking `OFFLINE` sends `relock_drone` with the drone `nodeId`.
@@ -255,8 +255,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 
 These tasks mirror `08_field_test_followups.md`.
 
-- [x] Add a `Search` button to the USB Serial panel.
-- [x] Disable and style Search while the GC reports active Search mode.
+- [x] Add a `Bind` button to the USB Serial panel.
+- [x] Disable and style Bind while the GC reports active Search mode.
 - [x] Parse `search_event` and `gc_status.searchMode`.
 - [x] Honor explicit `search_event.searchMode` instead of inferring Search state from event names.
   - Field log `sgc_gc_serial_2026-06-10T22-11-31-922Z.jsonl` showed automatic no-assignment discovery emitted `join_detected` / `assignment_completed` with `searchMode:false`, but SGC inferred Search was active and left the button pressed. SGC now trusts the firmware boolean when present.
@@ -266,6 +266,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
 - [x] Tolerate CAD-gated recovery diagnostics on `drone_link_status`.
   - Optional fields include `lastRssi`, `recoveryPhase`, `autoRelockAttempt`, `autoRelockMaxAttempts`, `nextAutoRelockInMs`, and `noActivityProbeCount`.
+  - `autoRelockAttempt` is the firmware recovery slot number; a slot may schedule one bounded RX re-bind only after CAD activity or the first weak-link path.
 - [x] Show concise debug lines for CAD-gated recovery scanner events.
   - Events include `cad_recovery_queued`, `cad_recovery_probe`, `auto_relock_scheduled`, `auto_relock_listen`, `auto_relock_backoff`, and `auto_relock_exhausted`.
 - [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.
@@ -321,7 +322,7 @@ These tasks mirror `09_cloudflare_live_relay.md`.
 - [x] Publish parsed GC JSON after local serial handling.
 - [x] Consume relay messages through the same live protocol handler used by USB serial.
 - [x] Show live relay connection state.
-- [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
+- [x] Disable Reset, Bind, Re-bind, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Show viewer-friendly empty-state text when no relay telemetry has arrived.
 - [ ] Browser-verify the operator can use USB Serial normally after adding automatic relay.
   - [ ] Browser-verify USB Serial connection automatically broadcasts telemetry to Cloudflare.

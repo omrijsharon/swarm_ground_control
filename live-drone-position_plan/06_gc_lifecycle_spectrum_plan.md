@@ -137,9 +137,9 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] Add forced shared rejoin probes after repeated assigned-channel misses.
     - After `3` misses, the GC uses a `160 ms` shared rejoin probe. After `8` misses, it uses an `1100 ms` extended shared window to catch a reset drone retrying `JOIN_REQUEST`.
   - [x] Gate automatic assigned-channel recovery with CAD/LBT.
-    - After `3` listened misses, the GC runs short CAD/LBT probes on the assigned channel/profile before spending full RX relock time.
-  - [x] Cap and back off automatic full RX relock.
-    - CAD/LBT activity schedules bounded RX relock. Failed automatic RX attempts back off by `1s`, `2s`, `3s`, `4s`, and `5s`, then stop after `5` attempts until manual `relock_drone`.
+    - After `3` listened misses, the GC queues event-driven recovery slots. Each slot runs exactly one CAD/LBT probe on one stale assignment, then returns to normal scheduling.
+  - [x] Cap and back off automatic recovery slots.
+    - CAD/LBT activity schedules bounded RX relock. Failed RX listens schedule the next CAD slot with `1s`, `2s`, `3s`, then `4s` backoff. Recovery stops after `5` slots until manual `relock_drone`.
   - [x] Distinguish `OFFLINE` from `OFF`.
     - Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`. Stronger last RSSI plus two separate no-activity CAD/LBT probes marks the drone `OFF`.
   - [x] Protect healthy predicted drone slots from stale recovery windows.

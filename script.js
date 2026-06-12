@@ -3624,7 +3624,7 @@ function getLiveBaudRate() {
 function applyLiveSearchButtonState(searchBtn) {
   if (!searchBtn) return;
   const active = liveState.searchMode || liveState.searchPending;
-  searchBtn.textContent = active ? "Searching..." : "Search";
+  searchBtn.textContent = active ? "Binding..." : "Bind";
   searchBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || active;
   searchBtn.classList.toggle("is-active", active);
   searchBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
@@ -5087,7 +5087,7 @@ function renderLiveGcStatus() {
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
     { label: "Channels", value: free !== null ? `${free} free / ${occupied} occupied` : "N/A", action: "channels" },
     ...(orphanStatus ? [{ label: "Recovery", value: orphanStatus }] : []),
-    { label: "Search", value: "", action: "search" },
+    { label: "Bind", value: "", action: "search" },
   ];
 
   const grid = document.createElement("div");
@@ -6451,7 +6451,7 @@ function openLiveDroneActionSheet(drone, anchor = null) {
   const relockBtn = document.createElement("button");
   relockBtn.className = "live-btn";
   relockBtn.type = "button";
-  relockBtn.textContent = "Re-lock";
+  relockBtn.textContent = "Re-bind";
   relockBtn.disabled = isLiveRemoteViewerMode();
   relockBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
   relockBtn.addEventListener("click", () => {
@@ -6650,7 +6650,7 @@ function renderLiveStatusList() {
     if (actionableBadge) {
       badge.type = "button";
       badge.classList.add("live-freshness-action");
-      badge.title = "Try to re-lock this drone's telemetry timing";
+      badge.title = "Try to re-bind this drone's telemetry timing";
       badge.addEventListener("click", (event) => {
         event.stopPropagation();
         requestLiveDroneRelock(d.id);
