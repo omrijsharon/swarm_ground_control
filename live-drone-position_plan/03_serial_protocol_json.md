@@ -143,7 +143,10 @@ Examples:
 {"type":"scanner_event","event":"telemetry_received","nodeId":2,"estimatedTstGcMillis":123456,"nextTstGcMillis":123483,"missCount":0,"gcMillis":123482}
 {"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
 {"type":"scanner_event","event":"phase_preserved_after_miss","nodeId":2,"missCount":1,"reason":"known_tst_preserved","gcMillis":123520}
-{"type":"scanner_event","event":"recovery_started_after_consecutive_misses","nodeId":2,"missCount":3,"reason":"missed_expected_windows","gcMillis":123900}
+{"type":"scanner_event","event":"cad_recovery_queued","nodeId":2,"missCount":3,"reason":"missed_expected_windows","gcMillis":123900}
+{"type":"scanner_event","event":"cad_recovery_probe","nodeId":2,"activityDetected":false,"cadStatus":"free","noActivityProbeCount":1,"reason":"no_activity_probe_pending","gcMillis":124000}
+{"type":"scanner_event","event":"auto_relock_scheduled","nodeId":2,"autoRelockAttempt":0,"autoRelockMaxAttempts":5,"nextAutoRelockInMs":0,"reason":"weak_rssi_link_loss","gcMillis":124010}
+{"type":"scanner_event","event":"auto_relock_listen","nodeId":2,"autoRelockAttempt":1,"reason":"cad_gated_auto_relock","gcMillis":124020}
 {"type":"scanner_event","event":"search_skip_no_miss","nodeId":2,"skippedSlots":9,"reason":"shared_search_dwell","gcMillis":124200}
 ```
 
@@ -481,7 +484,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add `drone_link_status` with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Define link states `locking`, `weak`, `offline`, and `off`.
 - [x] Treat `off` as confirmed no-activity only.
-  - GC emits `reason:"confirmed_no_activity"` only after multiple full no-activity reacquire attempts. Earlier no-activity recovery windows remain `offline` while automatic reacquire continues.
+  - GC emits `reason:"confirmed_no_activity"` only after two separate CAD/LBT no-activity probes on a drone that previously had RSSI stronger than `-114 dBm`.
+  - Last RSSI `<= -114 dBm` or unknown keeps the missing drone `offline` rather than `off`.
+- [x] Add CAD-gated auto relock diagnostics to `drone_link_status`.
+  - Optional fields include `lastRssi`, `recoveryPhase`, `autoRelockAttempt`, `autoRelockMaxAttempts`, `nextAutoRelockInMs`, and `noActivityProbeCount`.
 - [x] Add SGC-to-GC `clear_assignment` for deleting one persisted assignment.
 - [x] Add SGC-to-GC `set_radio_profile` for future assignments.
 - [x] Include default-assignment profile information in `gc_status`.

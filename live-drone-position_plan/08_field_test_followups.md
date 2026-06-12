@@ -39,13 +39,15 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add GC link states: `locking`, `weak`, `offline`, and `off`.
 - [x] Preserve TST phase after the first two missed assigned-channel listen windows.
   - The GC now treats early misses as scheduler misses, advances to the next catchable predicted slot, and does not clear runtime TST state.
-- [x] After three consecutive listened misses, spend a bounded profile-aware lock probe on that drone's assigned channel/profile.
-  - Automatic recovery listens for `min(500 ms, max(txPeriodMs, listenWindowMs))`; manual relock can still use the longer operator-requested window.
-- [x] During recovery, use CAD/activity detection plus normal packet receive.
-- [x] If a recovery probe sees no LoRa activity, keep automatic assigned-channel reacquire active and emit `OFFLINE` until `OFF` is confirmed.
+- [x] After three consecutive listened misses, run CAD/LBT first on that drone's assigned channel/profile.
+  - Full automatic RX relock is CAD-gated and capped; manual relock remains operator-requested.
+- [x] During recovery, use CAD/activity detection as the cheap gate and valid telemetry as the only proof of recovery.
+- [x] If CAD/LBT sees no LoRa activity, avoid full RX relock unless the last RSSI was weak enough to justify one immediate link-loss relock.
 - [x] Emit `OFF` only after confirmed no-activity evidence.
-  - Confirmation requires at least `3` full, unclipped no-activity reacquire attempts spanning at least `max(5000 ms, 10 * txPeriodMs)`.
-  - `OFF` assignments are no longer terminal; the scanner keeps low-priority assigned-channel reacquire attempts until telemetry returns or the operator deletes the assignment.
+  - Confirmation requires `2` separate CAD/LBT no-activity probes and last RSSI stronger than `-114 dBm`.
+  - Last RSSI `<= -114 dBm` or unknown is classified as `OFFLINE`, not `OFF`.
+- [x] Stop automatic full RX relock after `5` failed attempts.
+  - Failed automatic attempts back off by `1s`, `2s`, `3s`, `4s`, then `5s`; manual relock resets the recovery counters.
 - [x] If the completed recovery probe sees LoRa activity but no valid telemetry, emit `WEAK`.
 - [x] Treat malformed assigned-channel packets, wrong-node packets, duplicate packets, control echoes, and CAD hits as activity evidence.
   - These do not count as valid telemetry, but they prevent one negative recovery window from falsely proving the drone is powered off.

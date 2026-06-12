@@ -5745,9 +5745,16 @@ function handleLiveProtocolMessage(message, source = "serial") {
     if (
       message.event === "telemetry_missed" ||
       message.event === "stale_slot_skipped" ||
-      message.event === "assigned_acquire_listen"
+      message.event === "assigned_acquire_listen" ||
+      message.event === "cad_recovery_queued" ||
+      message.event === "cad_recovery_probe" ||
+      message.event === "auto_relock_scheduled" ||
+      message.event === "auto_relock_listen" ||
+      message.event === "auto_relock_backoff" ||
+      message.event === "auto_relock_exhausted"
     ) {
-      appendLiveDebug(`scanner: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}`);
+      const reasonText = message.reason ? ` (${message.reason})` : "";
+      appendLiveDebug(`scanner: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}${reasonText}`);
     }
   } else if (message.type === "search_event") {
     liveState.searchEvents.push(message);

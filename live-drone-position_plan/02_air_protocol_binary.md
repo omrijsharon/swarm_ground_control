@@ -483,9 +483,10 @@ GC scan timing:
 - Group candidates by overlapping receive windows and select by normalized update age, miss priority, and near-future listen start.
 - If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
 - The first two listened misses preserve phase and only advance to the next catchable predicted slot.
-- After three consecutive listened misses, run conservative profile-aware recovery for `min(1600 ms, max(500 ms, 3 * txPeriodMs, listenWindowMs))`.
+- After three consecutive listened misses, run a short CAD/LBT probe on the assigned channel/profile before spending full RX relock time.
+- Full automatic RX relock is scheduled only after CAD/LBT activity, plus one immediate weak-link attempt when last RSSI was `<= -114 dBm`.
 - Classify `WEAK` when activity is detected but telemetry does not decode.
-- Classify `OFF` only after at least `3` full no-activity reacquire attempts spanning at least `max(5000 ms, 10 * txPeriodMs)`.
+- Classify `OFF` only after `2` separate no-activity CAD/LBT probes when last RSSI was stronger than `-114 dBm`; weak or unknown last RSSI stays `OFFLINE`.
 - Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
 - If shared discovery is badly overdue, use a `720 ms` forced shared listen window.
 - High-rate per-packet scanner debug should stay off by default because serial JSON output can otherwise block the receive loop.
@@ -499,8 +500,9 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] In Search mode, stop after one shared dwell with no valid `JOIN_REQUEST` and no LoRa CAD activity.
 - [x] After a successful Search assignment, run one assigned-telemetry scanner round before returning to shared discovery.
 - [x] Add assigned-channel link diagnosis using LoRa CAD/activity detection plus packet receive.
-- [x] Use `3 * tx_period_ms` as the recovery listen window for stale/offline assigned drones.
-- [x] Classify recovery results as valid telemetry, `weak` activity without decode, or `off` with no LoRa activity.
+- [x] Gate stale/offline assigned-drone RX relock with CAD/LBT.
+- [x] Cap automatic RX relock at `5` failed attempts with `1s` to `5s` backoff.
+- [x] Classify recovery results as valid telemetry, `weak` activity without decode, `offline` weak-link loss, or `off` confirmed no-activity.
 - [x] Keep radio profile ID `0` as Fast: `SF8 / BW500 / CR4/5`.
 - [x] Add deterministic radio profile IDs for SF `7-12`, BW `125/250/500 kHz`, and CR `4/5-4/8`.
 - [x] Add preset profile IDs for Balanced and Robust.

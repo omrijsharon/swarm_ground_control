@@ -304,11 +304,15 @@ The firmware has two runtime roles in this branch:
   - [x] Keep drone steady telemetry phase stable after ACK.
     - Drone steady telemetry uses cached MSP data at its regular accepted period. MSP refresh is moved to idle time so FC reads do not shift the TST.
     - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path in the idle window, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
-  - [x] Use bounded profile-aware recovery windows after repeated missed packets.
+  - [x] Use CAD-gated profile-aware recovery after repeated missed packets.
   - [x] Preserve known TST phase after the first two listened misses.
     - Early misses advance the predicted slot and emit `phase_preserved_after_miss`; they do not clear TST or start CAD/OFF classification.
   - [x] Start automatic link recovery only after three consecutive listened misses.
-    - Automatic recovery listens for `min(500 ms, max(txPeriodMs, listenWindowMs))`, so Fast/Balanced/Robust nodes use appropriate recovery windows without starving the rest of the schedule.
+    - Automatic recovery first runs short CAD/LBT probes on the assigned channel/profile. Full RX relock is scheduled only when CAD/LBT detects activity, or once immediately for a weak last RSSI of `<= -114 dBm`.
+  - [x] Cap automatic RX relock attempts and back off failed attempts.
+    - Automatic RX relock stops after `5` attempts. Failed attempts schedule the next possible RX attempt with `1s`, `2s`, `3s`, `4s`, then `5s` backoff, while CAD/LBT remains the cheap activity gate.
+  - [x] Classify strong-link silence as `OFF` and weak-link loss as `OFFLINE`.
+    - Two separate CAD/LBT no-activity probes mark a strong-link drone `OFF`. Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.
     - If a recovery/acquisition listen would overlap another drone's known predicted receive slot, the GC clips the recovery window or skips directly to the known slot. This is intended to prevent a disconnected node from causing another live node to cascade into offline state.
   - [x] Keep timing-proposal acquisition responsive after a drone rejoins.

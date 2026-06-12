@@ -264,6 +264,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Display `ONLINE`, `LOCKING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
+- [x] Tolerate CAD-gated recovery diagnostics on `drone_link_status`.
+  - Optional fields include `lastRssi`, `recoveryPhase`, `autoRelockAttempt`, `autoRelockMaxAttempts`, `nextAutoRelockInMs`, and `noActivityProbeCount`.
+- [x] Show concise debug lines for CAD-gated recovery scanner events.
+  - Events include `cad_recovery_queued`, `cad_recovery_probe`, `auto_relock_scheduled`, `auto_relock_listen`, `auto_relock_backoff`, and `auto_relock_exhausted`.
 - [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.
   - Any valid `drone_telemetry` clears stored `LOCKING`/`WEAK`/`OFF`/`OFFLINE` link status for that node immediately.
   - Ignore `drone_link_status` events whose `gcMillis` is older than or equal to the latest accepted telemetry for that node.

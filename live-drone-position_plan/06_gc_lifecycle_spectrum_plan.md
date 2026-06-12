@@ -136,9 +136,12 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
     - This prevents stale assigned-channel recovery from immediately preempting the shared channel.
   - [x] Add forced shared rejoin probes after repeated assigned-channel misses.
     - After `3` misses, the GC uses a `160 ms` shared rejoin probe. After `8` misses, it uses an `1100 ms` extended shared window to catch a reset drone retrying `JOIN_REQUEST`.
-  - [x] Keep one immediate assigned-channel recovery attempt after the first missed telemetry packet.
-  - [x] Demote repeatedly missed assigned-channel recovery to a background retry cadence.
-    - After `2` misses, the GC clears the stale runtime phase for that assignment and retries acquisition every `2 s` instead of letting an absent drone consume the normal scanner cadence.
+  - [x] Gate automatic assigned-channel recovery with CAD/LBT.
+    - After `3` listened misses, the GC runs short CAD/LBT probes on the assigned channel/profile before spending full RX relock time.
+  - [x] Cap and back off automatic full RX relock.
+    - CAD/LBT activity schedules bounded RX relock. Failed automatic RX attempts back off by `1s`, `2s`, `3s`, `4s`, and `5s`, then stop after `5` attempts until manual `relock_drone`.
+  - [x] Distinguish `OFFLINE` from `OFF`.
+    - Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`. Stronger last RSSI plus two separate no-activity CAD/LBT probes marks the drone `OFF`.
   - [x] Protect healthy predicted drone slots from stale recovery windows.
     - Recovery/acquisition listens are clipped before the next known TST window from another active assignment, so a missing node should not make a live node miss enough packets to cascade offline.
   - [x] Keep rejoin timing acquisition responsive after `JOIN_ACK`.
@@ -148,6 +151,7 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] Bench-verify the exact regression: power-cycle drone node `2` while the GC remains on and confirm it rejoins instead of endless `telemetry_missed`.
     - User repeated this test several times; node `2` rejoined and telemetry resumed in about `3-4 seconds`.
   - [ ] Bench-verify the multi-node disconnect regression: disconnect node `1` while node `2` stays powered, and confirm node `2` remains online at its normal update rate.
+  - [ ] Bench-verify CAD-gated OFF/OFFLINE classification with a powered-off drone and a weak-link drone.
 
 ## Future Ideas
 
