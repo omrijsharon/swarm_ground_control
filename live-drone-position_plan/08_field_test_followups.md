@@ -102,7 +102,9 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Use orange for `WEAK`, red for `OFFLINE`, and gray for `OFF`.
 - [x] Let the operator click `OFFLINE` or `WEAK` to request `relock_drone`.
 - [x] Add an SGC post-assignment telemetry watchdog after `tx_period_ack_sent`.
-  - If the browser sees the ACK event but no `drone_telemetry` for that node within about two seconds, SGC requests `get_status`, `get_channel_table`, and `relock_drone` instead of requiring a manual serial close/open.
+  - If the browser sees the ACK event but no `drone_telemetry` for that node within about two seconds, SGC requests `get_status` and `get_channel_table` only. Automatic recovery belongs in the GC firmware; SGC does not silently send `relock_drone` because that creates operator-requested manual re-bind windows that can disrupt healthy drones.
+- [x] Keep automatic SGC watchdogs from forcing manual re-bind.
+  - Log `sgc_gc_serial_2026-06-12T21-39-22-826Z.jsonl` showed a stale node `6` assignment repeatedly entering `manual_relock_listen` while a strong node `7` missed robust-profile TST windows. The watchdog now records `assignment_watchdog_no_telemetry` and refreshes status without sending `relock_drone`.
 - [x] Add visible SGC diagnostic-log controls for reproducing Search/relock failures.
   - The exported JSONL includes GC serial lines, outgoing SGC commands, local Bind/Re-bind click markers, serial open/close events, command timeouts, and a current-state snapshot.
   - The visible logger row was restored for the four-drone scheduler investigation.

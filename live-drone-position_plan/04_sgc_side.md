@@ -267,6 +267,8 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Tolerate CAD-gated recovery diagnostics on `drone_link_status`.
   - Optional fields include `lastRssi`, `recoveryPhase`, `autoRelockAttempt`, `autoRelockMaxAttempts`, `nextAutoRelockInMs`, and `noActivityProbeCount`.
   - `autoRelockAttempt` is the firmware recovery slot number; a slot may schedule one bounded RX re-bind only after CAD activity or the first weak-link path.
+- [x] Keep post-assignment telemetry watchdog status-only.
+  - If no telemetry follows `tx_period_ack_sent`, SGC refreshes `get_status` and `get_channel_table` but does not send `relock_drone`; Re-bind remains an explicit operator action.
 - [x] Show concise debug lines for CAD-gated recovery scanner events.
   - Events include `cad_recovery_queued`, `cad_recovery_probe`, `auto_relock_scheduled`, `auto_relock_listen`, `auto_relock_backoff`, and `auto_relock_exhausted`.
 - [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.

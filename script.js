@@ -5595,10 +5595,13 @@ function scheduleLiveAssignmentTelemetryWatchdog(message) {
     const drone = getDroneById(nodeId);
     if (drone?.lastReceivedAt && drone.lastReceivedAt >= startedAt) return;
     if (!liveState.connected) return;
-    appendLiveDebug(`assignment watchdog: no telemetry after ACK for node ${nodeId}`);
+    recordLiveGcDiagnosticEvent("assignment_watchdog_no_telemetry", {
+      nodeId,
+      action: "status_refresh",
+    });
+    appendLiveDebug(`assignment watchdog: no telemetry after ACK for node ${nodeId}; requesting status`);
     await sendLiveSerialCommand("get_status");
     await sendLiveSerialCommand("get_channel_table");
-    await sendLiveSerialCommand("relock_drone", { nodeId });
   }, 2200);
   liveState.assignmentTelemetryWatchdogs.set(nodeId, timer);
 }
