@@ -190,6 +190,7 @@ const liveState = {
   relayLastError: "",
   relayDronesStateTimer: null,
   relayHomesStateTimer: null,
+  relayLastDronesStatePublishedAt: 0,
   remoteDroneNames: new Map(),
 };
 let orbitCloseSuppressUntil = 0;
@@ -3302,7 +3303,7 @@ function setLiveDroneAlias(nodeId, alias) {
   if (clean) liveState.droneAliases.set(id, clean);
   else liveState.droneAliases.delete(id);
   saveLiveDroneAliases();
-  publishLiveDronesState();
+  publishLiveDronesState({ force: true });
   updateStatusList();
   updateTooltip();
   draw();
@@ -3771,9 +3772,13 @@ function makeLiveHomesStateMessage(now = Date.now()) {
   };
 }
 
-function publishLiveDronesState() {
+function publishLiveDronesState({ force = false } = {}) {
   if (!isLiveRelayPublisherSocketOpen()) return;
-  publishLiveRelayMessage(makeLiveDronesStateMessage());
+  const now = Date.now();
+  if (!force && now - liveState.relayLastDronesStatePublishedAt < LIVE_RELAY_DRONES_STATE_INTERVAL_MS) return;
+  if (publishLiveRelayMessage(makeLiveDronesStateMessage(now))) {
+    liveState.relayLastDronesStatePublishedAt = now;
+  }
 }
 
 function publishLiveHomesState() {
@@ -3788,7 +3793,7 @@ function publishLiveHomesStateSoon() {
 function startLiveRelayScenePublishing() {
   stopLiveRelayScenePublishing();
   if (!isLiveRelayPublisherSocketOpen()) return;
-  publishLiveDronesState();
+  publishLiveDronesState({ force: true });
   publishLiveHomesState();
   liveState.relayDronesStateTimer = window.setInterval(publishLiveDronesState, LIVE_RELAY_DRONES_STATE_INTERVAL_MS);
   liveState.relayHomesStateTimer = window.setInterval(publishLiveHomesState, LIVE_RELAY_HOMES_STATE_INTERVAL_MS);
@@ -3803,6 +3808,7 @@ function stopLiveRelayScenePublishing() {
     window.clearInterval(liveState.relayHomesStateTimer);
     liveState.relayHomesStateTimer = null;
   }
+  liveState.relayLastDronesStatePublishedAt = 0;
 }
 
 function handleLiveRelayEnvelope(raw) {
@@ -3838,9 +3844,9 @@ function handleLiveRelayEnvelope(raw) {
 }
 
 function publishLiveRelayMessage(message) {
-  if (liveState.relayRole !== "publisher" || !message || !LIVE_RELAY_MESSAGE_TYPES.has(message.type)) return;
+  if (liveState.relayRole !== "publisher" || !message || !LIVE_RELAY_MESSAGE_TYPES.has(message.type)) return false;
   const socket = liveState.relaySocket;
-  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return false;
   try {
     socket.send(JSON.stringify({
       kind: "sgc_message",
@@ -3848,10 +3854,12 @@ function publishLiveRelayMessage(message) {
       message,
       sentAt: Date.now(),
     }));
+    return true;
   } catch (err) {
     liveState.relayLastError = err.message || "Relay publish failed.";
     appendLiveDebug(`relay publish failed: ${liveState.relayLastError}`);
     renderLiveControls();
+    return false;
   }
 }
 
@@ -5511,6 +5519,7 @@ function applyLiveTelemetry(message, source = "serial") {
   );
   updateStatusList();
   draw();
+  if (source === "serial") publishLiveDronesState();
 }
 
 function clearLiveSerialDrones({ clearAssignments = false } = {}) {

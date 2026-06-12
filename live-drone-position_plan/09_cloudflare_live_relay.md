@@ -52,7 +52,8 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 
 - [x] Publish SGC scene-state snapshots instead of raw parsed GC-to-SGC JSON.
 - [x] Do not publish raw firmware log text.
-- [x] Publish `drones_state` every 250 ms while connected as publisher.
+- [x] Publish `drones_state` at most every 250 ms while connected as publisher.
+- [x] Trigger `drones_state` publishing from serial telemetry arrivals so browser timer throttling does not reduce endpoint rate.
 - [x] Publish `homes_state` every 5000 ms while connected as publisher.
 - [x] Publish `homes_state` immediately on publisher connect and after HOME add/rename/move/delete.
 - [x] Feed remote scene messages into `handleLiveProtocolMessage(message, "live-endpoint")`.
@@ -70,7 +71,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 
 ## Scene Message Types
 
-`drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, and packet age. It is sent every 250 ms while the operator browser is publishing.
+`drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, and packet age. It is sent at most every 250 ms while the operator browser is publishing. Serial telemetry arrivals drive the publish cadence, with the 250 ms timer kept as a heartbeat.
 
 `homes_state` is a full snapshot of HOME instances and includes only `id`, `name`, `lat`, and `lng`. It is sent every 5000 ms, immediately when the publisher connects, and immediately after a HOME is added, renamed, moved, or deleted.
 
