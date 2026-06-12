@@ -2,19 +2,8 @@ const APP_PREFIX = "/swarm_ground_control";
 const GITHUB_PAGES_ORIGIN = "https://omrijsharon.github.io";
 const MAX_RELAY_MESSAGE_BYTES = 64 * 1024;
 const ALLOWED_SGC_MESSAGE_TYPES = new Set([
-  "drone_telemetry",
-  "gc_status",
-  "channel_table",
-  "assignments",
-  "assignment_event",
-  "search_event",
-  "scanner_event",
-  "drone_link_status",
-  "channel_scan_event",
-  "session_event",
-  "command_ack",
-  "warning",
-  "error",
+  "drones_state",
+  "homes_state",
 ]);
 
 function jsonResponse(body, status = 200) {
@@ -100,6 +89,10 @@ export class LiveRelaySession {
     this.viewers = new Map();
     this.nextConnectionId = 1;
     this.lastMessageAt = null;
+    this.latestDronesState = null;
+    this.latestHomesState = null;
+    this.lastDronesStateAt = null;
+    this.lastHomesStateAt = null;
   }
 
   async fetch(request) {
@@ -124,6 +117,8 @@ export class LiveRelaySession {
       publisherConnected: Boolean(this.publisher),
       viewerCount: this.viewers.size,
       lastMessageAt: this.lastMessageAt,
+      lastDronesStateAt: this.lastDronesStateAt,
+      lastHomesStateAt: this.lastHomesStateAt,
       publicPublish: isPublicPublishEnabled(this.env),
       publishTokenConfigured: Boolean(normalizeSecret(this.env.PUBLISH_TOKEN)),
     };
@@ -144,6 +139,11 @@ export class LiveRelaySession {
     const connectionId = this.nextConnectionId++;
     server.accept();
     this.publisher = { id: connectionId, socket: server, connectedAt: Date.now() };
+    this.lastMessageAt = null;
+    this.latestDronesState = null;
+    this.latestHomesState = null;
+    this.lastDronesStateAt = null;
+    this.lastHomesStateAt = null;
 
     server.addEventListener("message", (event) => this.handlePublisherMessage(server, event.data));
     server.addEventListener("close", () => this.removePublisher(server));
@@ -154,6 +154,9 @@ export class LiveRelaySession {
       role: "publisher",
       publisherConnected: true,
       viewerCount: this.viewers.size,
+      lastMessageAt: this.lastMessageAt,
+      lastDronesStateAt: this.lastDronesStateAt,
+      lastHomesStateAt: this.lastHomesStateAt,
     });
     this.broadcastStatus();
     return new Response(null, { status: 101, webSocket: client });
@@ -183,6 +186,9 @@ export class LiveRelaySession {
       sessionId: normalizeSessionId(url.searchParams.get("sessionId")),
       publisherConnected: Boolean(this.publisher),
       viewerCount: this.viewers.size,
+      lastMessageAt: this.lastMessageAt,
+      lastDronesStateAt: this.lastDronesStateAt,
+      lastHomesStateAt: this.lastHomesStateAt,
     });
     if (!this.publisher) {
       this.safeSend(server, {
@@ -191,6 +197,7 @@ export class LiveRelaySession {
         message: "No publisher is connected.",
       });
     }
+    this.sendCachedSceneState(server);
     this.broadcastStatus();
     return new Response(null, { status: 101, webSocket: client });
   }
@@ -239,11 +246,50 @@ export class LiveRelaySession {
     }
 
     this.lastMessageAt = Date.now();
+    if (message.type === "drones_state") {
+      this.latestDronesState = message;
+      this.lastDronesStateAt = this.lastMessageAt;
+    } else if (message.type === "homes_state") {
+      this.latestHomesState = message;
+      this.lastHomesStateAt = this.lastMessageAt;
+    }
     this.broadcastToViewers({
       kind: "sgc_message",
       message,
       receivedAt: this.lastMessageAt,
     });
+  }
+
+  sendCachedSceneState(socket) {
+    if (this.latestHomesState) {
+      this.safeSend(socket, {
+        kind: "sgc_message",
+        message: this.latestHomesState,
+        receivedAt: this.lastHomesStateAt,
+      });
+    }
+    if (this.latestDronesState) {
+      this.safeSend(socket, {
+        kind: "sgc_message",
+        message: this.dronesStateForReplay(),
+        receivedAt: this.lastDronesStateAt,
+      });
+    }
+  }
+
+  dronesStateForReplay() {
+    if (!this.latestDronesState || !this.lastDronesStateAt) return this.latestDronesState;
+    const cachedForMs = Math.max(0, Date.now() - this.lastDronesStateAt);
+    return {
+      ...this.latestDronesState,
+      drones: Array.isArray(this.latestDronesState.drones)
+        ? this.latestDronesState.drones.map((drone) => {
+            const ageMs = Number(drone?.ageMs);
+            if (!Number.isFinite(ageMs)) return drone;
+            return { ...drone, ageMs: Math.max(0, Math.round(ageMs + cachedForMs)) };
+          })
+        : [],
+    };
   }
 
   broadcastToViewers(payload) {
@@ -261,6 +307,8 @@ export class LiveRelaySession {
       publisherConnected: Boolean(this.publisher),
       viewerCount: this.viewers.size,
       lastMessageAt: this.lastMessageAt,
+      lastDronesStateAt: this.lastDronesStateAt,
+      lastHomesStateAt: this.lastHomesStateAt,
     };
     if (this.publisher) this.safeSend(this.publisher.socket, { ...payload, role: "publisher" });
     for (const [connectionId, viewer] of this.viewers) {

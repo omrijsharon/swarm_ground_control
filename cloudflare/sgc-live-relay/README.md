@@ -3,11 +3,18 @@
 This Worker serves two roles under the same Cloudflare route:
 
 - Proxy `https://www.flying-agents.com/swarm_ground_control/` to GitHub Pages.
-- Relay live SGC messages over `wss://www.flying-agents.com/swarm_ground_control/live/ws`.
+- Relay live SGC scene snapshots over `wss://www.flying-agents.com/swarm_ground_control/live/ws`.
 
 The live relay uses a Durable Object. One browser connects as `publisher` from the field laptop, and remote browsers connect as `viewer`.
 
 The current deployment uses one public session named `public`. Viewers do not need a token, and the operator UI auto-switches between viewer and publisher based on whether USB Serial is connected.
+
+The relay intentionally mirrors only the scene instances that viewers need:
+
+- `drones_state`: full drone snapshot from the publisher SGC, sent every 250 ms.
+- `homes_state`: full HOME snapshot from the publisher SGC, sent every 5 seconds and immediately after HOME changes.
+
+The Worker caches the latest drone and HOME snapshots and sends them immediately to late-joining viewers. It rejects old firmware/diagnostic relay messages such as `drone_telemetry`, `gc_status`, `channel_table`, and scan/search events.
 
 ## Deploy
 

@@ -70,18 +70,16 @@ The firmware has two runtime roles in this branch:
     - Current smoke `gc_status` reports the live profile and boot-scan clear channel count.
   - [x] Expose robust discovery profile and discovery control-packet airtimes in GC serial JSON.
 
-- [x] Milestone 4: Implement channel table and boot scan on GC
+- [ ] Milestone 4: Implement channel table and boot scan on GC
   - [x] Define BW500 channel center table from `902.5` to `927.5 MHz`.
   - [x] Mark `915.0 MHz` as shared discovery/control.
   - [x] Mark `914.5 MHz` and `915.5 MHz` as reserved/guard.
   - [x] Treat remaining channels as telemetry candidates.
-  - [x] Sample RSSI/noise floor on each candidate at boot.
-  - [x] Discard noisy channels.
-    - If fewer than five channels pass, firmware keeps the five quietest candidates and emits a warning.
-  - [x] Keep the clear channel list in memory.
-  - [x] Report clear/noisy channels over serial JSON.
-  - [x] Bench-verify GC boot scan on connected ESP32.
-    - `COM18` with `node_id = 0`, `node_role = ground_station` reported `42` clear channels, `6` noisy channels, `48` candidates, and emitted matching `channel_table` plus `gc_status.clearChannels = 42`.
+  - [x] Scan each telemetry candidate with the Fast, Balanced, and Robust simple profiles.
+  - [x] Use CAD/LBT activity to classify channels as free or occupied.
+  - [x] Keep the free channel list in memory.
+  - [x] Report free/occupied/assigned channels over serial JSON while preserving clear/noisy compatibility fields.
+  - [ ] Bench-verify the three-profile CAD boot scan on connected ESP32 hardware.
 
 - [x] Milestone 5: Implement per-drone radio profile and timing model
   - [x] Define a radio profile table that the GC can assign by `radio_profile_id`.
@@ -267,9 +265,9 @@ The firmware has two runtime roles in this branch:
   - [x] Store per-drone channel index, frequency, radio profile, airtime, TX period, last RX done time, estimated TX start time, next predicted TX start time, miss count, RSSI/SNR, and last sequence ID.
     - Runtime receive fields are updated after valid telemetry is received.
   - [x] Change GC LoRa frequency and radio parameters before listening to each drone.
-    - Scheduler switches between shared `915.0 MHz` and the selected assigned drone channel; only radio profile `0` is currently supported.
+    - Scheduler switches between shared `915.0 MHz` and each selected assigned drone channel/profile.
   - [x] Tune to each assigned channel using that drone's assigned radio profile.
-    - Scheduler selects assigned drones by predicted listen window and tunes to the selected channel with profile `0`.
+    - Scheduler selects assigned drones by predicted listen window and tunes using each assignment's `radioProfileId`.
   - [x] Receive a valid telemetry packet.
     - Physical test received valid 20-byte fake telemetry from drone node `2`.
   - [x] Listen for assigned-channel `TX_PERIOD_PROPOSAL` after `JOIN_ACK`.
@@ -288,13 +286,16 @@ The firmware has two runtime roles in this branch:
   - [x] Keep runtime TST, freshness, RSSI/SNR, and miss counters out of flash.
   - [x] Record RSSI and SNR for the received packet.
   - [x] Estimate packet start time as `rx_done_time - assigned_profile_airtime_ms`.
-  - [x] Predict the next transmission start time as `estimated_tx_start + tx_period_ms`.
-  - [x] Sort assigned drones by nearest predicted listen deadline before every scan pass.
-    - Implementation selects the assignment with the earliest useful `listen_start_ms` each scheduler decision.
+  - [x] Predict the next transmission start time from the received packet phase and the assignment's TX period.
+    - The scheduler now advances by a profile-aware service stride so multi-drone sets do not chase every packet from every drone.
+  - [x] Sort assigned drones by profile-aware predicted receive windows before every scan pass.
+    - Implementation selects among overlapping receive windows using normalized telemetry age, miss count, and near-future listen start.
   - [x] Tune before predicted packet start by a guard interval.
-    - Uses `GC_SCANNER_TUNE_GUARD_MS = 8`.
+    - Uses `max(22 ms, ceil(3 LoRa symbols))`, so Balanced/Robust profiles get larger guards when needed.
   - [x] Use an efficient scheduler that prioritizes catchable receive windows by telemetry age and near-future TST.
-    - Known-phase candidates within `50 ms` of the earliest catchable TST are scored as `lastUpdateAgeMs + missCount * 250 - deltaFromEarliestTstMs * 4`; ties prefer the earlier TST.
+    - Known-phase candidates are grouped by overlapping profile-aware receive windows, then scored by normalized age plus miss priority minus listen-start distance.
+  - [x] Emit scheduler-derived `expectedUpdateMs` for each assignment.
+    - `drone_telemetry` and `channel_table.assignments[]` include the profile-aware target service interval so SGC freshness thresholds can scale beyond Fast-profile assumptions.
   - [x] If a predicted receive window is already missed, skip to the next future slot instead of waiting through stale time.
     - Emits `scanner_event` with `event = "stale_slot_skipped"` when this happens.
   - [x] If a lower-priority overlapping window is intentionally skipped, advance that drone's predicted TST without incrementing `missCount`.
@@ -303,10 +304,11 @@ The firmware has two runtime roles in this branch:
   - [x] Keep drone steady telemetry phase stable after ACK.
     - Drone steady telemetry uses cached MSP data at its regular accepted period. MSP refresh is moved to idle time so FC reads do not shift the TST.
     - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path in the idle window, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
-  - [x] Use bounded recovery windows after missed packets.
-  - [x] After one missed assigned-channel packet, keep one immediate recovery listen in the normal scanner cadence.
-  - [x] After repeated assigned-channel misses, demote that assignment to a slower background recovery cadence.
-    - After `2` misses, the GC clears the stale runtime phase for that assignment and retries assigned-channel acquisition every `2 s` instead of keeping that absent drone in the hot scan loop. This prevents a powered-off node from starving live drones.
+  - [x] Use bounded profile-aware recovery windows after repeated missed packets.
+  - [x] Preserve known TST phase after the first two listened misses.
+    - Early misses advance the predicted slot and emit `phase_preserved_after_miss`; they do not clear TST or start CAD/OFF classification.
+  - [x] Start automatic link recovery only after three consecutive listened misses.
+    - Automatic recovery listens for `min(500 ms, max(txPeriodMs, listenWindowMs))`, so Fast/Balanced/Robust nodes use appropriate recovery windows without starving the rest of the schedule.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.
     - If a recovery/acquisition listen would overlap another drone's known predicted receive slot, the GC clips the recovery window or skips directly to the known slot. This is intended to prevent a disconnected node from causing another live node to cascade into offline state.
   - [x] Keep timing-proposal acquisition responsive after a drone rejoins.
@@ -424,17 +426,18 @@ The firmware has two runtime roles in this branch:
   - [x] On `clear_all_assignments`, clear RAM assignment state.
   - [x] On `clear_all_assignments`, switch back to the shared discovery channel.
     - Shared discovery now means `915.0 MHz` with the robust discovery profile, not the assigned telemetry profile.
-  - [x] On `clear_all_assignments`, rerun the channel noise scan.
+  - [x] On `clear_all_assignments`, rerun the channel spectrum scan.
   - [x] Emit updated `channel_table` and `gc_status` after fresh-session reset.
   - [x] Emit `channel_scan_event` at scan start.
-  - [x] Emit per-channel or batched scan progress with median RSSI and max RSSI.
+  - [x] Emit `profile_scan_started` before each simple-profile CAD pass.
+  - [x] Emit per-channel scan progress with profile ID, profile name, CAD/LBT activity detection, and optional RSSI.
   - [x] Emit `channel_scan_event` at scan completion.
-  - [x] Extend `channel_table` with per-channel RSSI and role details for SGC spectrum rendering.
-  - [x] Configure boot scan to use 32 RSSI samples per channel.
-  - [x] Configure boot scan to use 4 ms settle time and 2 ms RSSI sample interval.
-  - [x] Recheck initially noisy channels in a second pass before final classification.
-  - [x] Keep 32 samples for the second pass, with 8 ms settle time and 2 ms sample interval.
-  - [x] Use second-pass median RSSI as the final noisy/clear decision so single max-RSSI spikes do not reject a channel.
+  - [x] Extend `channel_table` with per-channel `free`, `occupied`, and `assigned` state for SGC spectrum rendering.
+  - [x] Scan each telemetry candidate channel with the Fast, Balanced, and Robust simple profiles.
+  - [x] Configure spectrum scan to wait `4 ms` after each frequency/profile tune before CAD/LBT.
+  - [x] Use CAD/LBT activity, not RSSI, as the free/occupied decision source.
+  - [x] Measure RSSI only for occupied/assigned display and expose `displayRssi`.
+  - [x] Stop forcing fallback channels clear when too few free channels are found.
   - [x] Implement `rescan_channels` for manual SGC spectrum refresh without clearing assignments.
   - [x] On `rescan_channels`, emit `command_ack`, rerun channel scan, then emit updated `channel_table` and `gc_status`.
   - [x] Implement `relock_drone` for manual runtime TST recovery of one assigned drone.
@@ -452,14 +455,33 @@ The firmware has two runtime roles in this branch:
     - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
   - [x] Bench-test `Start Fresh Session` clears flash and RAM assignments.
     - Direct `clear_all_assignments` command emitted session events, reran channel scan, emitted `channel_table`, and reported `assignedDrones = 0`.
-  - [x] Bench-measure the longer boot scan and confirm it lands near 3.5-4.2 seconds.
-    - Direct `clear_all_assignments` scan test emitted 48 `channel_scanned` events and completed in 3.69 seconds.
-  - [x] Bench-measure the two-pass scan and record initial noisy count, final noisy count, and duration.
-    - Direct `clear_all_assignments` scan test: 48 initial events, 32 initially noisy, 32 rechecked, 9 cleared on recheck, 23 final noisy, 6.318 seconds total.
+  - [ ] Bench-measure the three-profile CAD scan duration.
+  - [ ] Bench-verify active LoRa transmitters produce occupied channels with detecting profile IDs.
+  - [ ] Bench-verify assigned channels render assigned even if CAD reports no activity.
   - [x] Bench-test drone reset reuses a valid persisted assignment.
     - Direct bench showed node `2` can rejoin and reuse a valid assignment; user manual drone reset bench test passed.
   - [x] Bench-test GC reset reloads valid persisted assignments and reacquires telemetry timing.
     - GC reflash/reset loaded assignment state and resumed receiving node `2` telemetry.
+
+- [ ] Milestone 15b: Recover orphan occupied channels after GC assignment loss
+  - [x] Build an in-RAM orphan queue from occupied, unassigned telemetry candidates with detected profile IDs.
+  - [x] Treat CAD/LBT as a suspect hint only; explicit CAD hits are not considered confirmed drone telemetry.
+  - [x] Treat RadioLib CAD errors/unknown states as scan errors, not occupied-channel evidence.
+  - [x] Use detected Fast/Balanced/Robust profile IDs as listen hints; do not guess other profiles in v1.
+  - [x] Auto-run orphan recovery after GC boot only when persisted assignment loading leaves zero active assignments.
+  - [x] Keep `clear_all_assignments` as a fresh session and do not auto-recover immediately after it.
+  - [x] Let operator `start_search` run orphan recovery when there are zero active assignments.
+  - [x] Let manual `rescan_channels` enter Search/OOCR automatically when the scan finds CAD-suspect telemetry channels and there are zero active assignments.
+  - [x] On a CAD-suspect channel/profile, run a bounded normal RX listen attempt instead of repeated CAD confidence sampling.
+  - [x] Mark a channel as confirmed only after decoding a plausible 20-byte live telemetry packet.
+  - [x] Listen in normal RX on each candidate/profile and require two valid 20-byte telemetry packets from the same node.
+  - [x] Infer recovered `txPeriodMs` from sequence delta and RX timestamp delta, bounded by the profile airtime floor and `TX_PERIOD_MAX_ACCEPT_MS`.
+  - [x] Recreate, persist, and emit recovered assignments through the normal assignment/channel/telemetry paths.
+  - [x] Emit `confirmation_listen`, `packet_seen`, `confirmed_drone`, `assignment_recovered`, and `orphan_assignment_recovered` diagnostics.
+  - [ ] Bench-test lost GC assignment state with one already-transmitting drone.
+  - [ ] Bench-test lost GC assignment state with multiple Fast/Balanced/Robust drones.
+  - [ ] Bench-test false occupied channels and wrong payloads do not create assignments.
+  - [ ] Bench-test `clear_all_assignments` does not auto-bind until operator Search.
 
 ## Out Of Scope
 
@@ -509,7 +531,14 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Keep GC scanner control packets separate from real telemetry so `TX_PERIOD_PROPOSAL` handling does not falsely create an online drone state.
 - [x] Resend duplicate `TX_PERIOD_ACK` without rewriting assignment flash when a drone repeats the same timing proposal.
 - [x] Reject duplicate assigned-channel telemetry `sequence_id` values before updating TST or emitting `drone_telemetry`.
-- [x] Use a bounded `500 ms` LoRa activity lock probe after a missed assigned listen window, classify no activity as `OFF`, and stop automatic assigned-channel locking for terminal `OFF` drones.
+- [x] Make `OFF` conservative and confirmed instead of immediate.
+  - The GC no longer classifies a drone `OFF` after one no-activity recovery window.
+  - Automatic reacquire listens for `min(1600 ms, max(500 ms, 3 * txPeriodMs, listenWindowMs))`.
+  - `OFF` now requires at least `3` full no-activity reacquire attempts spanning at least `max(5000 ms, 10 * txPeriodMs)`.
+  - Clipped recovery windows that protect another live drone's TST do not count toward `OFF`.
+  - `LINK_STATE_OFF` no longer makes an assignment terminal; the scanner keeps low-priority assigned-channel reacquire attempts until telemetry returns or the operator deletes the assignment.
+- [x] Treat assigned-channel bytes as activity evidence even when the packet is malformed, wrong-node, duplicate, or a control echo.
+  - Valid telemetry, late JOIN_ACK, timing proposals, malformed assigned-channel packets, and CAD activity reset the RAM-only OFF-confirmation counters.
 - [x] When all active assignments are terminal `OFF`, stop idling and listen on shared discovery for reset-drone rejoin requests.
   - This preserves the no-periodic-shared-scan policy while healthy drones are online, but fixes the one-drone reset case where Delete made rejoin work only because it removed the last active assignment.
 - [x] Clear terminal `OFF` runtime state when the node is rediscovered through shared-channel Search or sends a timing proposal, so fresh rejoin/acquisition is not blocked.

@@ -35,6 +35,11 @@ const LIVE_FRESHNESS_MS = {
   late: 2000,
   stale: 5000,
 };
+const LIVE_FRESHNESS_SCALE = {
+  fresh: 1.8,
+  late: 3.0,
+  stale: 6.0,
+};
 const LIVE_RELOCK_TIMEOUT_MS = 8000;
 const LIVE_LINK_RECOVERY_CONFIRM_PACKETS = 2;
 const LIVE_LINK_RECOVERY_CONFIRM_MS = 2000;
@@ -46,20 +51,11 @@ const LIVE_DRONE_ACTION_LONGPRESS_MS = 460;
 const LIVE_RELAY_ENDPOINT_STORAGE_KEY = "sgc.livePosition.relayEndpoint.v1";
 const LIVE_RELAY_PUBLIC_SESSION_ID = "public";
 const LIVE_RELAY_RECONNECT_MS = 1500;
+const LIVE_RELAY_DRONES_STATE_INTERVAL_MS = 250;
+const LIVE_RELAY_HOMES_STATE_INTERVAL_MS = 5000;
 const LIVE_RELAY_MESSAGE_TYPES = new Set([
-  "drone_telemetry",
-  "gc_status",
-  "channel_table",
-  "assignments",
-  "assignment_event",
-  "search_event",
-  "scanner_event",
-  "drone_link_status",
-  "channel_scan_event",
-  "session_event",
-  "command_ack",
-  "warning",
-  "error",
+  "drones_state",
+  "homes_state",
 ]);
 
 let map;
@@ -138,6 +134,7 @@ const liveState = {
   scanAnimationHideTimer: null,
   scanRows: new Map(),
   scanCandidateCount: 0,
+  scanProfileName: "",
   spectrumPanelOpen: false,
   spectrumRescanPending: false,
   spectrumRescanConfirming: false,
@@ -157,6 +154,7 @@ const liveState = {
   assignmentEvents: [],
   scannerEvents: [],
   searchEvents: [],
+  orphanRecoveryEvents: [],
   linkStatuses: new Map(),
   relockRequests: new Map(),
   deleteRequests: new Map(),
@@ -190,6 +188,9 @@ const liveState = {
   relayReconnectTimer: null,
   relayReconnectAttempts: 0,
   relayLastError: "",
+  relayDronesStateTimer: null,
+  relayHomesStateTimer: null,
+  remoteDroneNames: new Map(),
 };
 let orbitCloseSuppressUntil = 0;
 
@@ -576,6 +577,7 @@ function finalizeGroundStationNamingDefault() {
   if (!gs) return;
   if (!gs.name || !String(gs.name).trim()) {
     gs.name = `Home #${gs.id + 1}`;
+    publishLiveHomesStateSoon();
   }
 }
 
@@ -604,6 +606,7 @@ function handleGsNameKeydown(e) {
 }
 
 function openGroundStationNameMenu(stationId) {
+  if (isLiveRemoteViewerMode()) return;
   const gs = groundStations.find((g) => g.id === stationId);
   if (!gs) return;
 
@@ -652,6 +655,7 @@ function openGroundStationNameMenu(stationId) {
     if (!v) return;
     const g2 = groundStations.find((g) => g.id === stationId);
     if (g2) g2.name = v;
+    publishLiveHomesStateSoon();
     closeGroundStationNameMenu();
     forceRedraw();
   };
@@ -752,6 +756,7 @@ function startGsDynamicUpdates(stationId) {
       const alt = Number(pos?.coords?.altitude);
       if (!isFinite(lat) || !isFinite(lng)) return;
       gs.updatePosition({ lat, lng, alt: isFinite(alt) ? alt : gs.alt });
+      publishLiveHomesStateSoon();
       forceRedraw();
     },
     (err) => {
@@ -772,7 +777,8 @@ function renderGroundStationMenu() {
   if (!gsMenuEl) return;
   const gs = groundStations.find((g) => g.id === activeGroundStationId);
   if (!gs) return;
-  const isUser = LIVE_POSITION_MODE || (userGroundStationId !== null && Number(userGroundStationId) === Number(gs.id));
+  const isReadOnlyViewer = isLiveRemoteViewerMode();
+  const isUser = !isReadOnlyViewer && (LIVE_POSITION_MODE || (userGroundStationId !== null && Number(userGroundStationId) === Number(gs.id)));
   const relocating = gsRelocate && Number(gsRelocate.stationId) === Number(gs.id);
   const isDynamic = !!gs.isDynamic;
   const name = (gs.name || `Home #${gs.id + 1}`).trim();
@@ -825,7 +831,7 @@ function renderGroundStationMenu() {
               <button class="seg-btn${isDynamic ? " is-active" : ""}" data-gs-mode="dynamic" type="button">Dynamic</button>
             </div>
           </div>`
-        : LIVE_POSITION_MODE
+        : LIVE_POSITION_MODE && !isReadOnlyViewer
           ? ""
         : `<div class="status-mission" style="line-height:1.35; opacity:0.85; margin-top:10px;">Read-only.</div>`
     }
@@ -861,6 +867,7 @@ function renderGroundStationMenu() {
       if (Number(userGroundStationId) === Number(gs.id)) {
         userGroundStationId = groundStations.length ? groundStations[0].id : null;
       }
+      publishLiveHomesStateSoon();
       activeGroundStationId = null;
       gsRelocate = null;
       closeGroundStationMenu(false);
@@ -947,6 +954,7 @@ function openGroundStationMenu(station, containerPoint) {
 }
 
 function addUserHomeAtLatLng(latlng, alt = 0, options = {}) {
+  if (isLiveRemoteViewerMode()) return;
   if (!latlng) return;
   const lat = Number(latlng.lat);
   const lng = Number(latlng.lng);
@@ -977,6 +985,7 @@ function addUserHomeAtLatLng(latlng, alt = 0, options = {}) {
   const gs = groundStations.find((g) => g.id === userGroundStationId);
   if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
   activeGroundStationId = gs ? gs.id : activeGroundStationId;
+  publishLiveHomesStateSoon();
   forceRedraw();
 }
 
@@ -1117,6 +1126,7 @@ class Drone {
       radioProfileId: packet.radioProfileId ?? packet.radio_profile_id ?? (this.current && this.current.radioProfileId) ?? null,
       txPeriodMs: packet.txPeriodMs ?? packet.tx_period_ms ?? (this.current && this.current.txPeriodMs) ?? null,
       telemetryAirtimeMs: packet.telemetryAirtimeMs ?? packet.telemetry_airtime_ms ?? (this.current && this.current.telemetryAirtimeMs) ?? null,
+      expectedUpdateMs: packet.expectedUpdateMs ?? packet.expected_update_ms ?? packet.targetServiceMs ?? packet.target_service_ms ?? (this.current && this.current.expectedUpdateMs) ?? null,
       sequenceId: packet.sequenceId ?? packet.sequence_id ?? null,
       gcMillis: packet.gcMillis ?? packet.gc_millis ?? null,
       battery: packet.battery ?? 0,
@@ -3005,6 +3015,7 @@ function pushLiveGcDiagnosticEntry(entry) {
   while (liveState.gcDiagnosticLog.length > LIVE_GC_DIAGNOSTIC_LOG_LIMIT) {
     liveState.gcDiagnosticLog.shift();
   }
+  updateLiveGcDiagnosticControls();
 }
 
 function makeLiveDiagnosticBaseEntry({ source = "sgc-web-serial", direction = "local" } = {}) {
@@ -3045,15 +3056,16 @@ function recordLiveGcDiagnosticEvent(diagnosticEvent, detail = {}) {
 
 function makeLiveGcDiagnosticSnapshotEntry() {
   const assignments = Array.isArray(liveState.channelTable?.assignments)
-    ? liveState.channelTable.assignments.map((assignment) => ({
-        nodeId: assignment.nodeId,
-        frequencyMhz: assignment.frequencyMhz,
-        radioProfileId: assignment.radioProfileId,
-        txPeriodMs: assignment.txPeriodMs,
-        timingAccepted: assignment.timingAccepted,
-        linkState: assignment.linkState,
-        missCount: assignment.missCount,
-        lastSequenceValid: assignment.lastSequenceValid,
+      ? liveState.channelTable.assignments.map((assignment) => ({
+          nodeId: assignment.nodeId,
+          frequencyMhz: assignment.frequencyMhz,
+          radioProfileId: assignment.radioProfileId,
+          txPeriodMs: assignment.txPeriodMs,
+          expectedUpdateMs: assignment.expectedUpdateMs ?? assignment.targetServiceMs,
+          timingAccepted: assignment.timingAccepted,
+          linkState: assignment.linkState,
+          missCount: assignment.missCount,
+          lastSequenceValid: assignment.lastSequenceValid,
         lastSequenceId: assignment.lastSequenceId,
       }))
     : [];
@@ -3071,6 +3083,7 @@ function makeLiveGcDiagnosticSnapshotEntry() {
       frequencyMhz: latest.frequencyMhz,
       radioProfileId: latest.radioProfileId,
       txPeriodMs: latest.txPeriodMs,
+      expectedUpdateMs: latest.expectedUpdateMs,
       rssi: latest.rssi,
       snr: latest.snr,
     };
@@ -3089,8 +3102,19 @@ function makeLiveGcDiagnosticSnapshotEntry() {
     recentAssignmentEvents: liveState.assignmentEvents.slice(-8),
     recentSearchEvents: liveState.searchEvents.slice(-8),
     recentScannerEvents: liveState.scannerEvents.slice(-8),
+    recentOrphanRecoveryEvents: liveState.orphanRecoveryEvents.slice(-8),
     linkStatuses: [...liveState.linkStatuses.entries()].map(([nodeId, status]) => ({ nodeId, ...status })),
   };
+}
+
+function updateLiveGcDiagnosticControls() {
+  const countEl = document.getElementById("liveGcLogCount");
+  const downloadBtn = document.getElementById("liveGcLogDownloadBtn");
+  const clearBtn = document.getElementById("liveGcLogClearBtn");
+  const count = liveState.gcDiagnosticLog.length;
+  if (countEl) countEl.textContent = String(count);
+  if (downloadBtn) downloadBtn.disabled = count === 0;
+  if (clearBtn) clearBtn.disabled = count === 0;
 }
 
 function exportLiveGcDiagnosticLog() {
@@ -3118,6 +3142,7 @@ function clearLiveGcDiagnosticLog() {
   liveState.gcDiagnosticLog = [];
   liveState.gcDiagnosticLineNumber = 0;
   liveState.gcDiagnosticStartedAt = Date.now();
+  updateLiveGcDiagnosticControls();
   appendLiveDebug("diagnostic log cleared");
 }
 
@@ -3157,6 +3182,31 @@ function getLiveUpdateRateHz(drone) {
   const averageIntervalMs = intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
   if (averageIntervalMs <= 0) return null;
   return 1000 / averageIntervalMs;
+}
+
+function getLiveRecentUpdateIntervalMs(drone) {
+  if (!drone || drone.history.length < 2) return null;
+  const recent = drone.history
+    .map((entry) => entry.receivedAt)
+    .filter((receivedAt) => Number.isFinite(receivedAt))
+    .slice(-5);
+  if (recent.length < 2) return null;
+
+  const intervals = [];
+  for (let i = 1; i < recent.length; i += 1) {
+    const intervalMs = recent[i] - recent[i - 1];
+    if (intervalMs > 0) intervals.push(intervalMs);
+  }
+  if (!intervals.length) return null;
+  return intervals.reduce((sum, interval) => sum + interval, 0) / intervals.length;
+}
+
+function firstPositiveNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) return number;
+  }
+  return null;
 }
 
 function renderLiveTimingLine(host, drone, latest, now = Date.now()) {
@@ -3252,16 +3302,21 @@ function setLiveDroneAlias(nodeId, alias) {
   if (clean) liveState.droneAliases.set(id, clean);
   else liveState.droneAliases.delete(id);
   saveLiveDroneAliases();
+  publishLiveDronesState();
   updateStatusList();
   updateTooltip();
   draw();
 }
 
 function getLiveDroneDisplayName(nodeId) {
+  const remoteName = isLiveRemoteViewerMode() ? liveState.remoteDroneNames.get(Number(nodeId)) : "";
+  if (remoteName) return remoteName;
   return getLiveDroneAlias(nodeId) || `Drone ${nodeId}`;
 }
 
 function getLiveDroneSecondaryName(nodeId) {
+  const remoteName = isLiveRemoteViewerMode() ? liveState.remoteDroneNames.get(Number(nodeId)) : "";
+  if (remoteName) return remoteName !== `Drone ${nodeId}` ? `Node ${nodeId}` : "";
   return getLiveDroneAlias(nodeId) ? `Node ${nodeId}` : "";
 }
 
@@ -3454,12 +3509,44 @@ function formatLiveDroneProfile(drone, latest = {}) {
   return "N/A";
 }
 
+function getLiveExpectedUpdateMs(drone) {
+  if (!drone) return null;
+  const latest = drone.getLatest && drone.getLatest();
+  const assignment = getLiveAssignmentForDrone(drone.id);
+  return firstPositiveNumber(
+    latest?.expectedUpdateMs,
+    latest?.expected_update_ms,
+    latest?.targetServiceMs,
+    latest?.target_service_ms,
+    assignment?.expectedUpdateMs,
+    assignment?.expected_update_ms,
+    assignment?.targetServiceMs,
+    assignment?.target_service_ms,
+    getLiveRecentUpdateIntervalMs(drone),
+    latest?.txPeriodMs,
+    latest?.tx_period_ms
+  );
+}
+
+function getLiveFreshnessThresholds(drone) {
+  const expectedUpdateMs = getLiveExpectedUpdateMs(drone);
+  if (!Number.isFinite(expectedUpdateMs) || expectedUpdateMs <= 0) {
+    return { ...LIVE_FRESHNESS_MS };
+  }
+  return {
+    fresh: Math.max(LIVE_FRESHNESS_MS.fresh, expectedUpdateMs * LIVE_FRESHNESS_SCALE.fresh),
+    late: Math.max(LIVE_FRESHNESS_MS.late, expectedUpdateMs * LIVE_FRESHNESS_SCALE.late),
+    stale: Math.max(LIVE_FRESHNESS_MS.stale, expectedUpdateMs * LIVE_FRESHNESS_SCALE.stale),
+  };
+}
+
 function getLiveFreshnessState(drone, now = Date.now()) {
   if (!drone || !drone.lastReceivedAt) return "offline";
   const ageMs = Math.max(0, now - drone.lastReceivedAt);
-  if (ageMs < LIVE_FRESHNESS_MS.fresh) return "fresh";
-  if (ageMs < LIVE_FRESHNESS_MS.late) return "late";
-  if (ageMs < LIVE_FRESHNESS_MS.stale) return "stale";
+  const thresholds = getLiveFreshnessThresholds(drone);
+  if (ageMs < thresholds.fresh) return "fresh";
+  if (ageMs < thresholds.late) return "late";
+  if (ageMs < thresholds.stale) return "stale";
   return "offline";
 }
 
@@ -3606,6 +3693,7 @@ function clearLiveRelayReconnectTimer() {
 function closeLiveRelayConnection({ user = true, reason = "closed" } = {}) {
   if (user) liveState.relayUserClosed = true;
   clearLiveRelayReconnectTimer();
+  stopLiveRelayScenePublishing();
   const socket = liveState.relaySocket;
   liveState.relaySocket = null;
   liveState.relayConnected = false;
@@ -3619,6 +3707,102 @@ function closeLiveRelayConnection({ user = true, reason = "closed" } = {}) {
     socket.close();
   }
   renderLiveControls();
+}
+
+function isLiveRelayPublisherSocketOpen() {
+  const socket = liveState.relaySocket;
+  return liveState.relayRole === "publisher" && socket && socket.readyState === WebSocket.OPEN;
+}
+
+function makeLiveDronesStateMessage(now = Date.now()) {
+  const liveDrones = drones
+    .filter((drone) => drone && (drone.type === "live" || drone.type === "live-mock"))
+    .map((drone) => {
+      const latest = drone.getLatest && drone.getLatest();
+      if (!latest || !Number.isFinite(Number(latest.lat)) || !Number.isFinite(Number(latest.lng))) return null;
+      const freshness = getLiveFreshnessState(drone, now);
+      return {
+        nodeId: Number(drone.id),
+        name: getLiveDroneAlias(drone.id) || `Drone ${drone.id}`,
+        lat: Number(latest.lat),
+        lng: Number(latest.lng),
+        alt: Number(latest.alt) || 0,
+        heading: Number(latest.heading) || 0,
+        headingSource: latest.headingSource || null,
+        courseOverGround: latest.courseOverGround ?? null,
+        yaw: latest.yaw ?? null,
+        groundSpeed: latest.groundSpeed ?? null,
+        satelliteCount: latest.satelliteCount ?? null,
+        rssi: latest.rssi ?? null,
+        snr: latest.snr ?? null,
+        frequencyMhz: latest.frequencyMhz ?? null,
+        radioProfileId: latest.radioProfileId ?? null,
+        sequenceId: latest.sequenceId ?? null,
+        txPeriodMs: latest.txPeriodMs ?? null,
+        telemetryAirtimeMs: latest.telemetryAirtimeMs ?? null,
+        expectedUpdateMs: latest.expectedUpdateMs ?? null,
+        ageMs: drone.lastReceivedAt ? Math.max(0, Math.round(now - drone.lastReceivedAt)) : null,
+        displayState: getLiveDisplayState(drone, freshness, now),
+      };
+    })
+    .filter(Boolean);
+
+  return {
+    type: "drones_state",
+    schemaVersion: 1,
+    sentAt: now,
+    drones: liveDrones,
+  };
+}
+
+function makeLiveHomesStateMessage(now = Date.now()) {
+  return {
+    type: "homes_state",
+    schemaVersion: 1,
+    sentAt: now,
+    homes: groundStations
+      .filter((home) => home && Number.isFinite(Number(home.lat)) && Number.isFinite(Number(home.lng)))
+      .map((home) => ({
+        id: Number(home.id),
+        name: (home.name || `Home #${Number(home.id) + 1}`).trim(),
+        lat: Number(home.lat),
+        lng: Number(home.lng),
+      })),
+  };
+}
+
+function publishLiveDronesState() {
+  if (!isLiveRelayPublisherSocketOpen()) return;
+  publishLiveRelayMessage(makeLiveDronesStateMessage());
+}
+
+function publishLiveHomesState() {
+  if (!isLiveRelayPublisherSocketOpen()) return;
+  publishLiveRelayMessage(makeLiveHomesStateMessage());
+}
+
+function publishLiveHomesStateSoon() {
+  publishLiveHomesState();
+}
+
+function startLiveRelayScenePublishing() {
+  stopLiveRelayScenePublishing();
+  if (!isLiveRelayPublisherSocketOpen()) return;
+  publishLiveDronesState();
+  publishLiveHomesState();
+  liveState.relayDronesStateTimer = window.setInterval(publishLiveDronesState, LIVE_RELAY_DRONES_STATE_INTERVAL_MS);
+  liveState.relayHomesStateTimer = window.setInterval(publishLiveHomesState, LIVE_RELAY_HOMES_STATE_INTERVAL_MS);
+}
+
+function stopLiveRelayScenePublishing() {
+  if (liveState.relayDronesStateTimer) {
+    window.clearInterval(liveState.relayDronesStateTimer);
+    liveState.relayDronesStateTimer = null;
+  }
+  if (liveState.relayHomesStateTimer) {
+    window.clearInterval(liveState.relayHomesStateTimer);
+    liveState.relayHomesStateTimer = null;
+  }
 }
 
 function handleLiveRelayEnvelope(raw) {
@@ -3707,6 +3891,7 @@ function connectLiveRelay({ auto = false } = {}) {
     liveState.relayReconnectAttempts = 0;
     liveState.relayLastError = "";
     appendLiveDebug(role === "publisher" ? "relay broadcasting connected" : "live endpoint connected");
+    if (role === "publisher") startLiveRelayScenePublishing();
     renderLiveControls();
     updateStatusList();
   });
@@ -3717,6 +3902,7 @@ function connectLiveRelay({ auto = false } = {}) {
     renderLiveControls();
   });
   socket.addEventListener("close", (event) => {
+    stopLiveRelayScenePublishing();
     if (liveState.relaySocket === socket) liveState.relaySocket = null;
     liveState.relayConnected = false;
     liveState.relayRole = null;
@@ -3764,6 +3950,7 @@ function renderLiveControls() {
   const relayConnectBtn = document.getElementById("liveRelayConnectBtn");
   const relayDisconnectBtn = document.getElementById("liveRelayDisconnectBtn");
   const relayTokenField = document.getElementById("liveRelayTokenField");
+  updateLiveGcDiagnosticControls();
   if (openBtn) openBtn.disabled = liveState.connected;
   if (closeBtn) closeBtn.disabled = !liveState.connected;
   if (baudInput) baudInput.disabled = liveState.connected;
@@ -3974,48 +4161,141 @@ function liveFrequencyKey(value) {
   return Number.isFinite(n) ? n.toFixed(1) : "";
 }
 
+function firstFiniteNumber(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number)) return number;
+  }
+  return NaN;
+}
+
+function normalizeLiveChannelState(channel = {}, assigned = false) {
+  if (assigned) return "assigned";
+  const confidence = normalizeLiveActivityConfidence(channel.activityConfidence);
+  if (Boolean(channel.cadError) && !Boolean(channel.activityDetected) && confidence !== "confirmed_drone") return "unknown";
+  if (Boolean(channel.confirmedDrone) || confidence === "confirmed_drone") return "occupied";
+  if (confidence === "cad_suspect" || String(channel.activitySource || "").toLowerCase() === "cad") return "occupied";
+  const raw = channel.state !== undefined ? String(channel.state).toLowerCase() : "";
+  if (raw === "free" || raw === "clear") return "free";
+  if (raw === "occupied" || raw === "noisy" || raw === "busy") return "occupied";
+  if (raw === "assigned") return "assigned";
+  if (raw === "reserved" || raw === "guard" || raw === "shared") return "reserved";
+  if (Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected)) return "occupied";
+  if (Boolean(channel.clear)) return "free";
+  return raw || "unknown";
+}
+
+function normalizeLiveDetectedProfileIds(value) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((id) => Number(id)).filter((id) => Number.isFinite(id)))];
+}
+
+function normalizeLiveActivityConfidence(value) {
+  const raw = value === undefined || value === null ? "" : String(value).toLowerCase();
+  if (raw === "confirmed_drone" || raw === "confirmed" || raw === "decoded_telemetry") return "confirmed_drone";
+  if (raw === "cad_suspect" || raw === "suspect" || raw === "cad") return "cad_suspect";
+  if (raw === "scan_error" || raw === "error") return "scan_error";
+  if (raw === "free" || raw === "none" || raw === "clear") return "free";
+  return "";
+}
+
+function liveActivityConfidenceRank(value) {
+  const confidence = normalizeLiveActivityConfidence(value);
+  if (confidence === "confirmed_drone") return 3;
+  if (confidence === "cad_suspect") return 2;
+  if (confidence === "scan_error") return 1;
+  if (confidence === "free") return 0;
+  return -1;
+}
+
+function strongerLiveActivityConfidence(a, b) {
+  return liveActivityConfidenceRank(b) > liveActivityConfidenceRank(a)
+    ? normalizeLiveActivityConfidence(b)
+    : normalizeLiveActivityConfidence(a);
+}
+
+function getLiveRssiBarHeight(rssi) {
+  const number = Number(rssi);
+  if (!Number.isFinite(number)) return null;
+  return 10 + clamp01((number + 120) / 90) * 34;
+}
+
 function getLiveChannelRows(table = {}) {
-  const assignedKeys = new Set(
-    (Array.isArray(table.assignments) ? table.assignments : [])
-      .map((item) => liveFrequencyKey(item.frequencyMhz))
-      .filter(Boolean)
-  );
+  const assignmentByKey = new Map();
+  (Array.isArray(table.assignments) ? table.assignments : []).forEach((item) => {
+    const key = liveFrequencyKey(item.frequencyMhz);
+    if (key) assignmentByKey.set(key, item);
+  });
 
   if (Array.isArray(table.channels) && table.channels.length) {
     return table.channels
-      .map((channel) => ({
-        channelIndex: Number(channel.channelIndex),
-        frequencyMhz: Number(channel.frequencyMhz),
-        role: channel.role || "telemetry_candidate",
-        clear: Boolean(channel.clear),
-        assigned: Boolean(channel.assigned) || assignedKeys.has(liveFrequencyKey(channel.frequencyMhz)),
-        medianRssi: Number(channel.medianRssi),
-        maxRssi: Number(channel.maxRssi),
-        state: channel.state || (channel.clear ? "clear" : "noisy"),
-      }))
+      .map((channel) => {
+        const key = liveFrequencyKey(channel.frequencyMhz);
+        const assignment = assignmentByKey.get(key);
+        const assigned = Boolean(channel.assigned) || Boolean(assignment);
+        const state = normalizeLiveChannelState(channel, assigned);
+        const displayRssi = assigned
+          ? firstFiniteNumber(assignment?.rssi, channel.displayRssi, channel.rssi, channel.maxRssi, channel.medianRssi)
+          : firstFiniteNumber(channel.displayRssi, channel.rssi, channel.maxRssi, channel.medianRssi);
+        return {
+          channelIndex: Number(channel.channelIndex),
+          frequencyMhz: Number(channel.frequencyMhz),
+          role: channel.role || "telemetry_candidate",
+          clear: state === "free",
+          assigned,
+          activityDetected: Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected) || state === "occupied",
+          activitySource: channel.activitySource || "",
+          activityConfidence: normalizeLiveActivityConfidence(channel.activityConfidence),
+          cadStatus: channel.cadStatus || "",
+          cadError: Boolean(channel.cadError),
+          listenAttempted: Boolean(channel.listenAttempted),
+          confirmedDrone: Boolean(channel.confirmedDrone),
+          decodedNodeId: Number(channel.decodedNodeId),
+          detectedProfileIds: normalizeLiveDetectedProfileIds(channel.detectedProfileIds),
+          medianRssi: Number(channel.medianRssi),
+          maxRssi: Number(channel.maxRssi),
+          displayRssi,
+          state,
+        };
+      })
       .filter((channel) => Number.isFinite(channel.frequencyMhz))
       .sort((a, b) => a.frequencyMhz - b.frequencyMhz);
   }
 
   const rows = [];
+  const noisyKeys = new Set((Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz : []).map(liveFrequencyKey));
   const addRow = (frequencyMhz, role, clear = false, state = "") => {
     const freq = Number(frequencyMhz);
     if (!Number.isFinite(freq)) return;
+    const key = liveFrequencyKey(freq);
+    const assignment = assignmentByKey.get(key);
+    const assigned = Boolean(assignment);
+    const normalizedState = assigned ? "assigned" : state || (noisyKeys.has(key) ? "occupied" : clear ? "free" : "unknown");
     rows.push({
       channelIndex: Math.round((freq - 902.5) / 0.5),
       frequencyMhz: freq,
       role,
-      clear,
-      assigned: assignedKeys.has(liveFrequencyKey(freq)),
+      clear: normalizedState === "free",
+      assigned,
+      activityDetected: normalizedState === "occupied",
+      activitySource: normalizedState === "occupied" ? "cad" : "none",
+      activityConfidence: normalizedState === "occupied" ? "cad_suspect" : normalizedState === "free" ? "free" : "",
+      cadStatus: normalizedState === "occupied" ? "detected" : normalizedState === "free" ? "free" : "",
+      cadError: false,
+      listenAttempted: false,
+      confirmedDrone: false,
+      decodedNodeId: NaN,
+      detectedProfileIds: [],
       medianRssi: NaN,
       maxRssi: NaN,
-      state,
+      displayRssi: firstFiniteNumber(assignment?.rssi),
+      state: normalizedState,
     });
   };
   (Array.isArray(table.candidateFrequencyMhz) ? table.candidateFrequencyMhz : []).forEach((freq) => {
     const key = liveFrequencyKey(freq);
     const clear = Array.isArray(table.clearFrequencyMhz) && table.clearFrequencyMhz.map(liveFrequencyKey).includes(key);
-    addRow(freq, "telemetry_candidate", clear, clear ? "clear" : "noisy");
+    addRow(freq, "telemetry_candidate", clear, clear ? "free" : noisyKeys.has(key) ? "occupied" : "");
   });
   (Array.isArray(table.reservedFrequencyMhz) ? table.reservedFrequencyMhz : []).forEach((freq) => {
     addRow(freq, Math.abs(Number(freq) - 915.0) < 0.01 ? "shared" : "guard", false, "reserved");
@@ -4039,8 +4319,18 @@ function getDefaultLiveScanChannels() {
       role,
       clear: false,
       assigned: false,
+      activityDetected: false,
+      activitySource: "none",
+      activityConfidence: "",
+      cadStatus: "",
+      cadError: false,
+      listenAttempted: false,
+      confirmedDrone: false,
+      decodedNodeId: NaN,
+      detectedProfileIds: [],
       medianRssi: NaN,
       maxRssi: NaN,
+      displayRssi: NaN,
       state: "pending",
     });
   }
@@ -4066,6 +4356,31 @@ function getLiveScanDisplayTable(table = {}, includeScanRows = false) {
     const existing = rowsByKey.get(key);
     if (existing) {
       existing.assigned = existing.assigned || channel.assigned;
+      existing.activityDetected = existing.activityDetected || channel.activityDetected;
+      existing.activityConfidence = strongerLiveActivityConfidence(existing.activityConfidence, channel.activityConfidence);
+      if (!existing.activitySource || existing.activitySource === "none") existing.activitySource = channel.activitySource || existing.activitySource;
+      existing.cadStatus = channel.cadStatus || existing.cadStatus;
+      existing.cadError = existing.cadError || channel.cadError;
+      existing.listenAttempted = existing.listenAttempted || channel.listenAttempted;
+      existing.confirmedDrone = existing.confirmedDrone || channel.confirmedDrone;
+      if (Number.isFinite(channel.decodedNodeId)) existing.decodedNodeId = channel.decodedNodeId;
+      existing.detectedProfileIds = normalizeLiveDetectedProfileIds([
+        ...(existing.detectedProfileIds || []),
+        ...(channel.detectedProfileIds || []),
+      ]);
+      if (Number.isFinite(channel.displayRssi)) existing.displayRssi = channel.displayRssi;
+      if (Number.isFinite(channel.medianRssi)) existing.medianRssi = channel.medianRssi;
+      if (Number.isFinite(channel.maxRssi)) existing.maxRssi = channel.maxRssi;
+      if (channel.assigned) {
+        existing.state = "assigned";
+      } else if (existing.cadError && !existing.activityDetected) {
+        existing.state = "unknown";
+      } else if (existing.activityDetected || channel.state === "occupied") {
+        existing.state = "occupied";
+      } else if (channel.state === "free") {
+        existing.state = "free";
+      }
+      existing.clear = existing.state === "free";
       if (channel.role === "shared" || channel.role === "guard") {
         existing.role = channel.role;
       }
@@ -4107,15 +4422,44 @@ function scheduleLiveScanAnimationHide() {
 function updateLiveScanRow(message) {
   const frequencyMhz = Number(message.frequencyMhz);
   if (!Number.isFinite(frequencyMhz)) return;
-  const state = message.state || "unknown";
-  liveState.scanRows.set(liveFrequencyKey(frequencyMhz), {
+  const key = liveFrequencyKey(frequencyMhz);
+  const existing = liveState.scanRows.get(key) || {};
+  const previousProfiles = normalizeLiveDetectedProfileIds(existing.detectedProfileIds);
+  const profileIds = normalizeLiveDetectedProfileIds(message.detectedProfileIds);
+  const radioProfileId = Number(message.radioProfileId);
+  if (Boolean(message.activityDetected) && Number.isFinite(radioProfileId)) {
+    profileIds.push(radioProfileId);
+  }
+  const detectedProfileIds = normalizeLiveDetectedProfileIds([...previousProfiles, ...profileIds]);
+  const activityDetected = Boolean(existing.activityDetected) || Boolean(message.activityDetected) || detectedProfileIds.length > 0;
+  const activityConfidence = strongerLiveActivityConfidence(
+    existing.activityConfidence,
+    message.activityConfidence || (Boolean(message.confirmedDrone) ? "confirmed_drone" : activityDetected ? "cad_suspect" : Boolean(message.cadError) ? "scan_error" : "free")
+  );
+  const cadError = Boolean(existing.cadError) || Boolean(message.cadError);
+  const state = cadError && !activityDetected
+    ? "unknown"
+    : activityDetected || activityConfidence === "cad_suspect" || activityConfidence === "confirmed_drone"
+      ? "occupied"
+      : normalizeLiveChannelState(message, false);
+  liveState.scanRows.set(key, {
     channelIndex: Number(message.channelIndex),
     frequencyMhz,
     role: "telemetry_candidate",
-    clear: state === "clear",
+    clear: state === "free",
     assigned: false,
-    medianRssi: Number(message.medianRssi),
-    maxRssi: Number(message.maxRssi),
+    activityDetected,
+    activitySource: message.activitySource || existing.activitySource || (activityDetected ? "cad" : "none"),
+    activityConfidence,
+    cadStatus: message.cadStatus || existing.cadStatus || (activityDetected ? "detected" : cadError ? "error" : "free"),
+    cadError,
+    listenAttempted: Boolean(existing.listenAttempted) || Boolean(message.listenAttempted),
+    confirmedDrone: Boolean(existing.confirmedDrone) || Boolean(message.confirmedDrone),
+    decodedNodeId: firstFiniteNumber(message.decodedNodeId, existing.decodedNodeId),
+    detectedProfileIds,
+    medianRssi: firstFiniteNumber(message.medianRssi, existing.medianRssi),
+    maxRssi: firstFiniteNumber(message.maxRssi, existing.maxRssi),
+    displayRssi: firstFiniteNumber(message.displayRssi, message.rssi, message.maxRssi, message.medianRssi, existing.displayRssi),
     state,
   });
 }
@@ -4123,16 +4467,22 @@ function updateLiveScanRow(message) {
 function getLiveChannelSummary(table = {}) {
   const status = liveState.gcStatus || {};
   const assignedDebug = getLiveAssignedDebug(status, table);
-  const noisy = Array.isArray(table.noisyFrequencyMhz) ? table.noisyFrequencyMhz.length : Number(status.noisyChannels);
-  const clear = Array.isArray(table.clearFrequencyMhz)
-    ? table.clearFrequencyMhz.length
-    : Number.isFinite(Number(status.clearChannels))
-      ? Number(status.clearChannels)
-      : NaN;
+  let occupied = Number(table.occupiedChannels);
+  if (!Number.isFinite(occupied)) occupied = Number(status.occupiedChannels);
+  if (!Number.isFinite(occupied) && Array.isArray(table.noisyFrequencyMhz)) occupied = table.noisyFrequencyMhz.length;
+  if (!Number.isFinite(occupied)) occupied = Number(status.noisyChannels);
+
+  let free = Number(table.freeChannels);
+  if (!Number.isFinite(free)) free = Number(status.freeChannels);
+  if (!Number.isFinite(free) && Array.isArray(table.clearFrequencyMhz)) free = table.clearFrequencyMhz.length;
+  if (!Number.isFinite(free)) free = Number(status.clearChannels);
+
   return {
     assigned: Number.isFinite(assignedDebug.count) ? assignedDebug.count : NaN,
-    clear,
-    noisy,
+    clear: free,
+    noisy: occupied,
+    free,
+    occupied,
   };
 }
 
@@ -4179,7 +4529,7 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
   header.className = "live-spectrum-header";
   const lastScan = liveState.channelScanEvents[liveState.channelScanEvents.length - 1];
   const scanText = liveState.scanInProgress
-    ? `Scanning ${liveState.scanRows.size}/${liveState.scanCandidateCount || 48}`
+    ? `Scanning${liveState.scanProfileName ? ` ${liveState.scanProfileName}` : ""} ${liveState.scanRows.size}/${liveState.scanCandidateCount || 48}`
     : lastScan?.event === "scan_complete"
       ? manual ? "Latest scan" : "Scan complete"
       : "Spectrum";
@@ -4217,8 +4567,8 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
   if (manual) {
     const summary = getLiveChannelSummary(table);
     const meta = [];
-    if (Number.isFinite(summary.clear) && Number.isFinite(summary.noisy)) {
-      meta.push(`${summary.clear} clear / ${summary.noisy} noisy`);
+    if (Number.isFinite(summary.free) && Number.isFinite(summary.occupied)) {
+      meta.push(`${summary.free} free / ${summary.occupied} occupied`);
     }
     if (Number.isFinite(summary.assigned)) {
       meta.push(`${summary.assigned} assigned`);
@@ -4261,23 +4611,32 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
         ? "shared"
         : channel.role === "guard"
           ? "guard"
-          : channel.clear
+          : channel.cadError && !channel.activityDetected
+            ? "unknown"
+            : channel.confirmedDrone || channel.activityConfidence === "confirmed_drone"
+              ? "confirmed"
+          : channel.state === "free" || channel.clear
             ? "clear"
-            : channel.state === "noisy"
-              ? "noisy"
+            : channel.state === "occupied" || channel.activityDetected || channel.state === "noisy"
+              ? "cad-suspect"
               : "unknown";
     bar.className = `live-spectrum-bar ${roleClass}`;
-    const hasRssi = Number.isFinite(channel.medianRssi);
-    const height = hasRssi
-      ? 10 + clamp01((channel.medianRssi + 125) / 50) * 34
+    const displayRssi = firstFiniteNumber(channel.displayRssi, channel.maxRssi, channel.medianRssi);
+    const rssiHeight = getLiveRssiBarHeight(displayRssi);
+    const height = (channel.assigned || roleClass === "cad-suspect" || roleClass === "confirmed") && rssiHeight !== null
+      ? rssiHeight
       : channel.role === "shared"
         ? 28
         : channel.role === "guard"
           ? 18
           : 12;
     bar.style.height = `${height.toFixed(0)}px`;
-    const rssiText = hasRssi ? ` median ${channel.medianRssi} dBm max ${channel.maxRssi} dBm` : "";
-    bar.title = `${channel.frequencyMhz.toFixed(1)} MHz ${channel.role}${channel.assigned ? " assigned" : ""}${rssiText}`;
+    const rssiText = Number.isFinite(displayRssi) ? ` RSSI ${displayRssi} dBm` : "";
+    const profileText = channel.detectedProfileIds?.length ? ` profiles ${channel.detectedProfileIds.join(",")}` : "";
+    const confidenceText = channel.activityConfidence ? ` ${channel.activityConfidence}` : "";
+    const listenText = channel.listenAttempted ? " listened" : "";
+    const nodeText = Number.isFinite(channel.decodedNodeId) ? ` node ${channel.decodedNodeId}` : "";
+    bar.title = `${channel.frequencyMhz.toFixed(1)} MHz ${channel.role} ${channel.state}${confidenceText}${channel.assigned ? " assigned" : ""}${listenText}${nodeText}${profileText}${rssiText}`;
     bars.appendChild(bar);
   });
   wrap.appendChild(bars);
@@ -4287,8 +4646,9 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
   [
     ["shared", "Shared"],
     ["assigned", "Assigned"],
-    ["clear", "Clear"],
-    ["noisy", "Noisy"],
+    ["clear", "Free"],
+    ["cad-suspect", "CAD suspect"],
+    ["confirmed", "Confirmed"],
   ].forEach(([key, label]) => {
     const item = document.createElement("span");
     item.className = `live-spectrum-legend-item ${key}`;
@@ -4694,8 +5054,16 @@ function renderLiveGcStatus() {
   const table = liveState.channelTable || {};
   const assignedDebug = getLiveAssignedDebug(status, table);
   const channelSummary = getLiveChannelSummary(table);
-  const noisy = Number.isFinite(channelSummary.noisy) ? channelSummary.noisy : 0;
-  const clear = Number.isFinite(channelSummary.clear) ? channelSummary.clear : null;
+  const occupied = Number.isFinite(channelSummary.occupied) ? channelSummary.occupied : 0;
+  const free = Number.isFinite(channelSummary.free) ? channelSummary.free : null;
+  const orphanCandidates = Number(status.orphanRecoveryCandidates);
+  const orphanRecovered = Number(status.orphanRecoveredCount);
+  const orphanActive = Boolean(status.orphanRecoveryActive);
+  const orphanStatus = orphanActive
+    ? `${Number.isFinite(orphanCandidates) ? orphanCandidates : 0} scanning`
+    : Number.isFinite(orphanCandidates) || Number.isFinite(orphanRecovered)
+      ? `${Number.isFinite(orphanRecovered) ? orphanRecovered : 0}/${Number.isFinite(orphanCandidates) ? orphanCandidates : 0} recovered`
+      : "";
   const buffer =
     Number.isFinite(Number(status.txPeriodMs)) && Number.isFinite(Number(status.telemetryAirtimeMs))
       ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
@@ -4709,7 +5077,8 @@ function renderLiveGcStatus() {
     { label: "Airtime", value: status.telemetryAirtimeMs !== undefined ? `${Number(status.telemetryAirtimeMs).toFixed(1)} ms` : "N/A" },
     { label: "Buffer", value: buffer !== null ? `${buffer.toFixed(1)} ms` : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
-    { label: "Channels", value: clear !== null ? `${clear} clear / ${noisy} noisy` : "N/A", action: "channels" },
+    { label: "Channels", value: free !== null ? `${free} free / ${occupied} occupied` : "N/A", action: "channels" },
+    ...(orphanStatus ? [{ label: "Recovery", value: orphanStatus }] : []),
     { label: "Search", value: "", action: "search" },
   ];
 
@@ -4816,6 +5185,18 @@ function isIntegerNumber(value) {
 }
 
 const liveProtocolSchemas = {
+  drones_state: {
+    type: "string",
+    schemaVersion: "integer",
+    sentAt: "integer",
+    drones: "array",
+  },
+  homes_state: {
+    type: "string",
+    schemaVersion: "integer",
+    sentAt: "integer",
+    homes: "array",
+  },
   drone_telemetry: {
     type: "string",
     nodeId: "integer",
@@ -4887,6 +5268,11 @@ const liveProtocolSchemas = {
     event: "string",
     gcMillis: "integer",
   },
+  orphan_recovery_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
   drone_link_status: {
     type: "string",
     nodeId: "integer",
@@ -4952,6 +5338,121 @@ function getOrCreateLiveDrone(nodeId) {
   return drone;
 }
 
+function applyLiveDronesState(message, source = "live-endpoint") {
+  if (source === "live-endpoint" && !liveState.serialTelemetrySeen) {
+    stopLivePositionMock({ clearDrones: true, clearStatus: true });
+    liveState.serialTelemetrySeen = true;
+  }
+
+  const now = Date.now();
+  const seenNodeIds = new Set();
+  const remoteNames = new Map();
+  const entries = Array.isArray(message.drones) ? message.drones : [];
+
+  entries.forEach((entry) => {
+    const nodeId = Number(entry?.nodeId);
+    const lat = Number(entry?.lat);
+    const lng = Number(entry?.lng);
+    if (!Number.isFinite(nodeId) || !Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    const cleanName = String(entry.name || "").trim().slice(0, 28);
+    if (cleanName) remoteNames.set(nodeId, cleanName);
+    seenNodeIds.add(nodeId);
+
+    const drone = getOrCreateLiveDrone(nodeId);
+    const ageMs = Number(entry.ageMs);
+    const receivedAt = Number.isFinite(ageMs) ? now - Math.max(0, ageMs) : now;
+    const displayState = String(entry.displayState || "").toLowerCase();
+    if (["locking", "weak", "off", "offline"].includes(displayState)) {
+      liveState.linkStatuses.set(nodeId, {
+        type: "drone_link_status",
+        nodeId,
+        state: displayState,
+        receivedAt,
+        holdUntilRecovered: ["weak", "off", "offline"].includes(displayState),
+      });
+    } else {
+      liveState.linkStatuses.delete(nodeId);
+    }
+
+    drone.updateTelemetry(
+      {
+        uptimeSec: receivedAt / 1000,
+        lat,
+        lng,
+        alt: Number(entry.alt) || 0,
+        heading: Number(entry.heading) || 0,
+        headingSource: entry.headingSource || null,
+        courseOverGround: entry.courseOverGround ?? null,
+        yaw: entry.yaw ?? null,
+        groundSpeed: entry.groundSpeed ?? null,
+        satelliteCount: entry.satelliteCount ?? null,
+        rssi: entry.rssi ?? null,
+        snr: entry.snr ?? null,
+        frequencyMhz: entry.frequencyMhz ?? null,
+        radioProfileId: entry.radioProfileId ?? null,
+        txPeriodMs: entry.txPeriodMs ?? null,
+        telemetryAirtimeMs: entry.telemetryAirtimeMs ?? null,
+        expectedUpdateMs: entry.expectedUpdateMs ?? null,
+        sequenceId: entry.sequenceId ?? null,
+        command: "Live endpoint",
+        armed: true,
+      },
+      receivedAt
+    );
+  });
+
+  liveState.remoteDroneNames = remoteNames;
+  const before = drones.length;
+  drones = drones.filter((drone) => {
+    if (drone.type === "live" && !seenNodeIds.has(Number(drone.id))) {
+      liveState.linkStatuses.delete(Number(drone.id));
+      liveState.relockRequests.delete(Number(drone.id));
+      liveState.deleteRequests.delete(Number(drone.id));
+      return false;
+    }
+    return true;
+  });
+  if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
+  if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
+  if (before !== drones.length || entries.length) {
+    updateStatusList();
+    updateTooltip();
+    draw();
+  }
+}
+
+function applyLiveHomesState(message, source = "live-endpoint") {
+  if (source === "live-endpoint") {
+    pendingUserHomePlacement = false;
+    liveState.homePlacementActive = false;
+    gsRelocate = null;
+    closeGroundStationMenu(false);
+    closeGroundStationNameMenu();
+    closeUserHomePrompt();
+    closeLiveMapMenu();
+  }
+
+  const entries = Array.isArray(message.homes) ? message.homes : [];
+  groundStations = entries
+    .map((entry, index) => {
+      const id = Number.isFinite(Number(entry?.id)) ? Number(entry.id) : index;
+      const lat = Number(entry?.lat);
+      const lng = Number(entry?.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+      const name = String(entry.name || `Home #${id + 1}`).trim() || `Home #${id + 1}`;
+      return new GroundStation(id, lat, lng, 0, name);
+    })
+    .filter(Boolean);
+  userGroundStationId = groundStations.length ? groundStations[0].id : null;
+  if (activeGroundStationId !== null && !groundStations.some((home) => Number(home.id) === Number(activeGroundStationId))) {
+    activeGroundStationId = null;
+  }
+  renderLiveHomeTool();
+  updateStatusList();
+  draw();
+}
+
 function applyLiveTelemetry(message, source = "serial") {
   if ((source === "serial" || source === "live-endpoint") && !liveState.serialTelemetrySeen) {
     stopLivePositionMock({ clearDrones: true, clearStatus: true });
@@ -5000,6 +5501,7 @@ function applyLiveTelemetry(message, source = "serial") {
       radioProfileId: message.radioProfileId,
       txPeriodMs: message.txPeriodMs,
       telemetryAirtimeMs: message.telemetryAirtimeMs,
+      expectedUpdateMs: message.expectedUpdateMs ?? message.targetServiceMs,
       sequenceId: message.sequenceId,
       gcMillis: message.gcMillis,
       command: "Live telemetry",
@@ -5099,7 +5601,11 @@ function handleLiveProtocolMessage(message, source = "serial") {
     return;
   }
   liveState.lastJsonAt = Date.now();
-  if (message.type === "drone_telemetry") {
+  if (message.type === "drones_state") {
+    applyLiveDronesState(message, source);
+  } else if (message.type === "homes_state") {
+    applyLiveHomesState(message, source);
+  } else if (message.type === "drone_telemetry") {
     applyLiveTelemetry(message, source);
   } else if (message.type === "gc_status") {
     liveState.gcStatus = message;
@@ -5186,22 +5692,32 @@ function handleLiveProtocolMessage(message, source = "serial") {
     if (message.event === "scan_started") {
       liveState.scanRows.clear();
       liveState.scanCandidateCount = Number(message.candidateChannels) || 48;
+      liveState.scanProfileName = "";
       liveState.scanInProgress = true;
       liveState.lastScanCompletedAt = null;
-      liveState.spectrumStatus = "Scanning channels...";
+      liveState.spectrumStatus = "Scanning channels across profiles...";
+      showLiveScanAnimation();
+    } else if (message.event === "profile_scan_started") {
+      liveState.scanProfileName = message.profileName ? String(message.profileName).toUpperCase() : `P${message.radioProfileId}`;
+      liveState.spectrumStatus = `Scanning ${liveState.scanProfileName} profile...`;
       showLiveScanAnimation();
     } else if (message.event === "channel_scanned") {
       updateLiveScanRow(message);
       showLiveScanAnimation();
     } else if (message.event === "noisy_rescan_started") {
-      liveState.spectrumStatus = `Rechecking ${Number(message.candidateChannels) || 0} noisy channels...`;
+      liveState.spectrumStatus = `Rechecking ${Number(message.candidateChannels) || 0} occupied channels...`;
       showLiveScanAnimation();
-      appendLiveDebug(`scan recheck: ${Number(message.candidateChannels) || 0} noisy channels`);
+      appendLiveDebug(`scan recheck: ${Number(message.candidateChannels) || 0} occupied channels`);
     } else if (message.event === "scan_complete") {
       liveState.scanInProgress = false;
+      liveState.scanProfileName = "";
       liveState.lastScanCompletedAt = Date.now();
       liveState.spectrumRescanPending = false;
-      liveState.spectrumStatus = "Scan complete.";
+      const free = Number(message.freeChannels ?? message.clearChannels);
+      const occupied = Number(message.occupiedChannels ?? message.noisyChannels);
+      liveState.spectrumStatus = Number.isFinite(free) && Number.isFinite(occupied)
+        ? `Scan complete: ${free} free / ${occupied} occupied.`
+        : "Scan complete.";
       scheduleLiveScanAnimationHide();
     }
     renderLiveGcStatus();
@@ -5237,6 +5753,25 @@ function handleLiveProtocolMessage(message, source = "serial") {
     }
     appendLiveDebug(`search: ${message.event}${message.nodeId !== undefined ? ` node ${message.nodeId}` : ""}`);
     renderLiveControls();
+    renderLiveGcStatus();
+  } else if (message.type === "orphan_recovery_event") {
+    liveState.orphanRecoveryEvents.push(message);
+    while (liveState.orphanRecoveryEvents.length > 20) liveState.orphanRecoveryEvents.shift();
+    if (message.event === "started") {
+      liveState.spectrumStatus = "Confirming CAD-suspect channels...";
+    } else if (message.event === "confirmation_listen") {
+      liveState.spectrumStatus = `Listening on channel ${message.channelIndex ?? "?"} for drone telemetry...`;
+    } else if (message.event === "confirmed_drone") {
+      liveState.spectrumStatus = `Confirmed drone telemetry on channel ${message.channelIndex ?? "?"}.`;
+    } else if (message.event === "complete") {
+      liveState.spectrumStatus = `Recovery complete: ${Number(message.recoveredCount) || 0} recovered.`;
+    }
+    if (["started", "confirmation_listen", "candidate_listen", "packet_seen", "confirmed_drone", "assignment_recovered", "candidate_failed", "complete"].includes(message.event)) {
+      const nodeText = message.nodeId !== undefined ? ` node ${message.nodeId}` : "";
+      const channelText = message.channelIndex !== undefined ? ` ch ${message.channelIndex}` : "";
+      const reasonText = message.reason ? ` (${message.reason})` : "";
+      appendLiveDebug(`orphan recovery: ${message.event}${nodeText}${channelText}${reasonText}`);
+    }
     renderLiveGcStatus();
   } else if (message.type === "drone_link_status") {
     const nodeId = Number(message.nodeId);
@@ -5280,7 +5815,6 @@ function processLiveSerialLine(line) {
     const parsed = JSON.parse(trimmed);
     recordLiveGcDiagnosticLine(trimmed, { parsed });
     handleLiveProtocolMessage(parsed, "serial");
-    publishLiveRelayMessage(parsed);
   } catch (err) {
     recordLiveGcDiagnosticLine(trimmed, { parseError: err.message });
     appendLiveDebug(`parse error: ${err.message}`);
@@ -5631,6 +6165,7 @@ function scheduleLiveMockTick(drone, rng) {
       radioProfileId: latest.radioProfileId ?? 0,
       txPeriodMs: latest.txPeriodMs ?? 27,
       telemetryAirtimeMs: latest.telemetryAirtimeMs ?? 25.7,
+      expectedUpdateMs: latest.expectedUpdateMs ?? 320,
       sequenceId: (latest.sequenceId || 0) + 1,
       gcMillis: Math.round((latest.gcMillis || 0) + 320),
       command: "Mock live telemetry",
@@ -5695,6 +6230,7 @@ function startLivePositionMock() {
       radioProfileId: 0,
       txPeriodMs: 100,
       telemetryAirtimeMs: 25.7,
+      expectedUpdateMs: 320,
       sequenceId: 1,
       gcMillis: 0,
       command: "Mock live telemetry",
@@ -5776,7 +6312,9 @@ function openLiveMapMenu(latlng, containerPoint) {
       <span class="menu-eta">${lat.toFixed(5)}, ${lng.toFixed(5)}</span>
     </div>
     <div class="command-list cmd-action-list column" style="margin-top:2px;">
-      <button class="cmd-chip cmd-action" data-action="set-live-home" type="button">Set HOME here</button>
+      <button class="cmd-chip cmd-action" data-action="set-live-home" type="button" ${
+        isLiveRemoteViewerMode() ? "disabled" : ""
+      }>Set HOME here</button>
     </div>
   `;
 
@@ -5788,6 +6326,7 @@ function openLiveMapMenu(latlng, containerPoint) {
   if (setHome) {
     setHome.addEventListener("click", (event) => {
       event.stopPropagation();
+      if (isLiveRemoteViewerMode()) return;
       const placement = pendingLiveMapPlacement;
       if (!placement) return;
       closeLiveMapMenu();
@@ -5883,7 +6422,10 @@ function openLiveDroneActionSheet(drone, anchor = null) {
   renameBtn.className = "live-btn";
   renameBtn.type = "button";
   renameBtn.textContent = "Rename";
+  renameBtn.disabled = isLiveRemoteViewerMode();
+  renameBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
   renameBtn.addEventListener("click", () => {
+    if (isLiveRemoteViewerMode()) return;
     const next = window.prompt("Drone name", getLiveDroneAlias(drone.id) || `Drone ${drone.id}`);
     if (next !== null) setLiveDroneAlias(drone.id, next);
     closeLiveDroneActionSheet();
@@ -5983,10 +6525,14 @@ function initLivePositionUi() {
   const endpointEl = document.getElementById("liveRelayEndpoint");
   const sessionEl = document.getElementById("liveRelaySessionId");
   const tokenEl = document.getElementById("liveRelayPublishToken");
+  const logDownloadBtn = document.getElementById("liveGcLogDownloadBtn");
+  const logClearBtn = document.getElementById("liveGcLogClearBtn");
   openBtn?.addEventListener("click", () => openLiveSerialPort());
   closeBtn?.addEventListener("click", closeLiveSerialPort);
   resetBtn?.addEventListener("click", requestFreshSessionConfirmation);
   searchBtn?.addEventListener("click", startLiveSearchMode);
+  logDownloadBtn?.addEventListener("click", exportLiveGcDiagnosticLog);
+  logClearBtn?.addEventListener("click", clearLiveGcDiagnosticLog);
   sourceEl?.addEventListener("change", () => setLiveTelemetrySourceMode(sourceEl.value));
   relayConnectBtn?.addEventListener("click", () => connectLiveRelay());
   relayDisconnectBtn?.addEventListener("click", () => closeLiveRelayConnection({ user: true }));
@@ -6772,6 +7318,7 @@ function handleMapClick(e) {
       const gs = groundStations.find((g) => Number(g.id) === stationId);
       if (gs) {
         gs.updatePosition({ lat: e.latlng.lat, lng: e.latlng.lng });
+        publishLiveHomesStateSoon();
       }
       gsRelocate = null;
       closeGroundStationMenu();
@@ -6833,6 +7380,7 @@ function handleMapClick(e) {
       const gs = groundStations.find((g) => g.id === stationId);
       if (gs) {
         gs.updatePosition({ lat: e.latlng.lat, lng: e.latlng.lng });
+        publishLiveHomesStateSoon();
       }
       gsRelocate = null;
       closeGroundStationMenu();
@@ -10128,6 +10676,7 @@ function tryAddUserHomeFromDevice() {
       userGroundStationId = nextId;
       groundStations.push(new GroundStation(nextId, lat, lng, alt, null));
     }
+    publishLiveHomesStateSoon();
     const gs = groundStations.find((g) => g.id === userGroundStationId);
     if (gs && (!gs.name || !String(gs.name).trim())) openGroundStationNameMenu(gs.id);
     forceRedraw();

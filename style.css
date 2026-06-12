@@ -209,6 +209,29 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   border-color: rgba(255,211,108,0.34);
 }
 
+.live-diagnostic-row{
+  display: grid;
+  grid-template-columns: 1fr minmax(76px, auto) minmax(56px, auto);
+  gap: 6px;
+  align-items: center;
+}
+
+.live-diagnostic-count{
+  min-width: 0;
+  color: rgba(255,255,255,0.50);
+  font-size: var(--ui-font-xs);
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-diagnostic-count strong{
+  margin-left: 4px;
+  color: rgba(255,255,255,0.88);
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+
 .live-field{
   display: flex;
   flex-direction: column;
@@ -792,15 +815,21 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-spectrum-legend-item.assigned{
-  color: rgba(255,211,108,0.96);
+  color: rgba(255,108,108,0.94);
 }
 
 .live-spectrum-legend-item.clear{
   color: rgba(108,255,146,0.90);
 }
 
-.live-spectrum-legend-item.noisy{
-  color: rgba(255,108,108,0.94);
+.live-spectrum-legend-item.occupied,
+.live-spectrum-legend-item.noisy,
+.live-spectrum-legend-item.cad-suspect{
+  color: rgba(255,211,108,0.96);
+}
+
+.live-spectrum-legend-item.confirmed{
+  color: rgba(255,235,135,0.98);
 }
 
 .live-spectrum-bars{
@@ -838,13 +867,21 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   background: rgba(108,255,146,0.72);
 }
 
-.live-spectrum-bar.noisy{
-  background: rgba(255,108,108,0.76);
+.live-spectrum-bar.occupied,
+.live-spectrum-bar.noisy,
+.live-spectrum-bar.cad-suspect{
+  background: rgba(255,211,108,0.84);
+  box-shadow: 0 0 8px rgba(255,211,108,0.42);
+}
+
+.live-spectrum-bar.confirmed{
+  background: rgba(255,235,135,0.96);
+  box-shadow: 0 0 10px rgba(255,235,135,0.58);
 }
 
 .live-spectrum-bar.assigned{
-  background: rgba(255,211,108,0.92);
-  box-shadow: 0 0 8px rgba(255,211,108,0.5);
+  background: rgba(255,108,108,0.90);
+  box-shadow: 0 0 8px rgba(255,108,108,0.5);
 }
 
 /* Panel header/title */

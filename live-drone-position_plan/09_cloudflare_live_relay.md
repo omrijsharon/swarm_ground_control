@@ -1,6 +1,6 @@
 # Part 9: Cloudflare Live Relay Plan
 
-Goal: let one operator SGC browser read the GC ESP32 over USB Serial and automatically broadcast the same parsed live-position JSON stream to remote SGC browsers.
+Goal: let one operator SGC browser read the GC ESP32 over USB Serial and automatically broadcast the live scene state that remote SGC browsers need to mirror the map: drone instances and HOME instances only.
 
 The static app remains available at:
 
@@ -27,7 +27,9 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Allow public publisher connection for the single-session field setup.
 - [x] Keep only one active publisher so a second broadcaster cannot replace an active operator session.
 - [x] Reject viewer-originated WebSocket messages as read-only.
-- [x] Relay only display-oriented SGC JSON message types.
+- [x] Relay only scene-state SGC message types: `drones_state` and `homes_state`.
+- [x] Cache the latest drone and HOME snapshots in the Durable Object.
+- [x] Replay cached drone and HOME snapshots to newly connected viewers.
 - [x] Deploy the Worker with the Durable Object binding and route.
 - [x] Verify `/swarm_ground_control/` still serves the GitHub Pages app through the Worker.
 - [x] Verify `/swarm_ground_control/live/ws` accepts WebSocket upgrades.
@@ -48,17 +50,29 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 
 ## Milestone 3: Relay Data Flow
 
-- [x] Publish parsed GC-to-SGC JSON after local serial handling.
+- [x] Publish SGC scene-state snapshots instead of raw parsed GC-to-SGC JSON.
 - [x] Do not publish raw firmware log text.
-- [x] Feed remote relay messages into `handleLiveProtocolMessage(message, "live-endpoint")`.
-- [x] Stop mock telemetry when live endpoint telemetry arrives.
-- [x] Display remote drone telemetry with the same map/card path as USB serial telemetry.
+- [x] Publish `drones_state` every 250 ms while connected as publisher.
+- [x] Publish `homes_state` every 5000 ms while connected as publisher.
+- [x] Publish `homes_state` immediately on publisher connect and after HOME add/rename/move/delete.
+- [x] Feed remote scene messages into `handleLiveProtocolMessage(message, "live-endpoint")`.
+- [x] Stop mock telemetry when live endpoint drone state arrives.
+- [x] Display remote drone and HOME instances with the same map/card path as local live-position state.
+- [x] Use publisher drone names on viewers without saving them into viewer `localStorage`.
+- [x] Keep HOME snapshots altitude-free.
 - [x] Keep command state local to the operator browser.
 - [x] Disable operator commands while acting as a viewer.
 - [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
-- [x] Verify a remote WebSocket viewer receives relayed `drone_telemetry` from a publisher smoke test.
+- [x] Disable local drone rename and HOME editing while acting as a viewer.
+- [ ] Verify a remote WebSocket viewer receives relayed `drones_state` from a publisher smoke test.
 - [ ] Verify a remote browser receives live drone telemetry from an operator browser.
 - [ ] Verify relay disconnect/reconnect does not break USB serial reading.
+
+## Scene Message Types
+
+`drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, and packet age. It is sent every 250 ms while the operator browser is publishing.
+
+`homes_state` is a full snapshot of HOME instances and includes only `id`, `name`, `lat`, and `lng`. It is sent every 5000 ms, immediately when the publisher connects, and immediately after a HOME is added, renamed, moved, or deleted.
 
 ## Milestone 4: Field Verification
 

@@ -388,22 +388,23 @@ candidate count:          48
 
 Regulatory note: the repository assumes FCC-style 902-928 MHz hardware for planning, but actual transmission must be validated for the deployment region before field use.
 
-- [x] Milestone 11: Implement boot noise scan policy
+- [x] Milestone 11: Implement boot spectrum scan policy
   - [x] GC scans candidate telemetry channels at boot.
-  - [x] GC samples RSSI/noise floor multiple times per candidate channel.
-  - [x] GC discards noisy channels.
-  - [x] GC stores the clear channel list in runtime memory.
-  - [x] GC allocates channels uniformly from the clear candidate set.
+  - [x] GC scans each candidate with the Fast, Balanced, and Robust simple profiles.
+  - [x] GC uses LoRa CAD/LBT activity as the occupied/free decision source.
+  - [x] GC stores the free channel list in runtime memory.
+  - [x] GC allocates channels uniformly from the free, unassigned candidate set.
 
-Boot noise scan policy:
+Boot spectrum scan policy:
 
 - Scan only telemetry candidates, not the shared or guard channels.
-- For each candidate, tune radio, wait `4 ms`, then take `32` RSSI samples separated by `2 ms`.
-- Store median RSSI and max RSSI per channel.
-- A channel is noisy if `median_rssi > -95 dBm` or `max_rssi > -85 dBm`.
-- Recheck initially noisy channels with the same `32` samples, an `8 ms` settle time, and final classification by second-pass median RSSI.
-- If fewer than five channels are clear, keep the five quietest candidates anyway and emit a serial warning.
-- Channel assignment samples uniformly from the clear candidate set, excluding channels already assigned to active drones.
+- For each simple profile and candidate, apply the profile, tune radio, wait `4 ms`, then run CAD/LBT.
+- A telemetry candidate is `occupied` if any simple-profile CAD/LBT pass detects LoRa activity.
+- A telemetry candidate is `free` only if all three simple-profile passes report no activity and the channel is not assigned.
+- Known assigned channels remain unavailable even if CAD does not detect activity during the scan.
+- RSSI is measured only for occupied/assigned display; it does not decide whether a channel is free.
+- If fewer than five channels are free, emit a warning but do not force fallback channels clear.
+- Channel assignment samples uniformly from the free candidate set, excluding channels already assigned to active drones.
 
 ## Join And Assignment Flow
 
@@ -458,7 +459,7 @@ Drone transmit timing:
 - The GC updates the TST estimate after every received packet, so runtime TST drift is RAM-only and is never written to flash.
 - Bench note: after MSP polling was moved behind LoRa TX, the drone measured the blocking `sendRawPacket()` path at about `38 ms`, longer than the earlier `35 ms` period. The fixed-period fallback was replaced by a timing proposal handshake. In the first bench run after that change, drone node `2` proposed `104 ms` from `measuredCycleMs = 89` plus the `15 ms` buffer, the GC ACKed it, and a post-lock 15 second GC sample received `145` telemetry packets with zero `telemetry_missed` events.
 - Bench note: after MSP batch started responding quickly, drone node `2` measured and proposed `63 ms`, but the current GC scanner missed packets at that rate. Raising GC USB serial to `921600` and accepting `65 ms` still produced many sequence gaps, so the bottleneck is not only USB baud rate. The GC keeps the protocol range at `45-250 ms` but clamps the accepted operating period to at least `100 ms`; the resulting `txPeriodMs = 103` bench run produced `145` received telemetry messages in 15 seconds with zero sequence gaps.
-- Scheduler design note: with multiple drones, independent packet windows may overlap. The GC does not prevent overlap; it ranks catchable receive windows by telemetry age and near-future TST, then intentionally skips lower-priority windows without counting those skips as `telemetry_missed`.
+- Scheduler design note: with multiple drones, independent packet windows may overlap. The GC does not prevent overlap; it ranks catchable profile-aware receive windows by normalized telemetry age and near-future listen start, then intentionally skips lower-priority windows without counting those skips as `telemetry_missed`.
 
 - [x] Milestone 14: Define GC scan timing
   - [x] GC records packet receive-done time for each drone.
@@ -475,14 +476,16 @@ GC scan timing:
 - If assignment timing is not accepted yet, listen on the assigned channel for timing proposal acquisition and ignore the probe telemetry packet.
 - After accepting `TX_PERIOD_PROPOSAL`, ACK the drone with the accepted period.
 - On packet receive, estimate `last_tx_start_ms = rx_done_ms - airtime_ms`.
-- Predict next start as `last_tx_start_ms + tx_period_ms`.
-- Tune to the assigned channel `8 ms` before predicted start.
-- Listen for `airtime_ms + 4 ms` after predicted end on a healthy phase estimate.
-- For known-phase drones, consider only catchable windows where `nextTst >= now + 8 ms`.
-- Group candidates within `50 ms` of the earliest catchable TST and select by `lastUpdateAgeMs + missCount * 250 - deltaFromEarliestTstMs * 4`.
+- Predict the next preferred visit using the assignment's TX period and a service stride derived from the active profile-aware scanner cycle budget.
+- Tune to the assigned channel before predicted start by `max(22 ms, ceil(3 LoRa symbols))`.
+- Listen until `ceil(airtime_ms) + max(12 ms, ceil(2 LoRa symbols))` after predicted start on a healthy phase estimate.
+- For known-phase drones, consider only catchable windows where the profile-specific tune guard is still available.
+- Group candidates by overlapping receive windows and select by normalized update age, miss priority, and near-future listen start.
 - If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
-- After one missed packet, listen for `2 * tx_period_ms`.
-- After two or more misses, listen for `3 * tx_period_ms`, then keep cycling so other drones are not starved.
+- The first two listened misses preserve phase and only advance to the next catchable predicted slot.
+- After three consecutive listened misses, run conservative profile-aware recovery for `min(1600 ms, max(500 ms, 3 * txPeriodMs, listenWindowMs))`.
+- Classify `WEAK` when activity is detected but telemetry does not decode.
+- Classify `OFF` only after at least `3` full no-activity reacquire attempts spanning at least `max(5000 ms, 10 * txPeriodMs)`.
 - Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
 - If shared discovery is badly overdue, use a `720 ms` forced shared listen window.
 - High-rate per-packet scanner debug should stay off by default because serial JSON output can otherwise block the receive loop.

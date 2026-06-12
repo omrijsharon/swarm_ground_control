@@ -52,10 +52,12 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Store last received timestamp.
 
 - [x] Milestone 5: Implement freshness states
-  - [x] Mark drone fresh when packet age is `< 1000 ms`.
-  - [x] Mark drone late when packet age is `1000-2000 ms`.
-  - [x] Mark drone stale when packet age is `2000-5000 ms`.
-  - [x] Mark drone offline when packet age is `> 5000 ms`.
+  - [x] Keep Fast-profile minimum thresholds: fresh `< 1000 ms`, late `1000-2000 ms`, stale `2000-5000 ms`, offline `> 5000 ms`.
+  - [x] Scale freshness thresholds from the GC scheduler's `expectedUpdateMs` when Balanced/Robust or mixed profiles make slower updates normal.
+  - [x] Use `ONLINE < max(1000, expectedUpdateMs * 1.8)`.
+  - [x] Use `LATE < max(2000, expectedUpdateMs * 3.0)`.
+  - [x] Use `STALE < max(5000, expectedUpdateMs * 6.0)`.
+  - [x] Fall back to channel-table assignment timing, recent receive history, and `txPeriodMs` when telemetry does not include `expectedUpdateMs`.
   - [x] Display the fresh state as `ONLINE` in the operator UI.
   - [x] Update marker style based on freshness.
   - [x] Update list/panel style based on freshness.
@@ -91,7 +93,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Show computed telemetry airtime.
   - [x] Show configured airtime buffer.
   - [x] Show assigned drone count.
-  - [x] Show clear/noisy channel counts.
+  - [x] Show free/occupied channel counts, with clear/noisy compatibility fallback.
   - [x] Show recent assignment events.
 
 - [x] Milestone 9: Add radio settings UI
@@ -118,7 +120,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Verify mock mode displays 5 drones. Verified manually.
   - [x] Verify serial mode creates drones dynamically. Verified manually.
   - [x] Verify map heading arrows follow telemetry. Verified manually.
-  - [x] Verify freshness thresholds update correctly. Verified manually; thresholds updated to fresh `< 1000 ms`, late `1000-2000 ms`, stale `2000-5000 ms`, offline `> 5000 ms`.
+  - [x] Verify freshness thresholds update correctly. Verified manually for Fast-profile minimums; profile-aware freshness scaling is implemented and pending multi-profile bench verification.
   - [x] Verify command UI is hidden in live-position mode. Verified manually.
   - [x] Verify UI remains usable on desktop viewport. Verified manually in full-screen and non-full-screen desktop browser windows.
   - [x] Verify UI remains usable on mobile/tablet viewport where Web Serial is supported. Verified manually.
@@ -129,8 +131,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Parse and store `channel_scan_event` messages.
   - [x] Show a boot/scanning state while channel scan messages arrive.
   - [x] Render a compact spectrum/noise-floor visualization in the GC/radio panel.
-  - [x] Mark shared, guard, clear, noisy, and assigned channels in the spectrum view.
-  - [x] Keep the existing clear/noisy count summary.
+  - [x] Mark shared, guard, free, occupied, and assigned channels in the spectrum view.
+  - [x] Keep a free/occupied count summary with clear/noisy compatibility fallback.
   - [x] Add an operator fresh-session control.
     - First implemented as `Start Fresh Session` in the GC/radio panel; later moved to the top USB serial control row as `Reset`.
   - [x] Show a confirmation dialog before sending the fresh-session command.
@@ -142,13 +144,17 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Remove live drone cards immediately after GC confirms `clear_all_assignments`.
   - [x] Parse `scanner_event` messages.
   - [x] Show scanner acquisition, missed-packet, and stale-slot events in the existing debug area.
+  - [x] Parse `orphan_recovery_event` messages.
+  - [x] Show orphan occupied-channel recovery events in the existing debug area.
+  - [x] Show compact GC orphan recovery status when firmware reports recovery counters.
+  - [x] Show CAD-suspect, confirmation-listen, confirmed-drone, and assignment-recovered events in debug/status text.
 
 - [x] Milestone 13: Boot scan animation and serial reset recovery
   - [x] Render channel scan events progressively so the spectrum bars fill during a live scan.
-  - [x] Keep updating spectrum bars when the GC rechecks initially noisy channels.
-  - [x] Show a debug line when the GC starts noisy-channel recheck.
+  - [x] Keep updating spectrum bars as each profile CAD scan pass reports channels.
+  - [x] Show profile scan progress while the GC scans Fast, Balanced, and Robust.
   - [x] Hide the spectrum view about 3 seconds after `scan_complete`.
-  - [x] Keep the GC clear/noisy/assigned summary visible after the spectrum hides.
+  - [x] Keep the GC free/occupied/assigned summary visible after the spectrum hides.
   - [x] Remember the last successfully opened Web Serial port for the current page session.
   - [x] Retry granted serial ports after GC disconnect/reset.
   - [x] Re-request `get_status` and `get_channel_table` after automatic reconnect.
@@ -197,6 +203,12 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Keep the panel open until the operator closes it.
   - [x] Add a close icon to the spectrum panel.
   - [x] Add clear/noisy/assigned scan metadata to the panel.
+  - [x] Rename spectrum states to Free, Occupied, and Assigned while tolerating old clear/noisy firmware fields.
+  - [x] Render Free green, Occupied yellow, Assigned red, Shared blue, and guard/reserved neutral.
+  - [x] Distinguish low-confidence CAD-suspect channels from decoded/confirmed drone channels.
+  - [x] Parse `activitySource`, `activityConfidence`, `cadStatus`, `cadError`, `listenAttempted`, `confirmedDrone`, and `decodedNodeId` when firmware provides them.
+  - [x] Scale Occupied/Assigned bar height from display RSSI clamped from `-120` to `-30 dBm`.
+  - [x] Parse profile-aware CAD scan events and show the active simple-profile scan pass.
   - [x] Add a confirmed `Re-scan` action that sends `rescan_channels`.
   - [x] Show operator-facing status for re-scan send, accepted, rejected, timeout, scanning, and complete states.
   - [x] Keep boot/fresh-session scan animation behavior unchanged when the panel is closed.
@@ -255,10 +267,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.
   - Any valid `drone_telemetry` clears stored `LOCKING`/`WEAK`/`OFF`/`OFFLINE` link status for that node immediately.
   - Ignore `drone_link_status` events whose `gcMillis` is older than or equal to the latest accepted telemetry for that node.
-- [x] Add temporary visible GC diagnostic log controls to the USB panel.
+- [x] Add visible GC diagnostic log controls to the USB panel.
   - `Download` exported the rolling serial/UI JSONL capture with a current-state snapshot.
   - `Clear` let the operator reset the capture before reproducing a Search/relock failure.
-  - After the Search/scheduler issue was reproduced and fixed, the visible controls were removed from the production operator UI. The silent in-memory capture/debug helpers remain available for future bench troubleshooting.
+  - The visible controls were restored for the four-drone scheduler investigation.
 - [ ] Manually verify disconnecting a drone leaves it in a stable non-online state.
 - [x] Start live-position mode without a default HOME marker.
 - [x] Add a live map long-press/right-click menu for local HOME placement.
@@ -308,6 +320,7 @@ These tasks mirror `09_cloudflare_live_relay.md`.
 - [x] Disable Reset, Search, Re-lock, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Show viewer-friendly empty-state text when no relay telemetry has arrived.
 - [ ] Browser-verify the operator can use USB Serial normally after adding automatic relay.
-- [ ] Browser-verify USB Serial connection automatically broadcasts telemetry to Cloudflare.
-- [ ] Browser-verify a second browser automatically views the same drones.
-- [ ] Browser-verify remote command controls are unavailable.
+  - [ ] Browser-verify USB Serial connection automatically broadcasts telemetry to Cloudflare.
+  - [ ] Browser-verify a second browser automatically views the same drones.
+  - [ ] Browser-verify remote command controls are unavailable.
+  - [ ] Browser-verify orphan recovery events and recovered drones render from a bench capture.

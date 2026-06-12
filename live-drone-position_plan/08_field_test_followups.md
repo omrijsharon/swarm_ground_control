@@ -37,10 +37,18 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add radio backend support for LoRa CAD/activity detection.
 - [x] Use RadioLib `scanChannel()` on SX1262 backends instead of RSSI-only detection.
 - [x] Add GC link states: `locking`, `weak`, `offline`, and `off`.
-- [x] When an assigned listen window misses telemetry, spend a bounded `500 ms` lock probe on that drone's assigned channel/profile.
+- [x] Preserve TST phase after the first two missed assigned-channel listen windows.
+  - The GC now treats early misses as scheduler misses, advances to the next catchable predicted slot, and does not clear runtime TST state.
+- [x] After three consecutive listened misses, spend a bounded profile-aware lock probe on that drone's assigned channel/profile.
+  - Automatic recovery listens for `min(500 ms, max(txPeriodMs, listenWindowMs))`; manual relock can still use the longer operator-requested window.
 - [x] During recovery, use CAD/activity detection plus normal packet receive.
-- [x] If the 500 ms lock probe sees no LoRa activity, emit `OFF` and stop automatic assigned-channel recovery for that drone until manual relock or Search/rejoin.
-- [x] If the 500 ms lock probe sees LoRa activity but no valid telemetry, emit `WEAK`.
+- [x] If a recovery probe sees no LoRa activity, keep automatic assigned-channel reacquire active and emit `OFFLINE` until `OFF` is confirmed.
+- [x] Emit `OFF` only after confirmed no-activity evidence.
+  - Confirmation requires at least `3` full, unclipped no-activity reacquire attempts spanning at least `max(5000 ms, 10 * txPeriodMs)`.
+  - `OFF` assignments are no longer terminal; the scanner keeps low-priority assigned-channel reacquire attempts until telemetry returns or the operator deletes the assignment.
+- [x] If the completed recovery probe sees LoRa activity but no valid telemetry, emit `WEAK`.
+- [x] Treat malformed assigned-channel packets, wrong-node packets, duplicate packets, control echoes, and CAD hits as activity evidence.
+  - These do not count as valid telemetry, but they prevent one negative recovery window from falsely proving the drone is powered off.
 - [x] Clear terminal `OFF` runtime state when Search rediscovers the same node or when a timing proposal arrives, so rejoin/acquisition is not blocked by stale OFF state.
 - [x] Treat "all active assignments are terminal OFF" as shared-channel rejoin discovery instead of scanner idle.
   - Field diagnostics `sgc_gc_serial_2026-06-10T22-17-44-551Z.jsonl` and `sgc_gc_serial_2026-06-10T22-20-40-474Z.jsonl` showed node `6` only rejoined after Delete because deleting made `assignedDrones = 0`, which kept the GC on shared discovery. The GC now uses the same shared rejoin behavior when assignments still exist but every active assignment is already classified `OFF`.
@@ -77,8 +85,16 @@ Goal: address the first field-test findings without expanding this branch into m
   - Field diagnostic `sgc_gc_serial_2026-06-10T21-40-11-023Z.jsonl` showed Search completed assignment and `tx_period_ack_sent`, but the GC then repeatedly reported `cad_activity_detected` / `activity_without_valid_packet` and did not emit `drone_telemetry` until the serial close/open reset the GC.
   - The scanner now treats post-ACK/manual relock as clean receive-only windows. CAD is deferred so it cannot pull the SX1262 out of RX while the GC is trying to catch the first steady telemetry packet.
 - [x] Increase predicted assigned-channel receive tolerance to `22 ms` pre-tune guard and `12 ms` post guard.
+- [x] Make assigned-channel receive windows profile-aware.
+  - The GC now uses `max(22 ms, ceil(3 symbols))` pre-tune guard and `max(12 ms, ceil(2 symbols))` post guard, then adds each assignment's telemetry airtime.
+- [x] Make GC scheduler fairness profile-aware.
+  - The scanner computes a cycle budget from active known-phase assignments and schedules each drone by service stride instead of assuming every drone can be caught every TX period.
+- [x] Score overlapping receive windows by normalized age.
+  - Slow Robust profiles are compared against their own target service interval, so they do not dominate Fast drones merely because their natural period is longer.
+- [x] Emit per-drone `expectedUpdateMs` in `drone_telemetry` and `channel_table.assignments[]`.
+  - SGC uses this expected service interval to scale ONLINE/LATE/STALE/OFFLINE thresholds, so four Robust drones at about `0.3-0.5 Hz` are not falsely marked stale when that rate is within receiver capacity.
 - [x] Use a broad one-drone assigned-channel listen window when Search is inactive.
-- [x] Replace the old two-second missed-telemetry defer with immediate bounded recovery.
+- [x] Replace the old immediate single-miss recovery with three-miss bounded recovery.
 - [x] Emit `drone_link_status` JSON with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Show `LOCKING`, `WEAK`, `OFFLINE`, and `OFF` in SGC.
 - [x] Use orange for `WEAK`, red for `OFFLINE`, and gray for `OFF`.
@@ -87,7 +103,7 @@ Goal: address the first field-test findings without expanding this branch into m
   - If the browser sees the ACK event but no `drone_telemetry` for that node within about two seconds, SGC requests `get_status`, `get_channel_table`, and `relock_drone` instead of requiring a manual serial close/open.
 - [x] Add visible SGC diagnostic-log controls for reproducing Search/relock failures.
   - The exported JSONL includes GC serial lines, outgoing SGC commands, local Search/Re-lock click markers, serial open/close events, command timeouts, and a current-state snapshot.
-  - After the two-node Search/scheduler bug was diagnosed and fixed, the visible logger row was removed from the production UI. The rolling capture remains internal for future troubleshooting.
+  - The visible logger row was restored for the four-drone scheduler investigation.
 - [x] Do not clear newly rejoined drones on `fresh_session_complete`.
   - Local drone clearing already happens when assignments are actually cleared; clearing again at completion can remove a drone that rejoined quickly during reset/search testing.
 - [x] Debounce SGC terminal link display so a single missed receive window or one stray recovery packet cannot flicker a drone between `ONLINE` and `OFFLINE`.
@@ -157,6 +173,24 @@ Goal: address the first field-test findings without expanding this branch into m
   - GC `COM18` has been flashed with the high-range control packet IDs (`0xA1-0xA6`) and profile-aware timing validation. Leave this unchecked until every drone ESP32 is flashed with the same firmware image.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.
 - [ ] Field-verify Robust gives better reliability at the preferred lower update rate.
+
+## Milestone 5: Three-Profile CAD Spectrum Scan
+
+- [x] Replace the RSSI-first spectrum scan with profile-aware CAD/LBT scanning.
+- [x] Scan each telemetry candidate channel with Fast, Balanced, and Robust profiles.
+- [x] Classify channels as `free`, `occupied`, `assigned`, or `reserved`.
+- [x] Keep assigned channels unavailable regardless of CAD result.
+- [x] Measure RSSI only for occupied/assigned display and clamp SGC bar height from `-120` to `-30 dBm`.
+- [x] Preserve compatibility fields: `clear`, `clearFrequencyMhz`, `noisyFrequencyMhz`, `medianRssi`, and `maxRssi`.
+- [x] Add explicit serial fields: `activityDetected`, `detectedProfileIds`, `displayRssi`, `freeChannels`, `occupiedChannels`, and `assignedChannels`.
+- [x] Render Free green, Occupied yellow, Assigned red, Shared blue, and reserved/guard neutral in SGC.
+- [x] Treat CAD hits as low-confidence `cad_suspect` activity and confirm drone ownership only after decoded telemetry.
+- [x] Add channel activity fields for `activitySource`, `activityConfidence`, `cadStatus`, `cadError`, `listenAttempted`, `confirmedDrone`, and `decodedNodeId`.
+- [x] Use OOCR normal RX listen attempts to confirm CAD-suspect orphan channels instead of repeated CAD sampling.
+- [ ] Bench-verify no-drone scan reports free telemetry candidates except real RF activity.
+- [ ] Bench-verify an active unassigned LoRa transmitter reports occupied with its detecting profile ID.
+- [ ] Bench-verify an assigned channel stays red/assigned even when CAD does not detect activity during the scan.
+- [ ] Browser-verify the updated spectrum panel colors, labels, and RSSI-height scaling.
 
 ## Static Checks
 

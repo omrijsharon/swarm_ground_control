@@ -50,13 +50,14 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `radioProfileId`.
   - [x] Include `txPeriodMs`.
   - [x] Include `telemetryAirtimeMs`.
+  - [x] Include `expectedUpdateMs` from the GC scheduler so SGC can scale freshness for Fast/Balanced/Robust profiles.
   - [x] Include `sequenceId`.
   - [x] Include firmware-relative `gcMillis` timestamp.
 
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25.7,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25.7,"expectedUpdateMs":320,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON
@@ -71,11 +72,12 @@ Candidate:
   - [x] Include assigned drone count.
   - [x] Include clear channel count.
   - [x] Include current scan mode.
+  - [x] Include optional orphan occupied-channel recovery status.
 
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":231.4,"discoveryJoinAssignAirtimeMs":297.0,"discoveryJoinAckAirtimeMs":231.4,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":231.4,"discoveryJoinAssignAirtimeMs":297.0,"discoveryJoinAckAirtimeMs":231.4,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -130,19 +132,45 @@ Protocol note: live-position air control packets now use high-range packet IDs `
   - [x] Include node/channel details for assigned-channel events.
   - [x] Include GC-local listen-window timing fields where useful.
   - [x] Include miss count and skipped-slot details for recovery debugging.
+  - [x] Include profile-aware scheduler diagnostics where useful.
+    - Scanner events may include `listenWindowMs`, `targetServiceMs`, `serviceStride`, and `schedulerCycleBudgetMs`.
 
 Examples:
 
 ```json
-{"type":"scanner_event","event":"assigned_listen","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"nextTstGcMillis":123456,"listenStartGcMillis":123448,"listenDeadlineGcMillis":123486,"missCount":0,"gcMillis":123440}
+{"type":"scanner_event","event":"assigned_listen","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"nextTstGcMillis":123456,"listenStartGcMillis":123448,"listenDeadlineGcMillis":123486,"listenWindowMs":60,"targetServiceMs":300,"serviceStride":3,"schedulerCycleBudgetMs":272,"missCount":0,"gcMillis":123440}
 {"type":"scanner_event","event":"timing_probe_telemetry_ignored","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"reason":"waiting_for_tx_period_proposal","gcMillis":123610}
 {"type":"scanner_event","event":"telemetry_received","nodeId":2,"estimatedTstGcMillis":123456,"nextTstGcMillis":123483,"missCount":0,"gcMillis":123482}
 {"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
+{"type":"scanner_event","event":"phase_preserved_after_miss","nodeId":2,"missCount":1,"reason":"known_tst_preserved","gcMillis":123520}
+{"type":"scanner_event","event":"recovery_started_after_consecutive_misses","nodeId":2,"missCount":3,"reason":"missed_expected_windows","gcMillis":123900}
+{"type":"scanner_event","event":"search_skip_no_miss","nodeId":2,"skippedSlots":9,"reason":"shared_search_dwell","gcMillis":124200}
 ```
 
 Default firmware behavior suppresses high-rate scanner events such as `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` unless `LIVE_POSITION_VERBOSE_SCANNER_EVENTS` is enabled. Keep normal `drone_telemetry` output lightweight enough that USB serial does not block the LoRa receive loop.
 
-- [x] Milestone 3c: Add GC serial capture diagnostics
+- [x] Milestone 3c: Define orphan occupied-channel recovery JSON
+  - [x] Emit recovery lifecycle events as `orphan_recovery_event`.
+  - [x] Include candidate channel/profile details while listening.
+  - [x] Include decoded node/sequence/RSSI/SNR details when packets are seen.
+  - [x] Distinguish CAD-suspect channels from decoded/confirmed drone telemetry.
+  - [x] Emit `confirmation_listen` and `confirmed_drone` events before assignment recovery.
+  - [x] Emit `assignment_event.event = "orphan_assignment_recovered"` after a recovered assignment is recreated.
+  - [x] Keep recovered drones on the normal `drone_telemetry`, `assignments`, and `channel_table` paths after recovery.
+
+Examples:
+
+```json
+{"type":"orphan_recovery_event","event":"started","reason":"boot_no_assignments","candidateChannels":2,"recoveredCount":0,"gcMillis":123500}
+{"type":"orphan_recovery_event","event":"confirmation_listen","channelIndex":27,"frequencyMhz":916.0,"radioProfileId":46,"profileName":"balanced","listenMs":720,"candidateChannels":2,"recoveredCount":0,"gcMillis":123510}
+{"type":"orphan_recovery_event","event":"packet_seen","channelIndex":27,"frequencyMhz":916.0,"radioProfileId":46,"profileName":"balanced","nodeId":2,"sequenceId":44,"rssi":-74,"snr":8.5,"candidateChannels":2,"recoveredCount":0,"gcMillis":123620}
+{"type":"orphan_recovery_event","event":"confirmed_drone","channelIndex":27,"frequencyMhz":916.0,"radioProfileId":46,"profileName":"balanced","nodeId":2,"sequenceId":44,"rssi":-74,"snr":8.5,"candidateChannels":2,"recoveredCount":0,"gcMillis":123621}
+{"type":"orphan_recovery_event","event":"assignment_recovered","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"radioProfileId":46,"txPeriodMs":154,"rssi":-74,"snr":8.5,"candidateChannels":2,"recoveredCount":1,"gcMillis":123770}
+{"type":"assignment_event","event":"orphan_assignment_recovered","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"radioProfileId":46,"txPeriodMs":154,"rssi":-74,"snr":8.5,"reason":"orphan_telemetry","gcMillis":123770}
+{"type":"orphan_recovery_event","event":"complete","reason":"boot_no_assignments","candidateChannels":2,"recoveredCount":1,"gcMillis":124600}
+```
+
+- [x] Milestone 3d: Add GC serial capture diagnostics
   - [x] Add a laptop-side serial logger that writes timestamped JSONL from the GC USB serial stream.
     - Tool: `tools/gc_serial_logger.ps1`.
     - Default capture target: `COM18` at `921600` baud.
@@ -153,18 +181,18 @@ Default firmware behavior suppresses high-rate scanner events such as `assigned_
   - [x] Keep a silent in-browser rolling diagnostic log of the Web Serial stream while SGC owns the port.
     - It records incoming GC lines and outgoing SGC commands with a `direction` field.
     - Browser console helpers: `downloadLiveGcLog()` exports JSONL, and `getLiveGcLog()` returns the current in-memory entries.
-  - [x] Temporarily expose the in-browser diagnostic log in the SGC USB panel for field debugging.
+  - [x] Expose the in-browser diagnostic log in the SGC USB panel for field debugging.
     - `Download` exported JSONL with a leading snapshot of current drones, assignments, link states, pending commands, recent scanner/search/assignment events, and GC status.
     - `Clear` reset the capture before reproducing a field issue.
     - Local UI actions such as Search, Re-lock, serial open/close, and command timeouts are recorded alongside serial lines.
-    - After the two-node Search/scheduler issue was diagnosed, the visible USB-panel controls were removed from the production operator UI. Console helpers remain for bench use.
+    - The visible controls were restored for the four-drone scheduler investigation.
   - [ ] Use a long capture during a multi-drone failure and attach the generated JSONL/summary notes to the scheduler bench results.
 
 - [x] Milestone 4: Define channel table JSON
   - [x] Report shared channel.
   - [x] Report reserved channels.
   - [x] Report candidate telemetry channels.
-  - [x] Report noisy/discarded channels.
+  - [x] Report free and occupied candidate channels.
   - [x] Report active assignments.
 
 The GC firmware owns the channel table. SGC should display it and request refreshes, but should not independently allocate channels.
@@ -175,8 +203,8 @@ Required fields:
 - `sharedFrequencyMhz`: discovery/assignment channel.
 - `reservedFrequencyMhz`: frequencies excluded from telemetry assignment. This includes the shared channel guard area.
 - `candidateFrequencyMhz`: all telemetry-center frequencies considered by the allocator.
-- `clearFrequencyMhz`: candidate frequencies accepted after noise scan.
-- `noisyFrequencyMhz`: candidate frequencies rejected after noise scan.
+- `clearFrequencyMhz`: compatibility array for candidate frequencies classified `free` by CAD/LBT scan.
+- `noisyFrequencyMhz`: compatibility array for candidate frequencies classified `occupied` by CAD/LBT scan.
 - `assignments`: active or persisted assignment records.
 - `gcMillis`: firmware-relative GC timestamp.
 
@@ -185,6 +213,17 @@ Optional fields:
 - `bandwidthHz`: bandwidth used when the table was produced.
 - `channelSpacingMhz`: frequency spacing between candidate channel centers.
 - `updatedAtGcMillis`: timestamp of the last scan/allocation update.
+- `freeChannels`, `occupiedChannels`, `assignedChannels`: summary counts.
+- `channels[]`: per-channel objects with `state`, `activityDetected`, `detectedProfileIds`, and optional `displayRssi`.
+- `state` may be `"unknown"` for telemetry candidates when CAD returned an error/unknown result; those channels are not counted as free or occupied.
+- New activity-detail fields:
+  - `activitySource`: `"none"`, `"cad"`, or `"decoded_telemetry"`.
+  - `activityConfidence`: `"free"`, `"cad_suspect"`, `"confirmed_drone"`, or `"scan_error"`.
+  - `cadStatus`: `"free"`, `"detected"`, or `"error"`.
+  - `cadError`: true when CAD returned an error/unknown state that is not occupied evidence.
+  - `listenAttempted`: true when OOCR tried normal RX confirmation on that channel/profile.
+  - `confirmedDrone`: true after decoding a valid live-position telemetry packet.
+  - `decodedNodeId`: node ID from the decoded packet when known.
 
 Assignment record fields:
 
@@ -197,6 +236,7 @@ Assignment record fields:
 - `snr`
 - `txPeriodMs`
 - `telemetryAirtimeMs`
+- `expectedUpdateMs`
 - `timingAccepted`
 - `missCount`
 - `lastSequenceId`
@@ -204,7 +244,7 @@ Assignment record fields:
 Example:
 
 ```json
-{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0,916.0],"noisyFrequencyMhz":[903.5],"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"bandwidthHz":500000,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"channelSpacingMhz":0.5,"gcMillis":123500}
+{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0],"noisyFrequencyMhz":[903.5],"freeChannels":2,"occupiedChannels":1,"assignedChannels":1,"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"expectedUpdateMs":320,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"channels":[{"channelIndex":2,"frequencyMhz":903.5,"role":"telemetry_candidate","state":"occupied","activityDetected":true,"activitySource":"cad","activityConfidence":"cad_suspect","cadStatus":"detected","cadError":false,"listenAttempted":false,"confirmedDrone":false,"detectedProfileIds":[46],"displayRssi":-76}],"bandwidthHz":500000,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"channelSpacingMhz":0.5,"gcMillis":123500}
 ```
 
 - [x] Milestone 5: Define error/warning JSON
@@ -324,7 +364,7 @@ Maintenance response rules:
 - Commands that change channel availability or assignments emit an updated `channel_table`.
 - Rejected commands emit `command_ack` with `accepted:false` and may also emit `warning` or `error`.
 
-Implementation note: `rescan_channels` is implemented for manual spectrum refresh. It preserves existing assignments, emits `command_ack`, runs the GC channel scan, then emits fresh `channel_scan_event`, `channel_table`, and `gc_status` output.
+Implementation note: `rescan_channels` is implemented for manual spectrum refresh. It preserves existing assignments, emits `command_ack`, runs the GC channel scan, then emits fresh `channel_scan_event`, `channel_table`, and `gc_status` output. If the scan finds CAD-suspect telemetry candidates while there are zero active assignments, GC also enters Search/OOCR and may emit `search_event`, `orphan_recovery_event`, recovered assignments, and normal telemetry before the final `channel_table`/`gc_status`.
 
 Implementation note: `relock_drone` is implemented for manual runtime TST recovery. It preserves the assignment and flash state, emits `command_ack`, emits `scanner_event.event = "manual_relock_scheduled"`, and lets the GC reacquire phase from normal assigned-channel telemetry.
 
@@ -390,31 +430,36 @@ Expected ACK:
   - [x] Emit `channel_scan_event` when the GC starts scanning.
   - [x] Emit per-channel scan results or compact batches while scanning.
   - [x] Emit `channel_scan_event` when scanning completes.
-  - [x] Include `frequencyMhz`, `channelIndex`, `medianRssi`, `maxRssi`, and `state`.
+  - [x] Include `frequencyMhz`, `channelIndex`, and `state`.
+  - [x] Emit `profile_scan_started` for each simple CAD pass: Fast, Balanced, and Robust.
+  - [x] Include `radioProfileId`, `profileName`, `activityDetected`, and optional RSSI fields on profile-aware `channel_scanned` events.
   - [x] Include shared/guard/candidate role information where useful for SGC rendering.
   - [x] Keep the final `channel_table` as the authoritative post-scan state.
   - [x] Use the existing scan JSON stream for the temporary boot animation; no extra schema is required.
-  - [x] Re-emit `channel_scanned` for initially noisy channels after second-pass measurement so SGC updates the same bars.
+  - [x] Re-emit `channel_scanned` per profile pass so SGC updates the same bars as activity evidence accumulates.
   - [x] Include optional `scanPass` for scan debugging; consumers may ignore it.
 
 Scan event examples:
 
 ```json
 {"type":"channel_scan_event","event":"scan_started","candidateChannels":48,"gcMillis":123000}
-{"type":"channel_scan_event","event":"channel_scanned","channelIndex":6,"frequencyMhz":905.5,"medianRssi":-111,"maxRssi":-105,"state":"clear","gcMillis":123050}
-{"type":"channel_scan_event","event":"scan_complete","clearChannels":42,"noisyChannels":6,"fallbackUsed":false,"gcMillis":124200}
+{"type":"channel_scan_event","event":"profile_scan_started","candidateChannels":48,"radioProfileId":0,"profileName":"fast","gcMillis":123010}
+{"type":"channel_scan_event","event":"channel_scanned","channelIndex":6,"frequencyMhz":905.5,"state":"occupied","activityDetected":true,"activitySource":"cad","activityConfidence":"cad_suspect","cadStatus":"detected","cadError":false,"detectedProfileIds":[0],"radioProfileId":0,"profileName":"fast","displayRssi":-82,"gcMillis":123050}
+{"type":"channel_scan_event","event":"scan_complete","clearChannels":42,"noisyChannels":6,"freeChannels":42,"occupiedChannels":6,"assignedChannels":1,"fallbackUsed":false,"gcMillis":124200}
 ```
 
 - [x] Milestone 13: Extend `channel_table` for spectrum rendering
   - [x] Include per-channel details in addition to the existing clear/noisy frequency arrays.
-  - [x] Mark `shared`, `guard`, `telemetry_candidate`, `clear`, `noisy`, and `assigned` channel roles.
-  - [x] Include median and max RSSI values for candidate telemetry channels.
+  - [x] Mark `shared`, `guard`, `telemetry_candidate`, `free`, `occupied`, and `assigned` channel states.
+  - [x] Include `activityDetected`, `detectedProfileIds`, and `displayRssi` where useful for spectrum rendering.
+  - [x] Include median and max RSSI values only when RSSI was measured for occupied/assigned display.
   - [x] Preserve the existing compact arrays for simple SGC summary counts.
+  - [x] Keep `clearFrequencyMhz` as a free-channel compatibility array and `noisyFrequencyMhz` as an occupied-channel compatibility array.
 
 Candidate extension:
 
 ```json
-{"type":"channel_table","channels":[{"channelIndex":6,"frequencyMhz":905.5,"role":"telemetry_candidate","clear":true,"medianRssi":-111,"maxRssi":-105},{"channelIndex":25,"frequencyMhz":915.0,"role":"shared","clear":false}],"gcMillis":124250}
+{"type":"channel_table","channels":[{"channelIndex":6,"frequencyMhz":905.5,"role":"telemetry_candidate","clear":false,"state":"occupied","activityDetected":true,"activitySource":"decoded_telemetry","activityConfidence":"confirmed_drone","cadStatus":"detected","cadError":false,"listenAttempted":true,"confirmedDrone":true,"decodedNodeId":2,"detectedProfileIds":[0,46],"displayRssi":-82},{"channelIndex":25,"frequencyMhz":915.0,"role":"shared","clear":false,"state":"reserved"}],"gcMillis":124250}
 ```
 
 ## Smoke Test Verification
@@ -435,6 +480,8 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add `search_event` lifecycle messages: `search_started`, `join_detected`, `assignment_completed`, `search_telemetry_round`, `search_complete`, and `search_timeout`.
 - [x] Add `drone_link_status` with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Define link states `locking`, `weak`, `offline`, and `off`.
+- [x] Treat `off` as confirmed no-activity only.
+  - GC emits `reason:"confirmed_no_activity"` only after multiple full no-activity reacquire attempts. Earlier no-activity recovery windows remain `offline` while automatic reacquire continues.
 - [x] Add SGC-to-GC `clear_assignment` for deleting one persisted assignment.
 - [x] Add SGC-to-GC `set_radio_profile` for future assignments.
 - [x] Include default-assignment profile information in `gc_status`.

@@ -55,23 +55,24 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
 
 - [x] Milestone 4: Emit detailed spectrum scan information
   - [x] GC emits a scan-start event before scanning telemetry candidate channels.
-  - [x] GC emits per-channel scan progress or compact batches during scanning.
-  - [x] Per-channel scan data includes frequency, median RSSI, max RSSI, and clear/noisy state.
-  - [x] GC emits scan-complete summary with clear/noisy counts and fallback status.
+  - [x] GC emits `profile_scan_started` before each simple-profile CAD pass.
+  - [x] GC emits per-channel scan progress during scanning.
+  - [x] Per-channel scan data includes frequency, profile ID/name, activity detection, and optional RSSI.
+  - [x] GC emits scan-complete summary with free/occupied/assigned counts and compatibility clear/noisy counts.
   - [x] Final `channel_table` includes enough per-channel data for SGC to render a spectrum view.
   - [x] SGC can request the latest channel table after connecting late, even if it missed GC boot.
-  - [x] GC boot scan uses 32 RSSI samples per candidate channel.
-  - [x] GC boot scan uses 4 ms settle time and 2 ms RSSI sample interval.
-  - [x] GC rechecks initially noisy channels in a second pass before final classification.
-  - [x] Second pass keeps 32 RSSI samples, uses 8 ms settle time, and treats median RSSI as the final noisy/clear decision.
-  - [x] GC emits updated `channel_scanned` events for rechecked noisy channels so SGC can update the spectrum bars live.
+  - [x] GC scans Fast, Balanced, and Robust profiles on every telemetry candidate channel.
+  - [x] GC waits 4 ms after each frequency/profile tune before CAD/LBT.
+  - [x] GC uses CAD/LBT, not RSSI, as the free/occupied decision source.
+  - [x] GC measures RSSI only for occupied/assigned display.
+  - [x] GC emits updated `channel_scanned` events for each profile pass so SGC can update spectrum bars live.
 
 - [x] Milestone 5: Add SGC spectrum and lifecycle UI
   - [x] SGC requests status and channel table after serial connection opens.
   - [x] SGC shows a boot/scanning state while channel scan messages arrive.
-  - [x] SGC renders a compact spectrum/noise-floor visualization.
-  - [x] SGC visually marks shared, guard, clear, noisy, and assigned channels.
-  - [x] SGC keeps showing clear/noisy summary counts.
+  - [x] SGC renders a compact spectrum/activity visualization.
+  - [x] SGC visually marks shared, guard, free, occupied, and assigned channels.
+  - [x] SGC keeps showing free/occupied/assigned summary counts.
   - [x] SGC adds a `Start Fresh Session` control in the GC/radio panel.
   - [x] SGC disables the fresh-session control while a command is pending.
   - [x] SGC shows command ACK/failure feedback in the debug/status area.
@@ -93,15 +94,18 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] GC implements `rescan_channels` without clearing assignments.
   - [x] GC emits scan events, a fresh `channel_table`, and `gc_status` after manual rescan.
     - Direct COM18 serial probe after flashing GC returned `command_ack accepted=true`, `scan_started`, `scan_complete`, `channel_table`, and `gc_status.scanMode = manual_rescan`.
+  - [x] GC treats CAD hits as suspect activity and exposes decoded telemetry confirmation separately.
+  - [x] GC enters Search/OOCR after manual rescan when CAD-suspect channels exist and there are zero active assignments.
+  - [x] SGC renders CAD-suspect channels separately from decoded/confirmed drone channels.
   - [ ] Manually verify the browser panel open/close flow.
   - [ ] Manually verify the cancel-confirmation path sends no command.
   - [ ] Bench-verify manual rescan temporarily interrupts telemetry and then recovers.
 
-- [x] Milestone 6: Bench verification
-  - [x] Bench-measure the longer boot scan and confirm it lands near 3.5-4.2 seconds.
-    - Direct `clear_all_assignments` scan test emitted 48 `channel_scanned` events and completed in 3.69 seconds.
-  - [x] Bench-measure the two-pass scan and record initial noisy count, final noisy count, and duration.
-    - Direct `clear_all_assignments` scan test: 48 initial events, 32 initially noisy, 32 rechecked, 9 cleared on recheck, 23 final noisy, 6.318 seconds total.
+- [ ] Milestone 6: Bench verification
+  - [ ] Bench-measure the three-profile CAD scan duration.
+  - [ ] Bench-verify free channels when no drones are transmitting.
+  - [ ] Bench-verify occupied channels and detecting profile IDs with an active unassigned LoRa transmitter.
+  - [ ] Bench-verify assigned channels stay assigned/red even if CAD does not detect activity during the scan.
   - [x] Reset the drone node and confirm it rejoins through the shared channel.
     - User manual bench test passed.
   - [x] Confirm the GC reuses the previous assignment for the same node when valid.
