@@ -23,6 +23,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Allow one `publisher` per session.
 - [x] Allow multiple `viewer` connections per session.
 - [x] Reject a second publisher for the same session.
+- [x] Evict a stale/non-publishing publisher so it cannot block the real GC browser.
 - [x] Switch to one public session named `public`.
 - [x] Allow public publisher connection for the single-session field setup.
 - [x] Keep only one active publisher so a second broadcaster cannot replace an active operator session.
@@ -33,6 +34,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Deploy the Worker with the Durable Object binding and route.
 - [x] Verify `/swarm_ground_control/` still serves the GitHub Pages app through the Worker.
 - [x] Verify `/swarm_ground_control/live/ws` accepts WebSocket upgrades.
+- [x] Expose publisher idle diagnostics on `/swarm_ground_control/live/status`.
 
 ## Milestone 2: SGC Source Modes
 

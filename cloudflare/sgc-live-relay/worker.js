@@ -2,6 +2,8 @@ const APP_PREFIX = "/swarm_ground_control";
 const GITHUB_PAGES_ORIGIN = "https://omrijsharon.github.io";
 const APP_ASSET_VERSION = "live-scene-relay-3";
 const MAX_RELAY_MESSAGE_BYTES = 64 * 1024;
+const PUBLISHER_STARTUP_GRACE_MS = 5000;
+const PUBLISHER_IDLE_TIMEOUT_MS = 10000;
 const ALLOWED_SGC_MESSAGE_TYPES = new Set([
   "drones_state",
   "homes_state",
@@ -138,6 +140,8 @@ export class LiveRelaySession {
   }
 
   statusPayload(url) {
+    const now = Date.now();
+    this.cleanupStalePublisher(now);
     return {
       sessionId: normalizeSessionId(url.searchParams.get("sessionId")),
       publisherConnected: Boolean(this.publisher),
@@ -145,12 +149,16 @@ export class LiveRelaySession {
       lastMessageAt: this.lastMessageAt,
       lastDronesStateAt: this.lastDronesStateAt,
       lastHomesStateAt: this.lastHomesStateAt,
+      publisherConnectedAt: this.publisher?.connectedAt || null,
+      publisherIdleMs: this.publisher ? this.publisherIdleMs(now) : null,
+      publisherHasPublished: Boolean(this.lastMessageAt),
       publicPublish: isPublicPublishEnabled(this.env),
       publishTokenConfigured: Boolean(normalizeSecret(this.env.PUBLISH_TOKEN)),
     };
   }
 
   acceptPublisher(request, url) {
+    this.cleanupStalePublisher(Date.now());
     const token = normalizeSecret(url.searchParams.get("token") || request.headers.get("x-publish-token") || "");
     const expectedToken = normalizeSecret(this.env.PUBLISH_TOKEN);
     if (!isPublicPublishEnabled(this.env) && (!expectedToken || token !== expectedToken)) {
@@ -189,6 +197,7 @@ export class LiveRelaySession {
   }
 
   acceptViewer(url) {
+    this.cleanupStalePublisher(Date.now());
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     const connectionId = this.nextConnectionId++;
@@ -215,6 +224,9 @@ export class LiveRelaySession {
       lastMessageAt: this.lastMessageAt,
       lastDronesStateAt: this.lastDronesStateAt,
       lastHomesStateAt: this.lastHomesStateAt,
+      publisherConnectedAt: this.publisher?.connectedAt || null,
+      publisherIdleMs: this.publisher ? this.publisherIdleMs() : null,
+      publisherHasPublished: Boolean(this.lastMessageAt),
     });
     if (!this.publisher) {
       this.safeSend(server, {
@@ -327,6 +339,7 @@ export class LiveRelaySession {
   }
 
   broadcastStatus() {
+    const now = Date.now();
     const payload = {
       kind: "relay_status",
       state: "connected",
@@ -335,6 +348,9 @@ export class LiveRelaySession {
       lastMessageAt: this.lastMessageAt,
       lastDronesStateAt: this.lastDronesStateAt,
       lastHomesStateAt: this.lastHomesStateAt,
+      publisherConnectedAt: this.publisher?.connectedAt || null,
+      publisherIdleMs: this.publisher ? this.publisherIdleMs(now) : null,
+      publisherHasPublished: Boolean(this.lastMessageAt),
     };
     if (this.publisher) this.safeSend(this.publisher.socket, { ...payload, role: "publisher" });
     for (const [connectionId, viewer] of this.viewers) {
@@ -355,6 +371,33 @@ export class LiveRelaySession {
     if (this.viewers.delete(connectionId)) {
       this.broadcastStatus();
     }
+  }
+
+  publisherIdleMs(now = Date.now()) {
+    if (!this.publisher) return null;
+    const activityAt = this.lastMessageAt || this.publisher.connectedAt;
+    return Math.max(0, now - activityAt);
+  }
+
+  publisherIsStale(now = Date.now()) {
+    if (!this.publisher) return false;
+    if (!this.lastMessageAt) {
+      return now - this.publisher.connectedAt > PUBLISHER_STARTUP_GRACE_MS;
+    }
+    return now - this.lastMessageAt > PUBLISHER_IDLE_TIMEOUT_MS;
+  }
+
+  cleanupStalePublisher(now = Date.now()) {
+    if (!this.publisherIsStale(now)) return false;
+    const staleSocket = this.publisher.socket;
+    this.publisher = null;
+    try {
+      staleSocket.close(4000, "publisher idle");
+    } catch {
+      // The connection is already gone or cannot be closed; clearing state is enough.
+    }
+    this.broadcastStatus();
+    return true;
   }
 
   safeSend(socket, payload) {

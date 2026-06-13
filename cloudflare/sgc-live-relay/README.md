@@ -16,6 +16,8 @@ The relay intentionally mirrors only the scene instances that viewers need:
 
 The Worker caches the latest drone and HOME snapshots and sends them immediately to late-joining viewers. It rejects old firmware/diagnostic relay messages such as `drone_telemetry`, `gc_status`, `channel_table`, and scan/search events.
 
+Publisher connections that do not publish any scene state within 5 seconds, or stop publishing for 10 seconds, are treated as stale and evicted so the real GC browser can reconnect.
+
 ## Deploy
 
 ```powershell
