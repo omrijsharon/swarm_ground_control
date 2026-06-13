@@ -52,6 +52,7 @@ const LIVE_RELAY_ENDPOINT_STORAGE_KEY = "sgc.livePosition.relayEndpoint.v1";
 const LIVE_RELAY_PUBLIC_SESSION_ID = "public";
 const LIVE_RELAY_RECONNECT_MS = 1500;
 const LIVE_RELAY_DRONES_STATE_INTERVAL_MS = 250;
+const LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS = 80;
 const LIVE_RELAY_HOMES_STATE_INTERVAL_MS = 5000;
 const LIVE_RELAY_MESSAGE_TYPES = new Set([
   "drones_state",
@@ -3772,10 +3773,11 @@ function makeLiveHomesStateMessage(now = Date.now()) {
   };
 }
 
-function publishLiveDronesState({ force = false } = {}) {
+function publishLiveDronesState({ force = false, minIntervalMs = LIVE_RELAY_DRONES_STATE_INTERVAL_MS } = {}) {
   if (!isLiveRelayPublisherSocketOpen()) return;
   const now = Date.now();
-  if (!force && now - liveState.relayLastDronesStatePublishedAt < LIVE_RELAY_DRONES_STATE_INTERVAL_MS) return;
+  const intervalMs = Number.isFinite(Number(minIntervalMs)) ? Math.max(0, Number(minIntervalMs)) : LIVE_RELAY_DRONES_STATE_INTERVAL_MS;
+  if (!force && now - liveState.relayLastDronesStatePublishedAt < intervalMs) return;
   if (publishLiveRelayMessage(makeLiveDronesStateMessage(now))) {
     liveState.relayLastDronesStatePublishedAt = now;
   }
@@ -5383,6 +5385,15 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       liveState.linkStatuses.delete(nodeId);
     }
 
+    const latest = drone.getLatest && drone.getLatest();
+    const incomingSequenceId = Number(entry.sequenceId);
+    const latestSequenceId = Number(latest?.sequenceId);
+    const duplicateSequence =
+      Number.isFinite(incomingSequenceId) &&
+      Number.isFinite(latestSequenceId) &&
+      incomingSequenceId === latestSequenceId;
+    if (duplicateSequence) return;
+
     drone.updateTelemetry(
       {
         uptimeSec: receivedAt / 1000,
@@ -5519,7 +5530,9 @@ function applyLiveTelemetry(message, source = "serial") {
   );
   updateStatusList();
   draw();
-  if (source === "serial") publishLiveDronesState();
+  if (source === "serial") {
+    publishLiveDronesState({ minIntervalMs: LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS });
+  }
 }
 
 function clearLiveSerialDrones({ clearAssignments = false } = {}) {

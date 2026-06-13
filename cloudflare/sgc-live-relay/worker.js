@@ -1,6 +1,6 @@
 const APP_PREFIX = "/swarm_ground_control";
 const GITHUB_PAGES_ORIGIN = "https://omrijsharon.github.io";
-const APP_ASSET_VERSION = "live-scene-relay-2";
+const APP_ASSET_VERSION = "live-scene-relay-3";
 const MAX_RELAY_MESSAGE_BYTES = 64 * 1024;
 const ALLOWED_SGC_MESSAGE_TYPES = new Set([
   "drones_state",

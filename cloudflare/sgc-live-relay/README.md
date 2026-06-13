@@ -11,7 +11,7 @@ The current deployment uses one public session named `public`. Viewers do not ne
 
 The relay intentionally mirrors only the scene instances that viewers need:
 
-- `drones_state`: full drone snapshot from the publisher SGC, sent at most every 250 ms. Serial telemetry arrivals drive the cadence, with a 250 ms heartbeat timer as backup.
+- `drones_state`: full drone snapshot from the publisher SGC. Serial telemetry arrivals drive the cadence with an 80 ms minimum send interval; a 250 ms timer remains as a heartbeat/backup.
 - `homes_state`: full HOME snapshot from the publisher SGC, sent every 5 seconds and immediately after HOME changes.
 
 The Worker caches the latest drone and HOME snapshots and sends them immediately to late-joining viewers. It rejects old firmware/diagnostic relay messages such as `drone_telemetry`, `gc_status`, `channel_table`, and scan/search events.
