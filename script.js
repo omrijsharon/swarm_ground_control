@@ -192,6 +192,31 @@ const liveState = {
   relayDronesStateTimer: null,
   relayHomesStateTimer: null,
   relayLastDronesStatePublishedAt: 0,
+  relayDebug: {
+    publisherSentCount: 0,
+    publisherLastSentAt: null,
+    publisherLastIntervalMs: null,
+    publisherLastDronesStateSentAt: null,
+    publisherLastDronesStateIntervalMs: null,
+    publisherLastMessageType: "",
+    publisherLastDronesCount: null,
+    publisherLastDroneMaxAgeMs: null,
+    viewerReceivedCount: 0,
+    viewerDronesStateCount: 0,
+    viewerLastReceivedAt: null,
+    viewerLastDronesStateReceivedAt: null,
+    viewerLastDronesStateIntervalMs: null,
+    viewerPublisherToWorkerMs: null,
+    viewerWorkerToViewerMs: null,
+    viewerEndToEndMs: null,
+    viewerWorkerDronesStateIntervalMs: null,
+    viewerDronesCount: null,
+    viewerDroneMaxAgeMs: null,
+    viewerAppliedDroneCount: null,
+    viewerDuplicateDroneCount: null,
+    workerMessageCount: null,
+    workerDronesStateCount: null,
+  },
   remoteDroneNames: new Map(),
 };
 let orbitCloseSuppressUntil = 0;
@@ -3097,6 +3122,8 @@ function makeLiveGcDiagnosticSnapshotEntry() {
     searchPending: liveState.searchPending,
     searchMode: liveState.searchMode,
     relayState: liveState.relayState,
+    relayRole: liveState.relayRole,
+    relayDebug: { ...liveState.relayDebug },
     gcStatus: liveState.gcStatus,
     assignments,
     drones: droneSummaries,
@@ -3664,6 +3691,74 @@ function formatLiveRelayState() {
   return "Disconnected";
 }
 
+function relayDebugNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function formatRelayDebugMs(value) {
+  const ms = relayDebugNumber(value);
+  if (ms === null) return "--";
+  if (ms < 1000) return `${Math.round(ms)} ms`;
+  return `${(ms / 1000).toFixed(1)} s`;
+}
+
+function formatRelayDebugHz(intervalMs) {
+  const ms = relayDebugNumber(intervalMs);
+  if (ms === null || ms <= 0) return "-- Hz";
+  return `${(1000 / ms).toFixed(1)} Hz`;
+}
+
+function getDronesStateMaxAgeMs(message) {
+  const ages = Array.isArray(message?.drones)
+    ? message.drones.map((drone) => relayDebugNumber(drone?.ageMs)).filter((ageMs) => ageMs !== null)
+    : [];
+  return ages.length ? Math.max(...ages) : null;
+}
+
+function getDronesStateCount(message) {
+  return Array.isArray(message?.drones) ? message.drones.length : null;
+}
+
+function formatLiveRelayDebugSummary() {
+  const debug = liveState.relayDebug || {};
+  if (liveState.relayRole === "publisher") {
+    if (!debug.publisherLastSentAt) return "";
+    return `pub ${formatRelayDebugHz(debug.publisherLastDronesStateIntervalMs)} / age ${formatRelayDebugMs(debug.publisherLastDroneMaxAgeMs)}`;
+  }
+  if (liveState.relayRole === "viewer" || isLiveRemoteViewerMode()) {
+    if (!debug.viewerLastReceivedAt) return "";
+    return `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs)} / lag ${formatRelayDebugMs(debug.viewerEndToEndMs)}`;
+  }
+  return "";
+}
+
+function formatLiveRelayDebugDetails() {
+  const debug = liveState.relayDebug || {};
+  if (liveState.relayRole === "publisher") {
+    if (!debug.publisherLastSentAt) return liveState.relayLastError || "";
+    return [
+      `sent ${debug.publisherSentCount || 0}`,
+      `drone rate ${formatRelayDebugHz(debug.publisherLastDronesStateIntervalMs)}`,
+      `drones ${debug.publisherLastDronesCount ?? "--"}`,
+      `payload age ${formatRelayDebugMs(debug.publisherLastDroneMaxAgeMs)}`,
+    ].join(" | ");
+  }
+  if (liveState.relayRole === "viewer" || isLiveRemoteViewerMode()) {
+    if (!debug.viewerLastReceivedAt) return liveState.relayLastError || "";
+    return [
+      `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs)}`,
+      `pub->CF ${formatRelayDebugMs(debug.viewerPublisherToWorkerMs)}`,
+      `CF->viewer ${formatRelayDebugMs(debug.viewerWorkerToViewerMs)}`,
+      `end-to-end ${formatRelayDebugMs(debug.viewerEndToEndMs)}`,
+      `payload age ${formatRelayDebugMs(debug.viewerDroneMaxAgeMs)}`,
+      `applied ${debug.viewerAppliedDroneCount ?? "--"}`,
+      `dup ${debug.viewerDuplicateDroneCount ?? "--"}`,
+    ].join(" | ");
+  }
+  return liveState.relayLastError || "";
+}
+
 function buildLiveRelayUrl(role) {
   const endpoint = liveState.relayEndpoint || getDefaultLiveRelayEndpoint();
   const baseUrl = new URL(endpoint, window.location.href);
@@ -3813,6 +3908,50 @@ function stopLiveRelayScenePublishing() {
   liveState.relayLastDronesStatePublishedAt = 0;
 }
 
+function recordLiveRelayPublish(message, sentAt = Date.now()) {
+  const debug = liveState.relayDebug;
+  debug.publisherSentCount += 1;
+  debug.publisherLastIntervalMs = debug.publisherLastSentAt ? Math.max(0, sentAt - debug.publisherLastSentAt) : null;
+  debug.publisherLastSentAt = sentAt;
+  debug.publisherLastMessageType = message?.type || "";
+  if (message?.type === "drones_state") {
+    debug.publisherLastDronesStateIntervalMs = debug.publisherLastDronesStateSentAt
+      ? Math.max(0, sentAt - debug.publisherLastDronesStateSentAt)
+      : null;
+    debug.publisherLastDronesStateSentAt = sentAt;
+    debug.publisherLastDronesCount = getDronesStateCount(message);
+    debug.publisherLastDroneMaxAgeMs = getDronesStateMaxAgeMs(message);
+  }
+}
+
+function recordLiveRelayReceive(envelope) {
+  const message = envelope?.message;
+  const debug = liveState.relayDebug;
+  const now = Date.now();
+  const workerReceivedAt = relayDebugNumber(envelope?.receivedAt);
+  const publisherSentAt = relayDebugNumber(message?.sentAt ?? envelope?.sentAt);
+
+  debug.viewerReceivedCount += 1;
+  debug.viewerLastReceivedAt = now;
+  debug.workerMessageCount = relayDebugNumber(envelope?.workerMessageCount);
+  debug.workerDronesStateCount = relayDebugNumber(envelope?.workerDronesStateCount);
+
+  if (message?.type !== "drones_state") return;
+
+  debug.viewerDronesStateCount += 1;
+  debug.viewerLastDronesStateIntervalMs =
+    debug.viewerLastDronesStateReceivedAt ? Math.max(0, now - debug.viewerLastDronesStateReceivedAt) : null;
+  debug.viewerLastDronesStateReceivedAt = now;
+  debug.viewerPublisherToWorkerMs =
+    relayDebugNumber(envelope?.publisherToWorkerMs) ??
+    (workerReceivedAt !== null && publisherSentAt !== null ? Math.max(0, workerReceivedAt - publisherSentAt) : null);
+  debug.viewerWorkerToViewerMs = workerReceivedAt !== null ? Math.max(0, now - workerReceivedAt) : null;
+  debug.viewerEndToEndMs = publisherSentAt !== null ? Math.max(0, now - publisherSentAt) : null;
+  debug.viewerWorkerDronesStateIntervalMs = relayDebugNumber(envelope?.workerDronesStateIntervalMs);
+  debug.viewerDronesCount = getDronesStateCount(message);
+  debug.viewerDroneMaxAgeMs = getDronesStateMaxAgeMs(message);
+}
+
 function handleLiveRelayEnvelope(raw) {
   let envelope;
   try {
@@ -3826,6 +3965,7 @@ function handleLiveRelayEnvelope(raw) {
 
   if (envelope.kind === "sgc_message" && envelope.message && typeof envelope.message === "object") {
     if (liveState.relayRole === "publisher") return;
+    recordLiveRelayReceive(envelope);
     handleLiveProtocolMessage(envelope.message, "live-endpoint");
     return;
   }
@@ -3833,8 +3973,15 @@ function handleLiveRelayEnvelope(raw) {
   if (envelope.kind === "relay_status") {
     liveState.relayViewerCount = Number.isFinite(Number(envelope.viewerCount)) ? Number(envelope.viewerCount) : null;
     liveState.relayPublisherConnected = envelope.publisherConnected !== false;
+    liveState.relayDebug.workerMessageCount = relayDebugNumber(envelope.totalMessageCount);
+    liveState.relayDebug.workerDronesStateCount = relayDebugNumber(envelope.dronesStateCount);
+    liveState.relayDebug.viewerWorkerDronesStateIntervalMs = relayDebugNumber(envelope.lastDronesStateIntervalMs);
+    liveState.relayDebug.viewerPublisherToWorkerMs = relayDebugNumber(envelope.lastPublisherToWorkerMs);
+    liveState.relayDebug.viewerDronesCount = relayDebugNumber(envelope.lastDronesStateDroneCount);
+    liveState.relayDebug.viewerDroneMaxAgeMs = relayDebugNumber(envelope.lastDronesStateMaxDroneAgeMs);
     liveState.relayLastError = "";
     renderLiveControls();
+    renderLiveGcStatus();
     return;
   }
 
@@ -3850,12 +3997,14 @@ function publishLiveRelayMessage(message) {
   const socket = liveState.relaySocket;
   if (!socket || socket.readyState !== WebSocket.OPEN) return false;
   try {
+    const sentAt = Date.now();
     socket.send(JSON.stringify({
       kind: "sgc_message",
       sessionId: LIVE_RELAY_PUBLIC_SESSION_ID,
       message,
-      sentAt: Date.now(),
+      sentAt,
     }));
+    recordLiveRelayPublish(message, sentAt);
     return true;
   } catch (err) {
     liveState.relayLastError = err.message || "Relay publish failed.";
@@ -3980,7 +4129,7 @@ function renderLiveControls() {
   if (relayTokenField) relayTokenField.hidden = !isLiveRelayBroadcastMode();
   if (relayStateEl) {
     relayStateEl.textContent = formatLiveRelayState();
-    relayStateEl.title = liveState.relayLastError || "";
+    relayStateEl.title = liveState.relayLastError || formatLiveRelayDebugDetails() || "";
   }
   if (relayConnectBtn) {
     relayConnectBtn.textContent = liveState.relayState === "connecting" || liveState.relayState === "reconnecting"
@@ -5080,6 +5229,7 @@ function renderLiveGcStatus() {
       : null;
   const items = [
     { label: "Source", value: isLiveRemoteViewerMode() ? "Live endpoint" : liveState.connected ? "USB connected" : "USB disconnected" },
+    ...(formatLiveRelayDebugSummary() ? [{ label: "Relay", value: formatLiveRelayDebugSummary() }] : []),
     { label: "Shared", value: status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A" },
     { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
@@ -5358,6 +5508,8 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   const seenNodeIds = new Set();
   const remoteNames = new Map();
   const entries = Array.isArray(message.drones) ? message.drones : [];
+  let appliedDroneCount = 0;
+  let duplicateDroneCount = 0;
 
   entries.forEach((entry) => {
     const nodeId = Number(entry?.nodeId);
@@ -5392,7 +5544,10 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       Number.isFinite(incomingSequenceId) &&
       Number.isFinite(latestSequenceId) &&
       incomingSequenceId === latestSequenceId;
-    if (duplicateSequence) return;
+    if (duplicateSequence) {
+      duplicateDroneCount += 1;
+      return;
+    }
 
     drone.updateTelemetry(
       {
@@ -5419,8 +5574,13 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       },
       receivedAt
     );
+    appliedDroneCount += 1;
   });
 
+  if (source === "live-endpoint") {
+    liveState.relayDebug.viewerAppliedDroneCount = appliedDroneCount;
+    liveState.relayDebug.viewerDuplicateDroneCount = duplicateDroneCount;
+  }
   liveState.remoteDroneNames = remoteNames;
   const before = drones.length;
   drones = drones.filter((drone) => {

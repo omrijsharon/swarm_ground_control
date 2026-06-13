@@ -18,6 +18,24 @@ The Worker caches the latest drone and HOME snapshots and sends them immediately
 
 Publisher connections that do not publish any scene state within 5 seconds, or stop publishing for 10 seconds, are treated as stale and evicted so the real GC browser can reconnect.
 
+## Debugging Update Rate
+
+The status endpoint exposes relay timing counters:
+
+```text
+https://www.flying-agents.com/swarm_ground_control/live/status?sessionId=public
+```
+
+Use these fields to split endpoint lag by segment:
+
+- `lastDronesStateRateHz` / `lastDronesStateIntervalMs`: rate arriving at Cloudflare from the publisher.
+- `lastPublisherToWorkerMs`: publisher browser to Cloudflare Worker delay.
+- `lastDronesStateMaxDroneAgeMs`: oldest drone packet age already inside the publisher snapshot.
+- `lastDronesStateAgeMs`: time since the Worker last received a drone snapshot.
+- `lastBroadcastViewerCount`: number of viewers that the latest snapshot was broadcast to.
+
+The SGC relay status tooltip also shows publisher rate, viewer receive rate, publisher-to-Cloudflare delay, Cloudflare-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
+
 ## Deploy
 
 ```powershell

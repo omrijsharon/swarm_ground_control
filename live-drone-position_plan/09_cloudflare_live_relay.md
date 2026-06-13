@@ -35,6 +35,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Verify `/swarm_ground_control/` still serves the GitHub Pages app through the Worker.
 - [x] Verify `/swarm_ground_control/live/ws` accepts WebSocket upgrades.
 - [x] Expose publisher idle diagnostics on `/swarm_ground_control/live/status`.
+- [x] Expose relay update-rate and latency diagnostics on `/swarm_ground_control/live/status`.
 
 ## Milestone 2: SGC Source Modes
 
@@ -68,6 +69,7 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Disable operator commands while acting as a viewer.
 - [x] Disable Reset, Bind, Re-bind, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Disable local drone rename and HOME editing while acting as a viewer.
+- [x] Show relay publish/receive rate and latency diagnostics in SGC.
 - [ ] Verify a remote WebSocket viewer receives relayed `drones_state` from a publisher smoke test.
 - [ ] Verify a remote browser receives live drone telemetry from an operator browser.
 - [ ] Verify relay disconnect/reconnect does not break USB serial reading.
@@ -77,6 +79,8 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 `drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, and packet age. Serial telemetry arrivals drive the publish cadence with an `80 ms` minimum data interval, while the `250 ms` timer is kept as a heartbeat. Viewers ignore duplicate sequence snapshots so heartbeat frames do not distort displayed telemetry rate.
 
 `homes_state` is a full snapshot of HOME instances and includes only `id`, `name`, `lat`, and `lng`. It is sent every 5000 ms, immediately when the publisher connects, and immediately after a HOME is added, renamed, moved, or deleted.
+
+`/live/status` exposes relay diagnostics for field debugging: publisher-to-Worker latency, Worker-side drone snapshot rate, latest drone snapshot age, latest payload drone age, cached viewer broadcast count, and message counters. The SGC relay tooltip mirrors the same split with viewer receive rate, Worker-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
 
 ## Milestone 4: Field Verification
 
