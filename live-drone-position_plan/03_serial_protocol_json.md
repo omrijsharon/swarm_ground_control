@@ -50,6 +50,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
   - [x] Include `radioProfileId`.
   - [x] Include `txPeriodMs`.
   - [x] Include `telemetryAirtimeMs`.
+  - [x] Include optional period diagnostics: `periodSource`, `periodConfidence`, `timingAccepted`, and `timingObservationCount`.
   - [x] Include `expectedUpdateMs` from the GC scheduler so SGC can scale freshness for Fast/Balanced/Robust profiles.
   - [x] Include `sequenceId`.
   - [x] Include firmware-relative `gcMillis` timestamp.
@@ -57,7 +58,7 @@ This protocol is separate from the LoRa air protocol. LoRa stays compact binary.
 Candidate:
 
 ```json
-{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25.7,"expectedUpdateMs":320,"sequenceId":1,"gcMillis":123456}
+{"type":"drone_telemetry","nodeId":1,"lat":32.0596637,"lng":34.8503487,"alt":12.3,"heading":88.0,"headingSource":"yaw","courseOverGround":91.0,"yaw":88.0,"yawHeading":88.0,"yawBiasDeg":0.0,"yawBiasValid":false,"yawBiasSamples":0,"cogWeight":0.0,"cogTrusted":false,"groundSpeed":4.2,"satelliteCount":0,"gpsSource":"simulated","gpsSimulated":true,"gpsFixQuality":0,"rssi":-82,"snr":9.5,"frequencyMhz":916.0,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25.7,"periodSource":"inferred_telemetry","periodConfidence":"locked","timingAccepted":true,"timingObservationCount":2,"expectedUpdateMs":320,"sequenceId":1,"gcMillis":123456}
 ```
 
 - [x] Milestone 2: Define GC status JSON
@@ -92,7 +93,8 @@ Required common fields:
 
 - `type`: always `assignment_event`.
 - `event`: one of `join_request_received`, `silence_sent`, `assign_sent`, `join_ack_received`, `late_join_ack_received`, `assignment_active`, `assignment_expired`, `assignment_removed`.
-- Timing handshake events also use this type: `tx_period_proposal_received`, `tx_period_ack_sent`, `tx_period_ack_send_failed`, and `tx_period_proposal_ignored`.
+- Telemetry period inference events also use this type: `telemetry_period_observed`, `telemetry_period_locked`, and `telemetry_period_rejected`.
+- Deprecated timing-handshake compatibility events may still appear from mixed/old firmware: `tx_period_proposal_ignored`.
 - `gcMillis`: firmware-relative GC timestamp.
 
 Optional event fields:
@@ -105,9 +107,9 @@ Optional event fields:
 - `attempt`: retry/attempt counter for repeated assign/silence cycles.
 - `rssi`, `snr`: link metrics when the event came from a received packet.
 - `reason`: reason for expiration/removal/failure.
-- `timingAccepted`: true after the assigned-channel TX period handshake is accepted.
-- `measuredCycleMs`, `proposedPeriodMs`, `mspBatchMs`, `txDurationMs`, `mspFlags`: timing proposal diagnostics.
-- `ackStatus`: `0` for accepted timing ACKs.
+- `timingAccepted`: true after the GC infers the assigned-channel TX period from telemetry.
+- `periodSource`, `periodConfidence`, `sequenceDelta`, `observedPeriodMs`, `previousObservedPeriodMs`, `timingObservationCount`: telemetry-period inference diagnostics.
+- `measuredCycleMs`, `proposedPeriodMs`, `mspBatchMs`, `txDurationMs`, `mspFlags`, `ackStatus`: deprecated timing-proposal compatibility diagnostics.
 
 Examples:
 
@@ -119,11 +121,11 @@ Examples:
 {"type":"assignment_event","event":"late_join_ack_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"join_ack","rssi":-63,"snr":10.8,"gcMillis":123900}
 {"type":"assignment_event","event":"assignment_active","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"leaseSeconds":60,"gcMillis":123550}
 {"type":"assignment_event","event":"assignment_removed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"reason":"operator_clear","gcMillis":183550}
-{"type":"assignment_event","event":"tx_period_proposal_received","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"measuredCycleMs":58,"proposedPeriodMs":73,"mspBatchMs":19,"txDurationMs":38,"mspFlags":6,"gcMillis":123620}
-{"type":"assignment_event","event":"tx_period_ack_sent","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"timingAccepted":true,"ackStatus":0,"gcMillis":123625}
+{"type":"assignment_event","event":"telemetry_period_observed","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"radioProfileId":0,"txPeriodMs":100,"timingAccepted":false,"periodSource":"inferred_telemetry","periodConfidence":"first_packet","sequenceId":41,"timingObservationCount":1,"gcMillis":123620}
+{"type":"assignment_event","event":"telemetry_period_locked","nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"radioProfileId":0,"txPeriodMs":103,"timingAccepted":true,"periodSource":"inferred_telemetry","periodConfidence":"single_delta","sequenceId":42,"sequenceDelta":1,"observedPeriodMs":103,"timingObservationCount":2,"gcMillis":123723}
 ```
 
-Bench note: GC `COM18` and drone node `2` on `COM15` emitted the timing diagnostics in this shape during the first assigned-channel timing handshake test. The measured proposal was `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`. The GC accepts protocol-valid proposals but clamps the accepted period to at least `100 ms`.
+Current timing note: the GC no longer waits for a separate timing proposal packet. It accepts valid 20-byte telemetry after `JOIN_ACK`, emits a first-packet observation, then locks the period from the next valid packet with a nonzero `sequenceDelta`.
 
 Protocol note: live-position air control packets now use high-range packet IDs `0xA1-0xA6`. These IDs are not exposed directly in serial JSON, but the change prevents assigned-channel telemetry from node IDs such as `6` from being mistaken for legacy timing-control packets. This is a breaking firmware change; the GC and all drone ESP32s must be reflashed together.
 
@@ -139,7 +141,7 @@ Examples:
 
 ```json
 {"type":"scanner_event","event":"assigned_listen","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"nextTstGcMillis":123456,"listenStartGcMillis":123448,"listenDeadlineGcMillis":123486,"listenWindowMs":60,"targetServiceMs":300,"serviceStride":3,"schedulerCycleBudgetMs":272,"missCount":0,"gcMillis":123440}
-{"type":"scanner_event","event":"timing_probe_telemetry_ignored","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"reason":"waiting_for_tx_period_proposal","gcMillis":123610}
+{"type":"scanner_event","event":"telemetry_period_acquire_missed","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"reason":"listen_window_expired","gcMillis":123610}
 {"type":"scanner_event","event":"telemetry_received","nodeId":2,"estimatedTstGcMillis":123456,"nextTstGcMillis":123483,"missCount":0,"gcMillis":123482}
 {"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
 {"type":"scanner_event","event":"phase_preserved_after_miss","nodeId":2,"missCount":1,"reason":"known_tst_preserved","gcMillis":123520}
@@ -375,7 +377,7 @@ Implementation note: `relock_drone` is implemented for manual runtime TST recove
 
 Scheduler note: manual relock is intentionally preemptive for a bounded runtime-only window. The GC emits `scanner_event.event = "manual_relock_listen"` while it reserves assigned-channel receive time for that node, `manual_relock_retry` if a relock listen expires without telemetry, and `manual_relock_expired` if the bounded relock window elapses without reacquisition. This can temporarily reduce other drones' update rates, which is expected during operator-requested recovery.
 
-Post-ACK lock note: after `tx_period_ack_sent`, the GC also uses a bounded preemptive first-telemetry lock window. The GC emits `post_ack_lock_listen`, `post_ack_lock_retry`, and `post_ack_lock_expired` so a reset drone that completed JOIN plus timing ACK can reacquire TST even when already-online drones have dense receive windows.
+Post-join lock note: after `JOIN_ACK`, the GC uses a bounded preemptive first-telemetry lock window. The current implementation still uses `post_ack_lock_*` scanner-event names internally, but the behavior now means “post assignment ACK, before telemetry-period lock” rather than “after TX_PERIOD_ACK.”
 
 ## Parser Rules
 

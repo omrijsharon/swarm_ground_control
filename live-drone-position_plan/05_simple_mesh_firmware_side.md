@@ -41,8 +41,8 @@ The firmware has two runtime roles in this branch:
   - [x] Define `SILENCE` struct.
   - [x] Define `JOIN_ASSIGN` struct.
   - [x] Define `JOIN_ACK` struct.
-  - [x] Define `TX_PERIOD_PROPOSAL` struct.
-  - [x] Define `TX_PERIOD_ACK` struct.
+  - [x] Define `TX_PERIOD_PROPOSAL` struct for legacy/deprecated compatibility diagnostics.
+  - [x] Define `TX_PERIOD_ACK` struct for legacy/deprecated compatibility diagnostics.
   - [x] Define 20-byte telemetry struct.
   - [x] Add compile-time size checks for every packet struct.
   - [x] Define endian/scaling rules in comments next to the structs.
@@ -63,7 +63,7 @@ The firmware has two runtime roles in this branch:
   - [x] Add runtime radio-profile switching for frequency/profile transitions.
     - `SimpleMesh` and the radio backend can now switch SF/BW/CR/preamble/TX power without reflashing LittleFS.
   - [x] Apply the discovery profile before shared-channel listen/TX.
-  - [x] Apply the assigned telemetry profile before assigned-channel timing proposal and telemetry.
+  - [x] Apply the assigned telemetry profile before assigned-channel telemetry.
   - [x] Compute airtime for control and telemetry packet sizes.
   - [x] Print boot diagnostics for packet sizes, active radio profile, airtime, and TX period.
   - [x] Expose active profile in GC serial JSON.
@@ -105,7 +105,7 @@ The firmware has two runtime roles in this branch:
   - [x] Persist the assigned `radio_profile_id` with each channel assignment.
   - [x] Persist the assigned `tx_period_ms` or recompute it from `radio_profile_id` at boot.
     - Firmware now persists accepted `txPeriodMs` plus `timingAccepted`; old/no-handshake assignments still fall back to the profile default.
-  - [x] Persist whether the TX period timing handshake was accepted.
+  - [x] Persist whether the TX period was inferred and accepted.
     - TST, freshness, RSSI/SNR, and miss counters remain RAM-only.
   - [x] Reload assignments at boot.
   - [x] Validate reloaded channels against the clear channel scan.
@@ -138,8 +138,8 @@ The firmware has two runtime roles in this branch:
   - [x] Drone extracts assigned `channel_index`, `radio_profile_id`, and `tx_period_ms` from `JOIN_ASSIGN`.
   - [x] Drone sends `JOIN_ACK`.
   - [x] Drone switches to the assigned telemetry channel and radio profile after ACK.
-  - [x] Drone enters timing proposal state after `JOIN_ACK` instead of starting steady telemetry immediately.
-  - [x] Drone returns to shared-channel join if the timing proposal ACK is not received after retries.
+  - [x] Drone enters assigned-channel telemetry after `JOIN_ACK` without waiting for a timing proposal ACK.
+  - [x] Drone returns to shared-channel join if assignment expires or the assigned channel/profile is invalid.
   - [x] Drone accelerates retry after another drone completes assignment.
     - If a waiting drone hears `JOIN_ASSIGN` for another node, it remembers that node/nonce/channel. When it later hears the matching `JOIN_ACK`, it immediately schedules a fresh random join backoff instead of waiting for the full assignment timeout.
   - [ ] Drone returns to join mode if assignment expires or radio config changes.
@@ -206,7 +206,7 @@ The firmware has two runtime roles in this branch:
     - Simulated drones generate deterministic node-specific lat/lng near Tel Aviv plus altitude, yaw, CoG, speed, and satellite count.
   - [x] Set `GPS_SIMULATED`, `YAW_VALID`, `COURSE_OVER_GROUND_VALID`, and `GROUND_SPEED_VALID` in the 20-byte telemetry packet.
   - [x] Keep the LoRa air protocol unchanged.
-    - Simulated-FC drones still use normal join, assignment ACK, timing proposal, timing ACK, and 20-byte telemetry packets.
+    - Simulated-FC drones still use normal join, assignment ACK, and 20-byte telemetry packets. TX-period proposal/ACK packets are now deprecated.
   - [x] Emit `simulatedFc` in drone serial diagnostics.
     - `drone_fc_status` and `drone_live_status` identify simulated boards without changing GC serial JSON shape.
   - [x] Build-check simulated-FC firmware support.
@@ -214,7 +214,7 @@ The firmware has two runtime roles in this branch:
   - [x] Flash node `1` with `simulated_fc = true` and `simulated_msp_batch_ms = 8`.
     - `COM26` was flashed with the shared firmware and a temporary LittleFS config using `node_id = 1`, `node_role = drone`, and simulated-FC mode enabled. The repo `data/config.json` was restored to the GC config after upload.
   - [x] Bench-verify node `1` joins the GC while node `2` remains active.
-    - Node `1` alone was reset and verified after clearing stale assignments: it rejoined the GC on `COM18`, received `911.0 MHz`, completed the timing proposal handshake, and emitted `drone_telemetry` with `gpsSource = "simulated"`.
+    - Node `1` alone was reset and verified after clearing stale assignments: it rejoined the GC on `COM18`, received `911.0 MHz`, completed timing acquisition, and emitted `drone_telemetry` with `gpsSource = "simulated"`.
     - After node `2` was power-cycled, the GC/SGC path showed node `1` and node `2` active together.
   - [ ] Bench-verify SGC shows drones `1` and `2` live at the same time.
   - [ ] Run a 30 second two-node bench sample and check for sequence gaps or repeated `telemetry_missed`.
@@ -223,7 +223,7 @@ The firmware has two runtime roles in this branch:
     - `COM7` was flashed with the shared firmware and a temporary LittleFS config using `node_id = 3`, `node_role = drone`, and simulated-FC mode enabled. The repo `data/config.json` was restored to the GC config after upload.
   - [x] Bench-verify GC receives node `3` after two active drones are already streaming.
     - Initial node `3` attempts timed out because the GC shared-channel discovery window was too narrow and could be starved by assigned-drone scan windows. Firmware later forced shared discovery windows; long-range discovery now uses the fixed `SF12 / BW125 / CR4/8` discovery profile, `1200 ms` normal no-assignment shared windows, `3584 ms` operator Bind/Search dwell, and a `3500 ms` drone assignment timeout.
-    - After flashing the GC on `COM18` and node `3` on `COM7`, GC received node `3` `JOIN_REQUEST`, assigned `920.5 MHz`, received `JOIN_ACK`, accepted the timing proposal, and emitted node `3` telemetry.
+    - After flashing the GC on `COM18` and node `3` on `COM7`, GC received node `3` `JOIN_REQUEST`, assigned `920.5 MHz`, received `JOIN_ACK`, accepted timing, and emitted node `3` telemetry.
   - [ ] Bench-verify SGC shows drones `1`, `2`, and `3` live at the same time.
     - GC serial verification passed; browser/UI verification remains manual.
   - [x] Bench-verify a reset/rejoin event does not permanently starve the other active drones.
@@ -235,24 +235,22 @@ The firmware has two runtime roles in this branch:
   - [x] Apply the assigned radio profile before starting assigned-channel telemetry.
     - Current supported profile table has only profile `0`; the drone validates this profile and switches to the assigned channel.
   - [x] Use the assigned `tx_period_ms` from `JOIN_ASSIGN`.
-    - This is now a safe provisional period before the measured timing handshake.
+    - This is now a safe provisional/profile period; the GC later infers the actual period from telemetry packets instead of acknowledging a timing proposal.
   - [x] Locally compute telemetry airtime from the assigned LoRa settings for diagnostics and sanity checks.
   - [x] Confirm computed `ceil(airtime_ms) + airtime_buffer_ms` matches the assigned TX period.
-    - This remains true for the provisional `JOIN_ASSIGN` period; the steady period is later accepted by `TX_PERIOD_ACK`.
+    - The drone computes the steady period from profile airtime plus its locally learned MSP fixed slot, bounded by the shared period limits.
   - [x] Transmit telemetry on the assigned channel.
     - This slice transmits mixed telemetry: real FC yaw/altitude when MSP reads succeed, simulated GPS fields while FC GPS is inactive.
-  - [x] Measure one probe cycle before steady telemetry.
-    - The measured cycle is `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX`.
-  - [x] Send `TX_PERIOD_PROPOSAL` with measured cycle time, proposed period, MSP batch time, TX duration, and MSP flags.
-  - [x] Retry the same timing proposal while waiting for a profile-aware ACK timeout.
-    - The original fixed `50 ms` wait was too tight once flash persistence and slower profiles were added. The drone now waits for `TX_PERIOD_ACK` airtime plus guard time.
-  - [x] Enter steady telemetry only after accepted `TX_PERIOD_ACK`.
-  - [x] Schedule steady cycles from cycle start using the accepted period.
+  - [x] Measure MSP batch duration before each telemetry TX and learn a fixed MSP slot.
+    - The learned slot is `observed_msp_ms + 15 ms`, clamped by firmware bounds. Relearning requires repeated overruns so a single slow MSP response does not constantly shift cadence.
+  - [x] Start assigned-channel telemetry immediately after `JOIN_ACK`.
+    - `TX_PERIOD_PROPOSAL` and `TX_PERIOD_ACK` remain reserved/diagnostic packet IDs, but the current drone does not send the proposal and does not wait for an ACK.
+  - [x] Schedule steady cycles from cycle start using the locally computed period.
   - [x] Skip late slots instead of sending bursts if MSP readout or radio state falls behind.
   - [x] Keep timing stable enough for GC phase tracking.
-    - GC now clamps accepted timing periods to at least `GC_MIN_ACCEPTED_TX_PERIOD_MS = 100` so a fast measured bench proposal such as `63 ms` does not outrun the current single-radio scanner margin.
+    - GC now clamps inferred timing periods to at least the assigned profile's safe period and no more than `TX_PERIOD_MAX_ACCEPT_MS = 2000`.
     - Test note: raising GC USB serial to `921600` and temporarily accepting `65 ms` did not make the low-period case reliable; the 25 second GC sample still showed many `telemetry_missed` events and sequence gaps.
-    - Persisted timing periods below that GC minimum are treated as stale timing and force a new timing handshake after the drone rejoins.
+    - Persisted timing periods below the profile-safe minimum are treated as stale timing and force fresh telemetry-period inference after the drone rejoins.
     - Per-packet `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` scanner debug events are suppressed by default to avoid USB serial backpressure during high-rate telemetry.
   - [x] Handle missed MSP reads without crashing.
     - Bench run continued transmitting when MSP was unavailable. Latest timing-handshake bench capture after flashing the drone showed `mspBatchOk=false`, `mspBatchFlags=0`, and `mspBatchMs=50-51`, so LoRa telemetry stayed alive while FC data was stale.
@@ -270,17 +268,15 @@ The firmware has two runtime roles in this branch:
     - Scheduler selects assigned drones by predicted listen window and tunes using each assignment's `radioProfileId`.
   - [x] Receive a valid telemetry packet.
     - Physical test received valid 20-byte fake telemetry from drone node `2`.
-  - [x] Listen for assigned-channel `TX_PERIOD_PROPOSAL` after `JOIN_ACK`.
-  - [x] Ignore the first 20-byte probe telemetry while waiting for a timing proposal.
-    - If a probe or invalid packet is ignored during acquisition, the GC immediately restarts RX so it can still catch the following `TX_PERIOD_PROPOSAL`.
-    - The drone waits `30 ms` after the probe telemetry before sending `TX_PERIOD_PROPOSAL`, giving the GC time to re-arm RX without changing steady telemetry timing.
-  - [x] Validate proposed TX periods in the `45-2000 ms` range.
-    - The upper bound was raised from `250 ms`, then `1000 ms`, so Balanced, Robust, and profile `64` timing proposals are valid.
-    - GC accepts only protocol-valid proposals, then clamps the accepted operating period to at least `100 ms`.
-  - [x] Send `TX_PERIOD_ACK` with the accepted period.
-    - `TX_PERIOD_ACK` is `6 bytes`: type, node ID, sequence ID, accepted period, and status.
-    - GC now sends this ACK before saving the accepted timing to flash, so LittleFS latency cannot make a rejoining drone time out after `tx_period_ack_sent` appears in SGC.
-  - [x] Persist accepted `txPeriodMs` and `timingAccepted`.
+  - [x] Listen for assigned-channel telemetry immediately after `JOIN_ACK`.
+  - [x] Accept the first valid 20-byte telemetry packets while timing is still unknown.
+    - The first packet seeds sequence/timestamp evidence. The next valid packet with a nonzero sequence delta lets the GC infer the period.
+  - [x] Validate inferred TX periods in the `45-2000 ms` range.
+    - The upper bound was raised from `250 ms`, then `1000 ms`, so Balanced, Robust, and profile `64` inferred periods are valid.
+    - GC accepts only periods at or above the assigned profile's safe minimum and rejects `sequenceDelta == 0`.
+  - [x] Deprecate `TX_PERIOD_ACK` for current firmware.
+    - If an old drone sends `TX_PERIOD_PROPOSAL`, the GC emits `tx_period_proposal_ignored` and continues waiting for normal telemetry.
+  - [x] Persist inferred `txPeriodMs` and `timingAccepted`.
   - [x] Normalize persisted assignments from older timing schemes when loading from flash.
     - Channels are kept, but old saved `250 ms` timing from the temporary slot firmware does not remain timing-accepted.
   - [x] Keep runtime TST, freshness, RSSI/SNR, and miss counters out of flash.
@@ -301,9 +297,9 @@ The firmware has two runtime roles in this branch:
   - [x] If a lower-priority overlapping window is intentionally skipped, advance that drone's predicted TST without incrementing `missCount`.
   - [x] Correct timing phase on every received packet.
     - The narrow scanner updates estimated and next TX start from each valid packet.
-  - [x] Keep drone steady telemetry phase stable after ACK.
-    - Drone steady telemetry uses cached MSP data at its regular accepted period. MSP refresh is moved to idle time so FC reads do not shift the TST.
-    - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path in the idle window, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
+  - [x] Keep drone steady telemetry phase stable after `JOIN_ACK`.
+    - Drone steady telemetry reads the batched MSP live-position snapshot before TX, waits until its fixed MSP slot expires, then transmits on the regular local cadence.
+    - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
   - [x] Use CAD-gated profile-aware recovery after repeated missed packets.
   - [x] Preserve known TST phase after the first two listened misses.
     - Early misses advance the predicted slot and emit `phase_preserved_after_miss`; they do not clear TST or start CAD/OFF classification.
@@ -316,10 +312,10 @@ The firmware has two runtime roles in this branch:
     - Two separate CAD/LBT no-activity probes mark a strong-link drone `OFF`. Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.
     - If a recovery/acquisition listen would overlap another drone's known predicted receive slot, the GC clips the recovery window or skips directly to the known slot. This is intended to prevent a disconnected node from causing another live node to cascade into offline state.
-  - [x] Keep timing-proposal acquisition responsive after a drone rejoins.
-    - After `JOIN_ACK`, the GC schedules assigned-channel timing acquisition immediately. If it misses a `TX_PERIOD_PROPOSAL`, it retries after `20 ms` instead of backing off to the shared-channel interval.
-  - [x] Extend drone timing-proposal retries for multi-drone scheduler load.
-    - Drones retry `TX_PERIOD_PROPOSAL` up to `12` times before returning to shared-channel join.
+  - [x] Keep telemetry-period acquisition responsive after a drone rejoins.
+    - After `JOIN_ACK`, the GC schedules assigned-channel telemetry acquisition immediately. If it misses a packet before timing locks, it retries after `20 ms` instead of backing off to the shared-channel interval.
+  - [x] Remove the active drone timing-proposal retry loop.
+    - Current drones do not send `TX_PERIOD_PROPOSAL`; the GC learns the period from decoded telemetry instead.
   - [x] Keep the shared discovery channel in the schedule so new drones can join.
   - [x] Cycle back to the shared channel regularly for new drones.
     - Scheduler uses `GC_SCANNER_SHARED_LISTEN_MS = 40` and `GC_SCANNER_SHARED_INTERVAL_MS = 500`.
@@ -388,20 +384,19 @@ The firmware has two runtime roles in this branch:
     - With `txPeriodMs = 70` and a `20 ms` MSP timeout, one-drone GC samples still had misses and MSP stayed stale. After disabling the legacy main-loop MSP status check, one sample improved to 3 misses in 15 seconds and drone TX cadence reached 14.29 Hz, but MSP remained 0 fresh / 210 stale.
     - With `txPeriodMs = 100` and a `50 ms` live MSP timeout, a 15 second GC sample received 151 telemetry JSON messages with 150 scanner `telemetry_received` events and zero `telemetry_missed` events.
     - Drone serial for the same bench state showed 140 TX packets in 14 seconds, `lastTxDurationMs = 38`, `maxTxLatenessMs = 12`, and MSP still 0 fresh / 140 stale. Treat FC UART/MSP communication as the next blocker, not LoRa TX scheduling.
-  - [x] Build-check MSP batch timing proposal handshake.
-    - `pio run -e seeed-xiao-s3` passes after adding `MSP_MULTIPLE_MSP`, `TX_PERIOD_PROPOSAL`, `TX_PERIOD_ACK`, drone timing proposal state, and GC proposal ACK handling.
+  - [x] Build-check MSP batch telemetry-period inference.
+    - `pio run -e seeed-xiao-s3` passes after replacing active `TX_PERIOD_PROPOSAL` / `TX_PERIOD_ACK` timing with MSP fixed-slot telemetry TX and GC packet-delta period inference.
   - [x] Bench-test `MSP_MULTIPLE_MSP` wire timing and subresponse parsing.
     - Expected FC UART wire time at `115200` is about `4.2 ms`; total measured MSP batch should normally stay under `20 ms` when the FC responds.
     - Betaflight `msp.c` was checked: `MSP_MULTIPLE_MSP` reads each requested MSP command as one byte and returns length-prefixed subresponses in request order, matching the firmware implementation.
     - After power-cycling the drone ESP32 and FC together, COM15 bench capture showed the timing probe using `MSP_MULTIPLE_MSP` with `mspBatchMs = 8`, `mspFlags = 7`, `measuredCycleMs = 46`, and `txDurationMs = 38`.
     - `mspFlags = 7` confirms the drone parsed `MSP_RAW_GPS`, `MSP_ATTITUDE`, and `MSP_ALTITUDE` subresponses from the batch request. GPS still reports no real fix, as expected for the bench setup.
-  - [x] Bench-test assigned-channel timing proposal handshake.
-    - Clear assignments, reset/reflash drone node `2`, confirm proposal received, ACK sent, drone enters steady telemetry, and accepted `txPeriodMs` is measured rather than hardcoded.
-    - GC on `COM18` captured `join_request_received = 1`, `assign_sent = 1`, `join_ack_received = 1`, one ignored probe telemetry packet, `tx_period_proposal_received = 1`, and `tx_period_ack_sent = 1`.
-    - The accepted period was measured: `measuredCycleMs = 89`, `proposedPeriodMs = 104`, `mspBatchMs = 51`, `txDurationMs = 38`, `mspFlags = 0`, and `txPeriodMs = 104`.
+  - [x] Bench-test assigned-channel timing acquisition.
+    - Previous bench runs verified the now-deprecated timing proposal handshake. Current firmware should be bench-tested again for `telemetry_period_observed` followed by `telemetry_period_locked` after two valid telemetry packets.
+    - The accepted period is inferred from `rxDoneDeltaMs / sequenceDelta`; `sequenceDelta == 0` is rejected.
   - [x] Run a 15 second GC sample after timing lock and compare `telemetry_received` against `telemetry_missed`.
     - After timing lock, a 15 second GC sample received `145` telemetry packets and `145` `drone_telemetry` JSON messages with `telemetry_missed = 0`.
-    - The join/acquisition capture had `4` early `telemetry_missed` events immediately after `TX_PERIOD_ACK`, then locked and tracked cleanly.
+    - The historical join/acquisition capture had `4` early `telemetry_missed` events immediately after timing ACK, then locked and tracked cleanly.
     - After clamping accepted timing to the GC minimum, resetting drone node `2`, and re-handshaking, GC reported `txPeriodMs = 103` and a 15 second sample received `145` `drone_telemetry` messages with `0` sequence gaps and `0` `telemetry_missed` events.
     - The temporary scheduled-slot test was reverted; current expected accepted periods are again around `100-104 ms`, with the GC scheduler choosing which overlapping windows to receive.
     - After restoring the `6 byte` ACK and priority scheduler, GC `COM18` received `196` telemetry messages from node `2` in `20 seconds`, with `txPeriodMs = 104` and `3` `telemetry_missed` events during/around acquisition.
@@ -410,7 +405,7 @@ The firmware has two runtime roles in this branch:
   - [ ] Bench-test channel scan with simulated noisy channels where possible.
   - [ ] Bench-test GC scanner ordering with simulated per-drone next transmit times.
   - [ ] Bench-test priority scheduler timing with three drones.
-    - Requires flashing the restored `6 byte` `TX_PERIOD_ACK` firmware to the GC and every drone node. Expected accepted periods are around `100-104 ms`; the GC should keep each active drone at least `2 Hz` while prioritizing older telemetry when packet windows overlap.
+    - Requires flashing the no-TX-period-handshake firmware to the GC and every drone node. Expected inferred periods are around `100-104 ms`; the GC should keep each active drone at least `2 Hz` while prioritizing older telemetry when packet windows overlap.
     - Use `tools/gc_serial_logger.ps1` from the SGC repo for long captures instead of relying on short terminal excerpts. It records raw GC serial JSONL plus a per-node summary of packet rate, sequence gaps, and scanner misses.
   - [ ] Bench-test MSP telemetry packing with known values.
     - Current node `2` bench capture on `COM15` reports `attitudeReadOk=false`, `altitudeReadOk=false`, and `gpsReadOk=false` even with a `50 ms` live MSP timeout. LoRa telemetry continues with simulated GPS and stale FC fields. Keep this unchecked until the FC UART/MSP link returns valid attitude and altitude values that can be compared against Betaflight Configurator.
@@ -451,11 +446,11 @@ The firmware has two runtime roles in this branch:
   - [x] Make manual relock preemptive for a bounded scanner window instead of only using spare scheduler gaps.
     - Relock now reserves a profile-aware assigned-channel listen window. Slow profiles such as `SF12 / BW125 / CR4/8` use their computed airtime/period instead of the old Fast-oriented fixed slice.
     - Runtime-only; the manual relock window is not persisted to flash and clears immediately after valid telemetry reacquires TST.
-  - [x] Make post-ACK first-telemetry lock preemptive for reset/rejoined drones.
-    - After `tx_period_ack_sent`, the GC now reserves profile-aware assigned-channel listen time using the selected profile's airtime plus guards, with `20 ms` retry spacing until the first steady telemetry packet reacquires TST.
+  - [x] Make post-join first-telemetry acquisition preemptive for reset/rejoined drones.
+    - After `JOIN_ACK`, the GC reserves profile-aware assigned-channel listen time using the selected profile's airtime plus guards, with `20 ms` retry spacing until the first telemetry packet starts period inference and reacquires TST.
   - [x] Fix Search-mode stale-assignment rejoin probing.
     - The scheduler had a `findRejoinProbeAssignment(...)` helper but did not assign its result, so reset drones on the shared channel were not actually rediscovered during Search. Node `6` was verified after clearing its stale assignment: Search assigned `904.0 MHz`, accepted timing, and emitted steady `drone_telemetry`.
-    - This fixes the case where SGC shows `Last assignment: tx_period_ack_sent node N` but the node never becomes `ONLINE` because the first steady telemetry lock was starved by already-online drones.
+    - This fixes the case where SGC shows a completed assignment but the node never becomes `ONLINE` because the first steady telemetry lock was starved by already-online drones.
   - [x] Bench-test late SGC connection by requesting status and channel table after GC boot.
     - Direct serial command probe returned `command_ack`, `gc_status`, `assignments`, and `channel_table` with `channels[51]`.
   - [x] Bench-test `Start Fresh Session` clears flash and RAM assignments.
@@ -535,10 +530,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add `JOIN_CAP_RADIO_PROFILE_SWITCH` and fall back to Fast profile `0` when a joining drone does not advertise profile switching.
 - [x] Add `JOIN_CAP_EXTENDED_TX_PERIOD` and fall back to Fast profile `0` when the selected profile needs a period above `250 ms` but the joining drone only advertises the older profile-switch capability.
 - [x] Reassign a rediscovered node if the selected future profile differs from its existing assignment profile.
-- [x] Apply the assigned profile on drone timing proposal and telemetry TX.
+- [x] Apply the assigned profile on drone telemetry TX.
 - [x] Apply each drone's assigned profile while the GC scanner listens.
 - [x] Keep GC scanner control packets separate from real telemetry so `TX_PERIOD_PROPOSAL` handling does not falsely create an online drone state.
-- [x] Resend duplicate `TX_PERIOD_ACK` without rewriting assignment flash when a drone repeats the same timing proposal.
+- [x] Deprecated duplicate `TX_PERIOD_ACK` rewrite path; current firmware learns timing from telemetry and does not rewrite flash for proposal repeats.
 - [x] Reject duplicate assigned-channel telemetry `sequence_id` values before updating TST or emitting `drone_telemetry`.
 - [x] Make `OFF` conservative and confirmed instead of immediate.
   - The GC no longer classifies a drone `OFF` after one no-activity recovery window.
@@ -547,23 +542,21 @@ These tasks mirror `08_field_test_followups.md`.
   - Clipped recovery windows that protect another live drone's TST do not count toward `OFF`.
   - `LINK_STATE_OFF` no longer makes an assignment terminal; the scanner keeps low-priority assigned-channel reacquire attempts until telemetry returns or the operator deletes the assignment.
 - [x] Treat assigned-channel bytes as activity evidence even when the packet is malformed, wrong-node, duplicate, or a control echo.
-  - Valid telemetry, late JOIN_ACK, timing proposals, malformed assigned-channel packets, and CAD activity reset the RAM-only OFF-confirmation counters.
+  - Valid telemetry, late JOIN_ACK, telemetry-period observations, malformed assigned-channel packets, and CAD activity reset the RAM-only OFF-confirmation counters.
 - [x] When all active assignments are terminal `OFF`, stop idling and listen on shared discovery for reset-drone rejoin requests.
   - This preserves the no-periodic-shared-scan policy while healthy drones are online, but fixes the one-drone reset case where Delete made rejoin work only because it removed the last active assignment.
-- [x] Clear terminal `OFF` runtime state when the node is rediscovered through shared-channel Search or sends a timing proposal, so fresh rejoin/acquisition is not blocked.
+- [x] Clear terminal `OFF` runtime state when the node is rediscovered through shared-channel Search or sends valid assigned-channel telemetry, so fresh rejoin/acquisition is not blocked.
 - [x] Roll back pending assignments when `JOIN_ACK` retries are exhausted.
   - Failed ACK now restores a previous assignment or removes the new pending assignment from RAM and `/live_assignments.json`, instead of leaving `timingAccepted=false` assignments that flicker `LOCKING`/`WEAK`.
 - [x] Move live-position control packet IDs out of the telemetry node-ID range.
   - Control packets now use `0xA1-0xA6` so assigned-channel telemetry starting with node IDs such as `6` cannot be misread as control packets.
   - This is a breaking air-protocol change; GC and every drone ESP32 must be reflashed together.
 - [x] Accept matching late JOIN_ACK packets during assigned-channel acquisition.
-  - The GC stores the active join nonce in RAM for the pending assignment. If a matching JOIN_ACK arrives after the strict ACK wait but before timing lock, the GC treats it as a control packet, emits `late_join_ack_received`, and keeps listening for the timing proposal instead of chasing it as wrong-size telemetry.
-- [x] Clamp timing proposals to the assigned radio profile's safe minimum period.
-  - A Robust-profile diagnostic accepted `256 ms` even though its 20-byte telemetry airtime is about `395 ms`. Both drone proposal generation and GC proposal acceptance now floor the period at `telemetryTxPeriodMs(assigned_profile)`.
-- [x] Give drones a larger profile-aware wait for `TX_PERIOD_ACK`.
-  - Slow-profile ACK airtime plus firmware/radio turnaround can exceed the old Fast-oriented guard. The drone now uses a larger timing ACK guard before retrying a proposal.
-- [x] Require exact 6-byte `TX_PERIOD_ACK` packets on the drone.
-  - Malformed or wrong-size timing ACKs are rejected.
+  - The GC stores the active join nonce in RAM for the pending assignment. If a matching JOIN_ACK arrives after the strict ACK wait but before timing lock, the GC treats it as a control packet, emits `late_join_ack_received`, and keeps listening for assigned telemetry instead of chasing it as wrong-size telemetry.
+- [x] Clamp inferred periods to the assigned radio profile's safe minimum period.
+  - A Robust-profile diagnostic accepted `256 ms` even though its 20-byte telemetry airtime is about `395 ms`. Current period inference floors the accepted period at `telemetryTxPeriodMs(assigned_profile)`.
+- [x] Deprecate active `TX_PERIOD_ACK` dependency on the drone.
+  - The drone now starts telemetry after `JOIN_ACK`; malformed or wrong-size timing ACKs are only relevant to legacy/mixed firmware diagnostics.
 - [x] Remove legacy `0x06` timing-proposal compatibility.
   - The field log `sgc_gc_serial_2026-06-10T19-57-32-998Z.jsonl` showed repeated `tx_period_proposal_received` / `tx_period_ack_sent` events after `timingAccepted=true`. The old `0x06` proposal path was removed in favor of the high `0xA5` current proposal ID.
 - [x] Validate persisted assignment timing against the stored radio profile on boot.
@@ -575,17 +568,19 @@ These tasks mirror `08_field_test_followups.md`.
   - Automatic recovery can listen up to `6000 ms`, OOCR up to `4200 ms`, and Search telemetry rounds use a dynamic budget so slow assignments are not clipped by the old `1500 ms` round deadline.
 - [x] Guard GC post-ACK acquisition against ACK-shaped stale/control packets.
   - Field log `sgc_gc_serial_2026-06-10T21-10-59-288Z.jsonl` showed `tx_period_ack_sent node 6` followed by repeated assigned-channel packets with `packetLen=12` and `firstByte=0xA6`, so the GC never emitted `drone_telemetry`.
-  - After sending `TX_PERIOD_ACK`, the GC now forces a clean assigned-channel profile/frequency RX retune.
-  - If an ACK-shaped packet appears during assigned telemetry receive, the GC logs `timing_ack_echo_ignored`, retunes assigned RX again, and continues acquisition instead of treating it as telemetry.
+  - Current firmware no longer sends `TX_PERIOD_ACK`, but the GC still ignores legacy ACK-shaped packets during assigned telemetry receive and continues acquisition instead of treating them as telemetry.
 - [x] Clear stale receive flags around GC LoRa CAD/activity scans.
   - Field log `sgc_gc_serial_2026-06-10T21-27-09-251Z.jsonl` showed CAD/activity probing could leave the shared radio receive flag set, causing the GC to reread old packets as if they were fresh receive events. Symptoms included repeated `telemetry_duplicate_sequence_ignored` on the old assignment and repeated `timing_ack_echo_ignored` after a new assignment.
   - `SimpleMesh::scanChannelActivity()` now clears the pending receive flag before CAD and again after restarting RX, so activity detection cannot feed stale FIFO/control packets back into telemetry acquisition.
 - [x] Keep CAD/activity probing out of active assigned-channel RX windows.
-  - Field log `sgc_gc_serial_2026-06-10T21-40-11-023Z.jsonl` showed Search assigned node `6` and sent `TX_PERIOD_ACK`, but the GC then emitted repeated `cad_activity_detected` / `activity_without_valid_packet` instead of receiving telemetry until the serial close/open reset the GC.
+  - Field log `sgc_gc_serial_2026-06-10T21-40-11-023Z.jsonl` showed Search assigned node `6` and sent `TX_PERIOD_ACK`, but the GC then emitted repeated `cad_activity_detected` / `activity_without_valid_packet` instead of receiving telemetry until the serial close/open reset the GC. Current firmware keeps the same RX-only principle after `JOIN_ACK`.
   - On SX1262, CAD is not passive while receiving; it moves the radio out of RX. The scanner now keeps post-ACK/manual lock windows in normal RX and only classifies link state after those forced acquisition windows are no longer active.
 - [x] Keep CAD/activity probing out of active shared-channel Search RX windows.
   - Field logs `sgc_gc_serial_2026-06-10T23-07-48-914Z.jsonl` and `sgc_gc_serial_2026-06-10T23-16-15-771Z.jsonl` showed Search did dwell on the shared channel but never received the second node. Direct node `6` serial showed repeated `join_request_sent` / `join_assign_timeout`, so the drone was transmitting. The GC now keeps shared Search windows in continuous RX instead of running 40 ms CAD probes that can pull the SX1262 out of receive.
 - [x] Build-check firmware after field follow-up changes.
+- [x] Replace active `TX_PERIOD_PROPOSAL` / `TX_PERIOD_ACK` timing with telemetry-period inference.
+  - Drone reads MSP before each due telemetry packet, waits out a locally learned fixed MSP slot with a `15 ms` guard, then transmits.
+  - GC accepts normal telemetry immediately after `JOIN_ACK`, rejects `sequenceDelta == 0`, infers the period from packet-to-packet RX timestamps, and persists `timingAccepted` after the first valid delta.
 - [ ] Flash GC and all drone ESP32s with the profile-ID/search/link-diagnosis firmware.
   - GC `COM18` was flashed after adding pending-assignment rollback, legacy/late JOIN_ACK handling, and the `10 s` minimum Search window. Keep this unchecked until the drone ESP32s are also flashed with the matching profile/search firmware.
   - GC `COM18` was flashed again after adding profile-safe timing proposal floors and the longer drone `TX_PERIOD_ACK` wait guard. Node firmware still needs this image before retesting Robust assignments.
@@ -595,6 +590,7 @@ These tasks mirror `08_field_test_followups.md`.
   - GC `COM18` was flashed after changing terminal-`OFF` scanner behavior so all-off active assignments fall back to shared-channel rejoin discovery instead of idling. Drone firmware does not need reflashing for this GC-only scanner fix.
   - GC `COM18` was flashed after making operator Search preempt regular assigned-channel telemetry slots. Drone firmware does not need reflashing for this GC-only scheduler fix.
   - GC firmware now also keeps active shared-channel Search windows as continuous RX and avoids periodic CAD probes during those windows. Drone firmware does not need reflashing for this GC-only scanner fix.
+  - GC and drone firmware both need reflashing after the no-TX-period-handshake change because current drones no longer send `TX_PERIOD_PROPOSAL` and current GC learns timing from decoded telemetry.
 - [ ] Bench-verify Search admits a new drone without periodic shared-channel lag during normal tracking.
 - [ ] Bench-verify `clear_assignment` removes the selected node from `/live_assignments.json`.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.

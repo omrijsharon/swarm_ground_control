@@ -28,7 +28,7 @@ Goal: address the first field-test findings without expanding this branch into m
   - Superseded after switching discovery to `SF12 / BW125 / CR4/8`: with CAD removed from active RX, Search continues shared RX windows until a join is found or the `15 s` hard cap is reached. The airtime-derived dwell is about `3584 ms`.
 - [ ] Bench-verify active drones do not lag from periodic shared-channel visits while Search is off.
 - [x] Bench-verify Search admits a new drone and then stops after the shared channel is packet-free.
-  - After clearing a stale node `6` assignment, serial-triggered Search received `JOIN_REQUEST`, assigned `904.0 MHz`, completed `JOIN_ACK`, accepted the timing proposal, and then emitted steady `drone_telemetry`.
+  - After clearing a stale node `6` assignment, serial-triggered Search received `JOIN_REQUEST`, assigned `904.0 MHz`, completed `JOIN_ACK`, accepted timing, and then emitted steady `drone_telemetry`.
 - [ ] Bench-verify Search dwell is about `3584 ms` with the current discovery profile.
   - Expected after the SF12 discovery change; keep unchecked until the GC is flashed and reports the new `searchSharedDwellMs`.
 
@@ -51,7 +51,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] If the completed recovery probe sees LoRa activity but no valid telemetry, emit `WEAK`.
 - [x] Treat malformed assigned-channel packets, wrong-node packets, duplicate packets, control echoes, and CAD hits as activity evidence.
   - These do not count as valid telemetry, but they prevent one negative recovery window from falsely proving the drone is powered off.
-- [x] Clear terminal `OFF` runtime state when Search rediscovers the same node or when a timing proposal arrives, so rejoin/acquisition is not blocked by stale OFF state.
+- [x] Clear terminal `OFF` runtime state when Search rediscovers the same node or when valid assigned-channel telemetry arrives, so rejoin/acquisition is not blocked by stale OFF state.
 - [x] Treat "all active assignments are terminal OFF" as shared-channel rejoin discovery instead of scanner idle.
   - Field diagnostics `sgc_gc_serial_2026-06-10T22-17-44-551Z.jsonl` and `sgc_gc_serial_2026-06-10T22-20-40-474Z.jsonl` showed node `6` only rejoined after Delete because deleting made `assignedDrones = 0`, which kept the GC on shared discovery. The GC now uses the same shared rejoin behavior when assignments still exist but every active assignment is already classified `OFF`.
 - [x] Fix Search-mode stale-assignment rejoin probing so reset drones on the shared channel can actually be rediscovered.
@@ -62,15 +62,13 @@ Goal: address the first field-test findings without expanding this branch into m
   - This removes the node `6` collision where telemetry began with the old `0x06` timing-proposal value.
   - This is a breaking air-protocol change; GC and all drone ESP32s must be reflashed together.
 - [x] Accept matching late JOIN_ACK packets during assigned-channel acquisition.
-  - Field diagnostic `sgc_gc_serial_2026-06-10T19-22-26-027Z.jsonl` showed node `6` sending repeated late ACK packets after the GC had already left the strict ACK wait. The GC stores the active join nonce, treats a matching late JOIN_ACK as a control packet, and resumes timing-proposal acquisition instead of logging it as wrong-size telemetry.
-- [x] Send `TX_PERIOD_ACK` before persisting accepted timing to flash so LittleFS latency cannot make a rejoining drone miss the ACK.
-- [x] Use profile-aware timing proposal ACK wait and post-ACK first-telemetry lock windows.
-- [x] Clamp accepted timing proposals to the assigned profile's safe TX period.
-  - Field diagnostic `sgc_gc_serial_2026-06-10T19-34-35-217Z.jsonl` showed Robust profile telemetry airtime of about `395 ms`, but the GC accepted a repeated proposal of `256 ms`. The GC now clamps `accepted_period_ms` to at least `telemetryTxPeriodMs(assigned_profile)`, and the drone proposes at least the same profile-safe period.
-- [x] Increase drone timing-ACK wait guard for slow assigned profiles.
-  - Robust-profile `TX_PERIOD_ACK` airtime is long enough that the Fast-profile guard was too tight in field diagnostics. The drone now waits with a larger guard before retrying `TX_PERIOD_PROPOSAL`.
-- [x] Require `TX_PERIOD_ACK` packets to be exactly 6 bytes on the drone.
-  - This prevents longer legacy/control packets that start with `0x06` from being misread as timing ACKs.
+  - Field diagnostic `sgc_gc_serial_2026-06-10T19-22-26-027Z.jsonl` showed node `6` sending repeated late ACK packets after the GC had already left the strict ACK wait. The GC stores the active join nonce, treats a matching late JOIN_ACK as a control packet, and resumes assigned-channel acquisition instead of logging it as wrong-size telemetry.
+- [x] Replace active timing proposal/ACK exchange with telemetry-period inference.
+  - Drone starts telemetry after `JOIN_ACK`, measures MSP read time locally, waits out a fixed MSP slot with a `15 ms` guard, and does not wait for `TX_PERIOD_ACK`.
+  - GC accepts valid telemetry during assignment acquisition, rejects `sequenceDelta == 0`, infers the period from packet-to-packet RX timestamps, and persists `timingAccepted` after the first valid delta.
+  - Legacy `TX_PERIOD_PROPOSAL` / `TX_PERIOD_ACK` packets remain reserved for mixed-firmware diagnostics but are not part of the current bind path.
+- [x] Clamp inferred periods to the assigned profile's safe TX period.
+  - Field diagnostic `sgc_gc_serial_2026-06-10T19-34-35-217Z.jsonl` showed Robust profile telemetry airtime of about `395 ms`, but old proposal handling accepted `256 ms`. Current inference requires at least `telemetryTxPeriodMs(assigned_profile)`.
 - [x] Remove legacy `0x06` timing-proposal compatibility.
   - Field diagnostic `sgc_gc_serial_2026-06-10T19-57-32-998Z.jsonl` showed node `6` stuck in repeated `tx_period_proposal_received` / `tx_period_ack_sent` after timing was already accepted. Removing the old `0x06` proposal path prevents node-ID `6` packet collisions from keeping the scanner in the control-packet path.
 - [x] Validate persisted assignment timing against the stored radio profile on GC boot.
@@ -79,7 +77,7 @@ Goal: address the first field-test findings without expanding this branch into m
   - Robust assignments now get a receive window large enough for their airtime/period instead of the old fixed `140 ms` acquisition slice.
 - [x] Guard post-ACK first telemetry lock against ACK-shaped stale/control packets.
   - Field diagnostic `sgc_gc_serial_2026-06-10T21-10-59-288Z.jsonl` showed no `drone_telemetry`, but 425 ignored packets with `packetLen=12` and `firstByte=0xA6` after `tx_period_ack_sent`.
-  - GC now retunes clean assigned RX after `TX_PERIOD_ACK` and ignores `0xA6` ACK-shaped packets during assigned telemetry acquisition with reason `timing_ack_echo_ignored`.
+  - Current firmware no longer sends `TX_PERIOD_ACK`, but GC still ignores `0xA6` ACK-shaped packets during assigned telemetry acquisition for mixed-firmware safety.
 - [x] Clear stale receive flags around GC LoRa CAD/activity scans.
   - Field diagnostic `sgc_gc_serial_2026-06-10T21-27-09-251Z.jsonl` showed a power-cycled node `6` only recovered after assignment deletion because CAD/activity probing could cause the GC to reread stale assigned-channel packets during recovery and post-ACK acquisition.
   - `SimpleMesh::scanChannelActivity()` now clears the pending receive flag before CAD and after RX restart, preventing stale packet/FIFO state from blocking Search or relock.
@@ -101,8 +99,9 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Show `LOCKING`, `WEAK`, `OFFLINE`, and `OFF` in SGC.
 - [x] Use orange for `WEAK`, red for `OFFLINE`, and gray for `OFF`.
 - [x] Let the operator click `OFFLINE` or `WEAK` to request `relock_drone`.
-- [x] Add an SGC post-assignment telemetry watchdog after `tx_period_ack_sent`.
+- [x] Add an SGC post-assignment telemetry watchdog for legacy `tx_period_ack_sent` logs.
   - If the browser sees the ACK event but no `drone_telemetry` for that node within about two seconds, SGC requests `get_status` and `get_channel_table` only. Automatic recovery belongs in the GC firmware; SGC does not silently send `relock_drone` because that creates operator-requested manual re-bind windows that can disrupt healthy drones.
+  - Superseded by telemetry-period inference for current firmware: SGC should rely on `telemetry_period_observed` / `telemetry_period_locked` and normal telemetry freshness, while still tolerating old ACK events in logs.
 - [x] Keep automatic SGC watchdogs from forcing manual re-bind.
   - Log `sgc_gc_serial_2026-06-12T21-39-22-826Z.jsonl` showed a stale node `6` assignment repeatedly entering `manual_relock_listen` while a strong node `7` missed robust-profile TST windows. The watchdog now records `assignment_watchdog_no_telemetry` and refreshes status without sending `relock_drone`.
 - [x] Add visible SGC diagnostic-log controls for reproducing Search/relock failures.
