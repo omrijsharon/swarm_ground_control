@@ -7,6 +7,15 @@ The firmware has two runtime roles in this branch:
 - GC ESP32: connected to SGC over USB serial, owns discovery, assignment, channel scanning, heading fusion, and JSON output.
 - Drone ESP32: connected to the flight controller over MSP, sends compact telemetry over LoRa.
 
+Dual-LoRa ground station mode is also supported:
+
+- MaGC ESP32 (`magic_ground_control` / `magc`): shared-channel discovery, Bind,
+  scan, allocation, orphan recovery, and persisted assignments.
+- TeleGC ESP32 (`telemetry_ground_control` / `telegc`): assigned-channel
+  telemetry RX, TST/period tracking, and the USB serial facade to SGC.
+- MaGC and TeleGC exchange newline-delimited JSON over Inter-GC UART at
+  `921600`; the existing `ground_station` role remains the single-module mode.
+
 ## Milestones And Tasks
 
 - [x] Milestone 1: Add branch-specific firmware mode
@@ -34,6 +43,23 @@ The firmware has two runtime roles in this branch:
     - Runtime logs include SSID, URL, and connected station count so RF visibility can be debugged without guessing.
   - [ ] Bench-verify a laptop/phone can see the node-specific SSID.
   - [ ] Bench-verify a `firmware.bin` upload through the OTA web page succeeds.
+
+- [ ] Milestone 1B: Add dual-LoRa MaGC/TeleGC ground station mode
+  - [x] Preserve existing `ground_station` as the single-GC mode.
+  - [x] Add `magic_ground_control` / `magc` and `telemetry_ground_control` / `telegc` roles.
+  - [x] Add configurable Inter-GC UART settings under `live_position.inter_gc`.
+  - [x] Start MSP UART only for drone-like roles.
+  - [x] Start Inter-GC UART only for MaGC/TeleGC roles.
+  - [x] Add line-delimited JSON Inter-GC transport with `messageId`, ACK, retry, and duplicate-safe assignment snapshots.
+  - [x] Add TeleGC snapshot request and in-RAM assignment mirror.
+  - [x] Route SGC Bind/Search/scan/allocation commands from TeleGC to MaGC.
+  - [x] Keep TeleGC-local manual Re-bind for assigned telemetry reacquisition.
+  - [x] Add NTP-style `micros()` clock sync and MaGC timing-hint conversion support.
+  - [x] Make MaGC shared/bind-only and TeleGC assigned-telemetry-only while preserving single-GC mixed behavior.
+  - [ ] Bench-verify MaGC/TeleGC UART wiring at `921600`.
+  - [ ] Bench-verify SGC connected to TeleGC can Bind through MaGC.
+  - [ ] Bench-verify TeleGC receives telemetry and updates TST/period from packets.
+  - [ ] Bench-verify single-GC mode still works unchanged.
 
 - [x] Milestone 2: Implement binary packet definitions
   - [x] Define packet type IDs for shared-channel control packets.

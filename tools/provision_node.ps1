@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("gc", "drone")]
+    [ValidateSet("gc", "magc", "telegc", "drone")]
     [string]$Role,
     [Parameter(Mandatory = $true)]
     [string]$Port,
@@ -8,6 +8,9 @@ param(
     [switch]$SimulatedFc,
     [int]$SimulatedMspBatchMs = 8,
     [switch]$ConfigOnly,
+    [int]$InterGcRxPin = 44,
+    [int]$InterGcTxPin = 43,
+    [int]$InterGcBaud = 921600,
     [string]$FirmwareRepo = "C:\Users\tamipinhasi\Documents\PlatformIO\Projects\simple-mesh",
     [string]$Environment = "seeed-xiao-s3"
 )
@@ -29,18 +32,27 @@ function Invoke-Checked {
 function New-LiveNodeConfig {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("gc", "drone")]
+        [ValidateSet("gc", "magc", "telegc", "drone")]
         [string]$Role,
         [Parameter(Mandatory = $true)]
         [int]$NodeId,
         [bool]$SimulatedFc,
-        [int]$SimulatedMspBatchMs
+        [int]$SimulatedMspBatchMs,
+        [int]$InterGcRxPin,
+        [int]$InterGcTxPin,
+        [int]$InterGcBaud
     )
 
-    if ($Role -eq "gc") {
+    if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc") {
+        $nodeRole = "ground_station"
+        if ($Role -eq "magc") {
+            $nodeRole = "magic_ground_control"
+        } elseif ($Role -eq "telegc") {
+            $nodeRole = "telemetry_ground_control"
+        }
         return [ordered]@{
             node_id = 0
-            node_role = "ground_station"
+            node_role = $nodeRole
             lora = [ordered]@{
                 frequency = 915.0
                 tx_power = 22
@@ -57,6 +69,16 @@ function New-LiveNodeConfig {
                 backoff_min_ms = 100
                 backoff_max_ms = 1000
                 test_message_timeout_sec = 10
+            }
+            live_position = [ordered]@{
+                simulated_fc = $false
+                simulated_msp_batch_ms = 8
+                inter_gc = [ordered]@{
+                    enabled = ($Role -ne "gc")
+                    baud = $InterGcBaud
+                    rx_pin = $InterGcRxPin
+                    tx_pin = $InterGcTxPin
+                }
             }
         }
     }
@@ -92,7 +114,7 @@ if (-not (Test-Path -LiteralPath $FirmwareRepo)) {
     throw "Firmware repo not found: $FirmwareRepo"
 }
 
-if ($Role -eq "gc") {
+if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc") {
     $NodeId = 0
 } elseif ($NodeId -le 0 -or $NodeId -gt 255) {
     throw "Drone provisioning requires -NodeId in the range 1..255."
@@ -111,7 +133,7 @@ if ($hadOriginalConfig) {
 
 Push-Location $FirmwareRepo
 try {
-    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs
+    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs -InterGcRxPin $InterGcRxPin -InterGcTxPin $InterGcTxPin -InterGcBaud $InterGcBaud
     $json = $nodeConfig | ConvertTo-Json -Depth 6
     Set-Content -LiteralPath $configPath -Value $json -Encoding UTF8
 
@@ -124,6 +146,10 @@ try {
     if ($Role -eq "drone") {
         Write-Host "Simulated FC: $([bool]$SimulatedFc)"
         Write-Host "Simulated MSP batch ms: $SimulatedMspBatchMs"
+    } elseif ($Role -eq "magc" -or $Role -eq "telegc") {
+        Write-Host "Inter-GC UART baud: $InterGcBaud"
+        Write-Host "Inter-GC UART RX pin: $InterGcRxPin"
+        Write-Host "Inter-GC UART TX pin: $InterGcTxPin"
     }
     Write-Host "LittleFS /config.json WILL be overwritten on the board."
     if (-not $ConfigOnly) {

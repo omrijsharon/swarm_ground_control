@@ -53,6 +53,7 @@ Read these files before implementing branch work:
 - `04_sgc_side.md`: SGC UI and telemetry ingestion plan.
 - `05_simple_mesh_firmware_side.md`: firmware role plan for GC and drone ESP32 nodes.
 - `06_gc_lifecycle_spectrum_plan.md`: cross-cutting plan for JOIN retry hardening, fresh-session reset, GC lifecycle commands, and SGC spectrum/boot visibility.
+- `10_dual_lora_ground_station.md`: MaGC/TeleGC split-mode architecture, UART protocol, clock sync, and bench checklist.
 
 ## Checklist Behavior
 

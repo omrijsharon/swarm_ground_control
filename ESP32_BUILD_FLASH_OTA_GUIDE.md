@@ -2,7 +2,9 @@
 
 This guide explains the current live-position firmware workflow for:
 
-- GC ESP32: ground-control XIAO ESP32S3 connected to SGC by USB serial.
+- Single GC ESP32: ground-control XIAO ESP32S3 connected to SGC by USB serial.
+- MaGC ESP32: magic ground-control module for Bind/search/scan/allocation.
+- TeleGC ESP32: telemetry ground-control module connected to SGC by USB serial.
 - Drone ESP32: drone XIAO ESP32S3, normally updated by Web OTA.
 
 The firmware lives in the companion repo:
@@ -35,6 +37,13 @@ cd C:\Users\tamipinhasi\Documents\repos\swarm_ground_control
 - live-position options such as simulated FC mode
 
 For normal updates, flash firmware only or use Web OTA. Do not upload LittleFS unless you intentionally want to change the board identity or role.
+
+Supported live-position roles:
+
+- `ground_station`: single-module GC, connected directly to SGC.
+- `magic_ground_control`: MaGC, shared-channel Bind/search/scan/allocation module.
+- `telemetry_ground_control`: TeleGC, telemetry RX module connected to SGC.
+- `drone`: drone ESP32 connected to the FC MSP UART.
 
 ## Scripts
 
@@ -96,7 +105,7 @@ This same firmware can run as GC or drone. The board decides its role from `/con
 
 ## Step 3A: Flash GC ESP32 Over USB
 
-Use this for normal GC firmware updates.
+Use this for normal single-GC, MaGC, or TeleGC firmware updates.
 
 1. Disconnect SGC Web Serial first.
 
@@ -113,6 +122,8 @@ Access to the port 'COM18' is denied
 ```
 
 This does not upload LittleFS. The GC keeps its existing `node_id = 0` and `node_role = ground_station`.
+
+For MaGC or TeleGC, firmware-only flashing also preserves the existing role in LittleFS.
 
 3. Reconnect SGC to the GC serial port after flashing.
 
@@ -178,7 +189,7 @@ Provisioning overwrites LittleFS `/config.json`. Use it only for a new board or 
 
 The provisioning script temporarily writes `simple-mesh\data\config.json`, uploads LittleFS, optionally uploads firmware, then restores the original local `data\config.json` so the firmware repo does not stay dirty.
 
-### Provision GC
+### Provision Single GC
 
 ```powershell
 .\tools\provision_node.ps1 -Role gc -Port COM18
@@ -191,6 +202,83 @@ This writes:
   "node_id": 0,
   "node_role": "ground_station"
 }
+```
+
+### Provision MaGC
+
+Use this for the Bind/search/scan/allocation module. It is not connected to SGC
+by USB during normal operation; it talks to TeleGC over UART.
+
+```powershell
+.\tools\provision_node.ps1 -Role magc -Port COM18
+```
+
+This writes:
+
+```json
+{
+  "node_id": 0,
+  "node_role": "magic_ground_control",
+  "live_position": {
+    "inter_gc": {
+      "enabled": true,
+      "baud": 921600,
+      "rx_pin": 44,
+      "tx_pin": 43
+    }
+  }
+}
+```
+
+### Provision TeleGC
+
+Use this for the telemetry module connected to SGC by USB. It receives MaGC
+assignment snapshots over UART and owns telemetry TST/period lock.
+
+```powershell
+.\tools\provision_node.ps1 -Role telegc -Port COM19
+```
+
+This writes:
+
+```json
+{
+  "node_id": 0,
+  "node_role": "telemetry_ground_control",
+  "live_position": {
+    "inter_gc": {
+      "enabled": true,
+      "baud": 921600,
+      "rx_pin": 44,
+      "tx_pin": 43
+    }
+  }
+}
+```
+
+### Wire MaGC To TeleGC
+
+Default XIAO ESP32S3 Inter-GC UART pins:
+
+```text
+RX = 44
+TX = 43
+baud = 921600
+```
+
+Wire:
+
+```text
+MaGC TX  -> TeleGC RX
+MaGC RX  -> TeleGC TX
+MaGC GND -> TeleGC GND
+```
+
+If you use different pins, pass them during provisioning:
+
+```powershell
+.\tools\provision_node.ps1 -Role magc -Port COM18 -InterGcRxPin 44 -InterGcTxPin 43 -InterGcBaud 921600
+.\tools\provision_node.ps1 -Role telegc -Port COM19 -InterGcRxPin 44 -InterGcTxPin 43 -InterGcBaud 921600
 ```
 
 ### Provision Drone
@@ -235,6 +323,22 @@ For GC, look for:
 ```text
 Node ID: 0
 Node Role: ground_station
+```
+
+For MaGC, look for:
+
+```text
+Node ID: 0
+Node Role: magic_ground_control
+Inter-GC UART initialized baud=921600
+```
+
+For TeleGC, look for:
+
+```text
+Node ID: 0
+Node Role: telemetry_ground_control
+Inter-GC UART initialized baud=921600
 ```
 
 For drone, look for:
@@ -306,6 +410,8 @@ If a board boots as the wrong role, its LittleFS `/config.json` is wrong. Re-pro
 
 ```powershell
 .\tools\provision_node.ps1 -Role gc -Port COM18
+.\tools\provision_node.ps1 -Role magc -Port COM18
+.\tools\provision_node.ps1 -Role telegc -Port COM19
 .\tools\provision_node.ps1 -Role drone -NodeId 7 -Port COM13
 ```
 
