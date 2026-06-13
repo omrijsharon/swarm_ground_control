@@ -51,8 +51,8 @@ Shared-channel discovery radio profile:
 
 ```text
 profile_id          255      # firmware-known discovery profile, not assigned to drones
-spreading_factor    11
-bandwidth_hz        250000
+spreading_factor    12
+bandwidth_hz        125000
 coding_rate         8        # RadioLib denominator style: 8 means 4/8
 preamble_symbols    8
 explicit_header     true
@@ -60,7 +60,18 @@ phy_crc             true
 tx_power_dbm        22
 ```
 
-Implementation note: live-position firmware now switches the radio profile at runtime. The GC and drone use the discovery profile on the shared channel, then switch to assigned telemetry profile `0` for `TX_PERIOD_PROPOSAL`, `TX_PERIOD_ACK`, and 20-byte telemetry.
+Implementation note: live-position firmware now switches the radio profile at runtime. The GC and drone use the discovery profile on the shared channel, then switch to the assigned telemetry profile from `JOIN_ASSIGN.radio_profile_id` for `TX_PERIOD_PROPOSAL`, `TX_PERIOD_ACK`, and 20-byte telemetry.
+
+Extra-long assigned telemetry profile:
+
+```text
+profile_id          64       # SF12 / BW125 / CR4/8
+telemetry_airtime   ~1712 ms # 20-byte live telemetry packet
+tx_period_ms        ~1787 ms # ceil(airtime) + 74 ms buffer
+update_rate         ~0.56 Hz # one drone, before scheduler contention
+```
+
+The shared `TX_PERIOD_MAX_ACCEPT_MS` limit is now `2000 ms`, so the GC can assign this profile and the drone can accept it. Future profiles whose computed transmit period exceeds the shared max must be rejected by `set_radio_profile` before assignment.
 
 ## Telemetry Packet
 
@@ -276,7 +287,7 @@ total                       5 bytes
   - [x] Keep the proposal on the assigned channel after `JOIN_ACK`.
   - [x] Drone measures one `MSP_MULTIPLE_MSP -> pack telemetry -> LoRa TX` probe cycle.
   - [x] Drone proposes `measured_cycle_ms + 15 ms`.
-  - [x] GC accepts periods from `45-1000 ms` so Balanced/Robust profile timing proposals are valid.
+  - [x] GC accepts periods from `45-2000 ms` so Balanced, Robust, and profile `64` timing proposals are valid.
   - [x] GC clamps accepted periods to at least `100 ms` so the single-radio scanner has enough margin.
   - [x] GC ignores the first 20-byte probe telemetry for SGC output and TST lock.
   - [x] GC persists the accepted period but keeps TST/RSSI/SNR/miss counters in RAM only.
@@ -311,21 +322,21 @@ total                         6 bytes
 ## Expected Airtime
 
 - [x] Milestone 9: Verify airtime calculations in code
-  - [x] Verify `5-byte JOIN_REQUEST` airtime is about `231.4 ms` on the discovery profile.
-  - [x] Verify `4-byte SILENCE` airtime is about `231.4 ms` on the discovery profile.
-  - [x] Verify `9-byte JOIN_ASSIGN` airtime is about `297.0 ms` on the discovery profile.
-  - [x] Verify `5-byte JOIN_ACK` airtime is about `231.4 ms` on the discovery profile.
+  - [x] Verify `5-byte JOIN_REQUEST` airtime is about `925.7 ms` on the discovery profile.
+  - [x] Verify `4-byte SILENCE` airtime is about `925.7 ms` on the discovery profile.
+  - [x] Verify `9-byte JOIN_ASSIGN` airtime is about `1187.8 ms` on the discovery profile.
+  - [x] Verify `5-byte JOIN_ACK` airtime is about `925.7 ms` on the discovery profile.
   - [x] Verify `20-byte telemetry` airtime is about `25.7 ms`.
   - [x] Recalculate if preamble, SF, BW, CR, header mode, or CRC mode changes.
 
-Discovery airtime table at SF11 / BW250 / CR4/8 / preamble 8 / explicit header / PHY CRC:
+Discovery airtime table at SF12 / BW125 / CR4/8 / preamble 8 / explicit header / PHY CRC:
 
 ```text
 payload_bytes   packet              airtime_ms
-4               SILENCE             231.424
-5               JOIN_REQUEST        231.424
-5               JOIN_ACK            231.424
-9               JOIN_ASSIGN         296.960
+4               SILENCE             925.696
+5               JOIN_REQUEST        925.696
+5               JOIN_ACK            925.696
+9               JOIN_ASSIGN         1187.840
 ```
 
 Telemetry airtime table at SF8 / BW500 / CR4/5 / preamble 8 / explicit header / PHY CRC:
@@ -410,7 +421,7 @@ Boot spectrum scan policy:
 
 - [x] Milestone 12: Define shared channel behavior
   - [x] Unassigned drones wait on the shared channel.
-  - [x] Unassigned drones use random backoff between `25-250 ms`.
+  - [x] Unassigned drones use random backoff between `1000-5000 ms`.
   - [x] Unassigned drones perform LBT before sending `JOIN_REQUEST`.
   - [x] GC sends `SILENCE` before `JOIN_ASSIGN`.
   - [x] GC repeats `SILENCE -> JOIN_ASSIGN -> wait for JOIN_ACK` until acknowledged or timeout.
@@ -422,15 +433,16 @@ Shared-channel behavior:
 
 - Unassigned drones stay tuned to `915.0 MHz`.
 - Drone join attempt:
-  - wait random `25-250 ms`;
+  - wait random `1000-5000 ms`;
   - perform LBT for `5 ms`;
   - transmit `JOIN_REQUEST` only when RSSI remains below `-95 dBm`;
-  - if LBT fails, restart random backoff.
+  - if LBT fails, restart random backoff;
+  - listen for `SILENCE` / `JOIN_ASSIGN` with the longer SF12 assignment timeout.
 - GC join response:
   - receive `JOIN_REQUEST`;
-  - send broadcast `SILENCE` with `quiet_ms = 900`;
+  - send broadcast `SILENCE` with `quiet_ms = 2500`;
   - send targeted `JOIN_ASSIGN`;
-  - wait up to `900 ms` for `JOIN_ACK`;
+  - wait up to `1800 ms` for `JOIN_ACK`;
   - retry the silence/assign/ACK wait sequence up to `3` attempts.
 - Target drone sends `JOIN_ACK`, then switches to the assigned channel.
 - After `JOIN_ACK`, the drone sends one probe telemetry packet, then sends `TX_PERIOD_PROPOSAL`.
@@ -458,7 +470,7 @@ Drone transmit timing:
 - If telemetry work is late, skip late slots instead of transmitting bursts or shifting the phase.
 - The GC updates the TST estimate after every received packet, so runtime TST drift is RAM-only and is never written to flash.
 - Bench note: after MSP polling was moved behind LoRa TX, the drone measured the blocking `sendRawPacket()` path at about `38 ms`, longer than the earlier `35 ms` period. The fixed-period fallback was replaced by a timing proposal handshake. In the first bench run after that change, drone node `2` proposed `104 ms` from `measuredCycleMs = 89` plus the `15 ms` buffer, the GC ACKed it, and a post-lock 15 second GC sample received `145` telemetry packets with zero `telemetry_missed` events.
-- Bench note: after MSP batch started responding quickly, drone node `2` measured and proposed `63 ms`, but the current GC scanner missed packets at that rate. Raising GC USB serial to `921600` and accepting `65 ms` still produced many sequence gaps, so the bottleneck is not only USB baud rate. The GC keeps the protocol range at `45-250 ms` but clamps the accepted operating period to at least `100 ms`; the resulting `txPeriodMs = 103` bench run produced `145` received telemetry messages in 15 seconds with zero sequence gaps.
+- Bench note: after MSP batch started responding quickly, drone node `2` measured and proposed `63 ms`, but the current GC scanner missed packets at that rate. Raising GC USB serial to `921600` and accepting `65 ms` still produced many sequence gaps, so the bottleneck is not only USB baud rate. The GC keeps the protocol range at `45-2000 ms` but clamps the accepted operating period to at least `100 ms`; the resulting `txPeriodMs = 103` bench run produced `145` received telemetry messages in 15 seconds with zero sequence gaps.
 - Scheduler design note: with multiple drones, independent packet windows may overlap. The GC does not prevent overlap; it ranks catchable profile-aware receive windows by normalized telemetry age and near-future listen start, then intentionally skips lower-priority windows without counting those skips as `telemetry_missed`.
 
 - [x] Milestone 14: Define GC scan timing
@@ -487,8 +499,10 @@ GC scan timing:
 - Full automatic RX relock is scheduled only when a recovery-slot CAD/LBT probe detects activity, plus one immediate first-slot weak-link attempt when last RSSI was `<= -114 dBm` or unknown.
 - Classify `WEAK` when activity is detected but telemetry does not decode.
 - Classify `OFF` only after `2` separate no-activity CAD/LBT probes when last RSSI was stronger than `-114 dBm`; weak or unknown last RSSI stays `OFFLINE`.
-- Return to the shared channel about every `3000 ms` and dwell for `360 ms` to catch long-range `JOIN_REQUEST` packets.
-- If shared discovery is badly overdue, use a `720 ms` forced shared listen window.
+- With no active assignments, the GC uses `1200 ms` normal shared listen windows for discovery.
+- Operator Bind/Search uses `discoverySearchSharedDwellMs()`, derived as `3 * max discovery control packet airtime + 20 ms`; at `SF12 / BW125 / CR4/8` this reports about `3584 ms`.
+- Active tracking uses operator-controlled Bind/Search instead of short periodic forced shared listens.
+- Assigned profile `64` (`SF12 / BW125 / CR4/8`) is intentionally slow: the GC must not clip post-ACK, manual re-bind, automatic recovery, Search telemetry-round, or OOCR listen windows with old sub-second assumptions.
 - High-rate per-packet scanner debug should stay off by default because serial JSON output can otherwise block the receive loop.
 
 ## Field Follow-Up Protocol Changes
@@ -507,5 +521,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add deterministic radio profile IDs for SF `7-12`, BW `125/250/500 kHz`, and CR `4/5-4/8`.
 - [x] Add preset profile IDs for Balanced and Robust.
 - [x] Keep `JOIN_ASSIGN.radio_profile_id` as the assigned telemetry profile selector.
-- [x] Keep shared discovery profile fixed at `SF11 / BW250 / CR4/8`.
+- [x] Keep shared discovery profile fixed at `SF12 / BW125 / CR4/8`.
+- [x] Raise the shared accepted assigned-telemetry period ceiling to `2000 ms` so profile `64` can bind and negotiate timing.
+- [x] Make GC post-ACK lock, manual re-bind, automatic recovery, Search telemetry-round, and OOCR windows large enough for profile `64`.
 - [ ] Field-verify Fast, Balanced, and Robust behavior with real drones.

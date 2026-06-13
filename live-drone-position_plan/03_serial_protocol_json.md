@@ -77,7 +77,7 @@ Candidate:
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":231.4,"discoveryJoinAssignAirtimeMs":297.0,"discoveryJoinAckAirtimeMs":231.4,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -248,7 +248,7 @@ Assignment record fields:
 Example:
 
 ```json
-{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0],"noisyFrequencyMhz":[903.5],"freeChannels":2,"occupiedChannels":1,"assignedChannels":1,"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"expectedUpdateMs":320,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"channels":[{"channelIndex":2,"frequencyMhz":903.5,"role":"telemetry_candidate","state":"occupied","activityDetected":true,"activitySource":"cad","activityConfidence":"cad_suspect","cadStatus":"detected","cadError":false,"listenAttempted":false,"confirmedDrone":false,"detectedProfileIds":[46],"displayRssi":-76}],"bandwidthHz":500000,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"channelSpacingMhz":0.5,"gcMillis":123500}
+{"type":"channel_table","sharedFrequencyMhz":915.0,"reservedFrequencyMhz":[914.5,915.0,915.5],"candidateFrequencyMhz":[902.5,903.0,903.5,916.0],"clearFrequencyMhz":[902.5,903.0],"noisyFrequencyMhz":[903.5],"freeChannels":2,"occupiedChannels":1,"assignedChannels":1,"assignments":[{"nodeId":2,"frequencyMhz":916.0,"channelIndex":27,"txPeriodMs":103,"expectedUpdateMs":320,"persisted":true,"lastSeenGcMillis":123456,"rssi":-82,"snr":9.5}],"channels":[{"channelIndex":2,"frequencyMhz":903.5,"role":"telemetry_candidate","state":"occupied","activityDetected":true,"activitySource":"cad","activityConfidence":"cad_suspect","cadStatus":"detected","cadError":false,"listenAttempted":false,"confirmedDrone":false,"detectedProfileIds":[46],"displayRssi":-76}],"bandwidthHz":500000,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"channelSpacingMhz":0.5,"gcMillis":123500}
 ```
 
 - [x] Milestone 5: Define error/warning JSON
@@ -310,7 +310,7 @@ Response examples:
 
 ```json
 {"type":"command_ack","commandId":"sgc-0001","command":"ping","accepted":true,"message":"pong","gcMillis":123456}
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":11,"discoveryBandwidthHz":250000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":231.4,"discoveryJoinAssignAirtimeMs":297.0,"discoveryJoinAckAirtimeMs":231.4,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"scanMode":"telemetry","gcMillis":123456}
 ```
 
 - [x] Milestone 7: Define configurable radio settings
@@ -325,12 +325,13 @@ Response examples:
 Radio profile decision:
 
 - Assigned telemetry profile `0` remains SF8 / BW500 / CR4/5.
-- Shared discovery/join profile is firmware-known SF11 / BW250 / CR4/8 and is not assigned through `JOIN_ASSIGN`.
+- Shared discovery/join profile is firmware-known SF12 / BW125 / CR4/8 and is not assigned through `JOIN_ASSIGN`.
 - TX power stays fixed at `22 dBm` in firmware and is reported in `gc_status`.
 - Valid `spreadingFactor` values for this branch: `7`, `8`, `9`, `10`, `11`, `12`. UI should default to `8`.
 - Valid `bandwidthHz` values for this branch: `125000`, `250000`, `500000`. UI should default to `500000`.
 - Valid `codingRate` values use RadioLib denominator style: `5`, `6`, `7`, `8`, representing 4/5 through 4/8. UI should default to `5`.
 - `airtimeBufferMs` is added to the computed telemetry airtime to define the scheduled transmit period.
+- The computed assigned telemetry period must be no more than `TX_PERIOD_MAX_ACCEPT_MS = 2000`; otherwise the GC rejects `set_radio_profile` with `reason:"tx_period_out_of_range"`.
 - Settings apply at the next GC radio idle boundary, not mid-packet.
 - Settings persist only when `persist` is `true`; SGC should send `persist:true` for operator profile changes.
 - After accepting a change, GC emits `command_ack`, a new `gc_status`, and a new `channel_table` if the table changed.
@@ -341,7 +342,7 @@ Command example:
 {"type":"command","command":"set_radio_profile","commandId":"sgc-0100","spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"airtimeBufferMs":44,"persist":true}
 ```
 
-Implementation note: SGC now has a disabled production UI picker that can preview this command payload and local telemetry airtime. Firmware implements runtime switching between the fixed discovery profile and assigned telemetry profile, but `set_radio_profile` is still not implemented.
+Implementation note: SGC now has a production UI picker that sends `set_radio_profile` for future assignments and previews local telemetry airtime. Firmware implements runtime switching between the fixed discovery profile and the selected assigned telemetry profile.
 
 - [x] Milestone 8: Define assignment maintenance commands
   - [x] Define a command to clear one assignment.
@@ -494,6 +495,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Add SGC-to-GC `set_radio_profile` for future assignments.
 - [x] Include default-assignment profile information in `gc_status`.
 - [x] Include supported radio profile metadata in `channel_table` where useful.
+- [x] Reject future assignment profiles whose computed TX period exceeds `2000 ms`.
 - [ ] Bench-verify `start_search`, `clear_assignment`, and `set_radio_profile` from the browser against a flashed GC.
 
 ## Cloudflare Live Relay Extension

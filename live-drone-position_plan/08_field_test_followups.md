@@ -24,13 +24,13 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Emit `gc_status.searchSharedDwellMs`.
 - [x] Keep operator Search bounded so it cannot look stuck while telemetry is flowing.
   - Field diagnostics showed the earlier `10 s` minimum Search window could keep the button in `Searching...` even while the GC had already assigned a drone and was receiving assigned-channel telemetry.
-  - Search now stops early after one packet-free shared dwell, and otherwise has a hard maximum of `3 s` before the GC emits `search_timeout` with reason `max_duration_elapsed`.
-  - Superseded after node `6` serial proved JOIN retries every ~1.6 s: with CAD removed from active RX, Search now continues shared RX windows until a join is found or the `3 s` hard cap is reached. A single `911 ms` dwell can miss a retrying drone by phase.
+  - Search now stops after the long-range shared dwell when packet-free, and otherwise has a hard maximum of `15 s` before the GC emits `search_timeout` with reason `max_duration_elapsed`.
+  - Superseded after switching discovery to `SF12 / BW125 / CR4/8`: with CAD removed from active RX, Search continues shared RX windows until a join is found or the `15 s` hard cap is reached. The airtime-derived dwell is about `3584 ms`.
 - [ ] Bench-verify active drones do not lag from periodic shared-channel visits while Search is off.
 - [x] Bench-verify Search admits a new drone and then stops after the shared channel is packet-free.
   - After clearing a stale node `6` assignment, serial-triggered Search received `JOIN_REQUEST`, assigned `904.0 MHz`, completed `JOIN_ACK`, accepted the timing proposal, and then emitted steady `drone_telemetry`.
-- [x] Bench-verify Search dwell is about `900-920 ms` with the current discovery profile.
-  - GC reported `searchSharedDwellMs = 911`.
+- [ ] Bench-verify Search dwell is about `3584 ms` with the current discovery profile.
+  - Expected after the SF12 discovery change; keep unchecked until the GC is flashed and reports the new `searchSharedDwellMs`.
 
 ## Milestone 2: Link Diagnosis And Recovery
 
@@ -173,6 +173,10 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Make SGC Apply send `set_radio_profile` for future assignments only.
 - [x] Close the profile picker after `set_radio_profile` is successfully sent.
 - [x] Show each drone's assigned profile on its card.
+- [x] Allow profile `64` (`SF12 / BW125 / CR4/8`) as an assigned telemetry profile.
+  - The 20-byte telemetry airtime is about `1712 ms`; with the default `74 ms` airtime buffer, the computed TX period is about `1787 ms`.
+  - GC and drone now share `TX_PERIOD_MAX_ACCEPT_MS = 2000`, so the drone can accept the assignment and timing ACK.
+  - GC post-ACK lock, manual re-bind, automatic recovery, Search telemetry-round, and OOCR windows are no longer clipped by the old sub-second assumptions.
 - [ ] Reflash GC and all drone ESP32s after the profile-ID change.
   - GC `COM18` has been flashed with the high-range control packet IDs (`0xA1-0xA6`) and profile-aware timing validation. Leave this unchecked until every drone ESP32 is flashed with the same firmware image.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.
