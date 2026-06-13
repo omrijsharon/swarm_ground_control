@@ -184,6 +184,7 @@ Examples:
   - [x] Keep a silent in-browser rolling diagnostic log of the Web Serial stream while SGC owns the port.
     - It records incoming GC lines and outgoing SGC commands with a `direction` field.
     - Browser console helpers: `downloadLiveGcLog()` exports JSONL, and `getLiveGcLog()` returns the current in-memory entries.
+    - The retained browser log is a fixed `1024` entry ring with `logSequence`, `logSlot`, and `loggedAt` metadata so long bench runs cannot grow memory without bound.
   - [x] Expose the in-browser diagnostic log in the SGC USB panel for field debugging.
     - `Download` exported JSONL with a leading snapshot of current drones, assignments, link states, pending commands, recent scanner/search/assignment events, and GC status.
     - `Clear` reset the capture before reproducing a field issue.

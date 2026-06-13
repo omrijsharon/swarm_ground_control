@@ -278,6 +278,7 @@ These tasks mirror `08_field_test_followups.md`.
   - `Download` exported the rolling serial/UI JSONL capture with a current-state snapshot.
   - `Clear` let the operator reset the capture before reproducing a Search/relock failure.
   - The visible controls were restored for the four-drone scheduler investigation.
+  - The capture uses a fixed `1024` entry ring so long bench sessions keep bounded browser memory while preserving chronological export order.
 - [ ] Manually verify disconnecting a drone leaves it in a stable non-online state.
 - [x] Start live-position mode without a default HOME marker.
 - [x] Add a live map long-press/right-click menu for local HOME placement.

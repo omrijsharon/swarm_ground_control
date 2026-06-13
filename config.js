@@ -3,6 +3,8 @@
 const CONFIG = {
   // Max telemetry points to keep per drone (900 ~= 15 minutes at ~1 Hz).
   HISTORY_LIMIT: 900,
+  // Max retained log/event entries per in-memory logger.
+  LOG_RING_CAPACITY: 1024,
 
   // Battery burn-rate calculation window (in seconds). Adjust to smooth or react faster.
   BATTERY_RATE_WINDOW_SEC: 120,

@@ -45,7 +45,7 @@ const LIVE_LINK_RECOVERY_CONFIRM_PACKETS = 2;
 const LIVE_LINK_RECOVERY_CONFIRM_MS = 2000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
-const LIVE_GC_DIAGNOSTIC_LOG_LIMIT = cfg("LIVE_GC_DIAGNOSTIC_LOG_LIMIT", 20000);
+const LOG_RING_CAPACITY = Math.max(1, Math.floor(Number(cfg("LOG_RING_CAPACITY", 1024)) || 1024));
 const LIVE_DRONE_ALIAS_STORAGE_KEY = "sgc.livePosition.droneAliases.v1";
 const LIVE_DRONE_ACTION_LONGPRESS_MS = 460;
 const LIVE_RELAY_ENDPOINT_STORAGE_KEY = "sgc.livePosition.relayEndpoint.v1";
@@ -58,6 +58,58 @@ const LIVE_RELAY_MESSAGE_TYPES = new Set([
   "drones_state",
   "homes_state",
 ]);
+
+class RingLog {
+  constructor(capacity = LOG_RING_CAPACITY) {
+    this.capacity = Math.max(1, Math.floor(Number(capacity) || LOG_RING_CAPACITY));
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+
+  push(entry) {
+    const logSequence = this.nextSequence;
+    const logSlot = logSequence % this.capacity;
+    const loggedAt = Date.now();
+    const stored = entry && typeof entry === "object" && !Array.isArray(entry)
+      ? { ...entry }
+      : { value: entry };
+    const next = { ...stored, logSequence, logSlot, loggedAt };
+    this.entries[logSlot] = next;
+    this.nextSequence += 1;
+    if (this.size < this.capacity) this.size += 1;
+    return next;
+  }
+
+  toArray() {
+    const start = this.nextSequence - this.size;
+    const ordered = [];
+    for (let i = 0; i < this.size; i += 1) {
+      const entry = this.entries[(start + i) % this.capacity];
+      if (entry) ordered.push(entry);
+    }
+    return ordered;
+  }
+
+  latest() {
+    if (!this.size) return null;
+    return this.entries[(this.nextSequence - 1) % this.capacity] || null;
+  }
+
+  clear() {
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+
+  get count() {
+    return this.size;
+  }
+
+  get totalWritten() {
+    return this.nextSequence;
+  }
+}
 
 let map;
 let overlay, ctx;
@@ -126,10 +178,10 @@ const liveState = {
   portLabel: "None",
   lastMessageAt: null,
   lastJsonAt: null,
-  parseErrors: [],
+  parseErrors: new RingLog(),
   gcStatus: null,
   channelTable: null,
-  channelScanEvents: [],
+  channelScanEvents: new RingLog(),
   scanInProgress: false,
   scanAnimationVisible: false,
   scanAnimationHideTimer: null,
@@ -143,7 +195,7 @@ const liveState = {
   lastScanCompletedAt: null,
   channelTableReceivedAt: null,
   lastCommandAck: null,
-  sessionEvents: [],
+  sessionEvents: new RingLog(),
   freshSessionPending: false,
   freshSessionConfirming: false,
   searchPending: false,
@@ -152,10 +204,10 @@ const liveState = {
   profileDraft: null,
   profileSimpleMode: true,
   profileApplyPending: false,
-  assignmentEvents: [],
-  scannerEvents: [],
-  searchEvents: [],
-  orphanRecoveryEvents: [],
+  assignmentEvents: new RingLog(),
+  scannerEvents: new RingLog(),
+  searchEvents: new RingLog(),
+  orphanRecoveryEvents: new RingLog(),
   linkStatuses: new Map(),
   relockRequests: new Map(),
   deleteRequests: new Map(),
@@ -172,7 +224,7 @@ const liveState = {
   reconnectTimer: null,
   reconnecting: false,
   userClosedSerial: false,
-  gcDiagnosticLog: [],
+  gcDiagnosticLog: new RingLog(),
   gcDiagnosticLineNumber: 0,
   gcDiagnosticStartedAt: Date.now(),
   telemetrySourceMode: "auto",
@@ -321,7 +373,7 @@ let gsMenuEl = null;
 let activeGroundStationId = null;
 let gsRelocate = null; // { stationId } while user is placing a GS on the map
 let gsWatchId = null;
-let commsLogsByStationId = new Map(); // stationId -> { messages: {from,text,ts}[] }
+let commsLogsByStationId = new Map(); // stationId -> { messages: RingLog }
 let commsComposerEl = null;
 let commsDraftByStationId = new Map(); // stationId -> string
 let commsComposerInputEl = null;
@@ -1297,7 +1349,7 @@ class GroundControl {
   constructor() {
     this.assigned = new Map(); // droneId -> { command, issuedAt }
     this.planned = new Map(); // key -> { commands: string[], updatedAt }
-    this.logs = [];
+    this.logs = new RingLog();
   }
 
   assignMission(droneId, command, issuedAt = Date.now()) {
@@ -2992,9 +3044,12 @@ function appendLiveDebug(message, { replace = false } = {}) {
     debugEl.textContent = line;
     return;
   }
-  liveState.parseErrors.push(line);
-  while (liveState.parseErrors.length > 5) liveState.parseErrors.shift();
-  debugEl.textContent = liveState.parseErrors.join("\n");
+  liveState.parseErrors.push({ message: line });
+  debugEl.textContent = liveState.parseErrors
+    .toArray()
+    .slice(-5)
+    .map((entry) => entry.message || String(entry.value || ""))
+    .join("\n");
   debugEl.scrollTop = debugEl.scrollHeight;
 }
 
@@ -3039,9 +3094,6 @@ function pickLiveDiagnosticFields(message) {
 
 function pushLiveGcDiagnosticEntry(entry) {
   liveState.gcDiagnosticLog.push(entry);
-  while (liveState.gcDiagnosticLog.length > LIVE_GC_DIAGNOSTIC_LOG_LIMIT) {
-    liveState.gcDiagnosticLog.shift();
-  }
   updateLiveGcDiagnosticControls();
 }
 
@@ -3128,10 +3180,10 @@ function makeLiveGcDiagnosticSnapshotEntry() {
     assignments,
     drones: droneSummaries,
     pendingCommands: [...liveState.pendingCommands.entries()].map(([commandId, command]) => ({ commandId, ...command })),
-    recentAssignmentEvents: liveState.assignmentEvents.slice(-8),
-    recentSearchEvents: liveState.searchEvents.slice(-8),
-    recentScannerEvents: liveState.scannerEvents.slice(-8),
-    recentOrphanRecoveryEvents: liveState.orphanRecoveryEvents.slice(-8),
+    recentAssignmentEvents: liveState.assignmentEvents.toArray().slice(-8),
+    recentSearchEvents: liveState.searchEvents.toArray().slice(-8),
+    recentScannerEvents: liveState.scannerEvents.toArray().slice(-8),
+    recentOrphanRecoveryEvents: liveState.orphanRecoveryEvents.toArray().slice(-8),
     linkStatuses: [...liveState.linkStatuses.entries()].map(([nodeId, status]) => ({ nodeId, ...status })),
   };
 }
@@ -3140,18 +3192,18 @@ function updateLiveGcDiagnosticControls() {
   const countEl = document.getElementById("liveGcLogCount");
   const downloadBtn = document.getElementById("liveGcLogDownloadBtn");
   const clearBtn = document.getElementById("liveGcLogClearBtn");
-  const count = liveState.gcDiagnosticLog.length;
+  const count = liveState.gcDiagnosticLog.count;
   if (countEl) countEl.textContent = String(count);
   if (downloadBtn) downloadBtn.disabled = count === 0;
   if (clearBtn) clearBtn.disabled = count === 0;
 }
 
 function exportLiveGcDiagnosticLog() {
-  if (!liveState.gcDiagnosticLog.length) {
+  if (!liveState.gcDiagnosticLog.count) {
     appendLiveDebug("diagnostic log is empty");
     return;
   }
-  const entries = [makeLiveGcDiagnosticSnapshotEntry(), ...liveState.gcDiagnosticLog];
+  const entries = [makeLiveGcDiagnosticSnapshotEntry(), ...liveState.gcDiagnosticLog.toArray()];
   const jsonl = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const filename = `sgc_gc_serial_${stamp}.jsonl`;
@@ -3168,7 +3220,7 @@ function exportLiveGcDiagnosticLog() {
 }
 
 function clearLiveGcDiagnosticLog() {
-  liveState.gcDiagnosticLog = [];
+  liveState.gcDiagnosticLog.clear();
   liveState.gcDiagnosticLineNumber = 0;
   liveState.gcDiagnosticStartedAt = Date.now();
   updateLiveGcDiagnosticControls();
@@ -3177,7 +3229,7 @@ function clearLiveGcDiagnosticLog() {
 
 window.downloadLiveGcLog = exportLiveGcDiagnosticLog;
 window.clearLiveGcLog = clearLiveGcDiagnosticLog;
-window.getLiveGcLog = () => liveState.gcDiagnosticLog.slice();
+window.getLiveGcLog = () => liveState.gcDiagnosticLog.toArray();
 
 function formatLiveAge(receivedAt = null, now = Date.now()) {
   if (!receivedAt) return "never";
@@ -3723,14 +3775,14 @@ function getDronesStateCount(message) {
 function formatLiveRelayDebugSummary() {
   const debug = liveState.relayDebug || {};
   if (liveState.relayRole === "publisher") {
-    if (!debug.publisherLastSentAt) return "";
+    if (!debug.publisherLastDronesStateSentAt) return "N/A";
     return `pub ${formatRelayDebugHz(debug.publisherLastDronesStateIntervalMs)} / age ${formatRelayDebugMs(debug.publisherLastDroneMaxAgeMs)}`;
   }
   if (liveState.relayRole === "viewer" || isLiveRemoteViewerMode()) {
-    if (!debug.viewerLastReceivedAt) return "";
+    if (!debug.viewerLastDronesStateReceivedAt) return "N/A";
     return `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs)} / lag ${formatRelayDebugMs(debug.viewerEndToEndMs)}`;
   }
-  return "";
+  return "N/A";
 }
 
 function formatLiveRelayDebugDetails() {
@@ -4686,7 +4738,7 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
   if (manual) wrap.classList.add("live-spectrum-panel");
   const header = document.createElement("div");
   header.className = "live-spectrum-header";
-  const lastScan = liveState.channelScanEvents[liveState.channelScanEvents.length - 1];
+  const lastScan = liveState.channelScanEvents.latest();
   const scanText = liveState.scanInProgress
     ? `Scanning${liveState.scanProfileName ? ` ${liveState.scanProfileName}` : ""} ${liveState.scanRows.size}/${liveState.scanCandidateCount || 48}`
     : lastScan?.event === "scan_complete"
@@ -5227,9 +5279,20 @@ function renderLiveGcStatus() {
     Number.isFinite(Number(status.txPeriodMs)) && Number.isFinite(Number(status.telemetryAirtimeMs))
       ? Math.max(0, Number(status.txPeriodMs) - Number(status.telemetryAirtimeMs))
       : null;
+  const relayItem = document.createElement("div");
+  relayItem.className = "live-gc-item live-gc-relay-item";
+  const relayLabelEl = document.createElement("div");
+  relayLabelEl.className = "live-gc-label";
+  relayLabelEl.textContent = "Relay";
+  const relayValueEl = document.createElement("div");
+  relayValueEl.className = "live-gc-value";
+  relayValueEl.textContent = formatLiveRelayDebugSummary();
+  relayItem.appendChild(relayLabelEl);
+  relayItem.appendChild(relayValueEl);
+  host.appendChild(relayItem);
+
   const items = [
     { label: "Source", value: isLiveRemoteViewerMode() ? "Live endpoint" : liveState.connected ? "USB connected" : "USB disconnected" },
-    ...(formatLiveRelayDebugSummary() ? [{ label: "Relay", value: formatLiveRelayDebugSummary() }] : []),
     { label: "Shared", value: status.sharedFrequencyMhz !== undefined ? `${Number(status.sharedFrequencyMhz).toFixed(1)} MHz` : "N/A" },
     { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
@@ -5327,8 +5390,8 @@ function renderLiveGcStatus() {
     host.appendChild(confirmEl);
   }
 
-  if (liveState.assignmentEvents.length) {
-    const event = liveState.assignmentEvents[liveState.assignmentEvents.length - 1];
+  if (liveState.assignmentEvents.count) {
+    const event = liveState.assignmentEvents.latest();
     const eventEl = document.createElement("div");
     eventEl.className = "live-meta";
     eventEl.textContent = `Last assignment: ${event.event || "event"}${event.nodeId !== undefined ? ` node ${event.nodeId}` : ""}`;
@@ -5706,7 +5769,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   liveState.deleteRequests.clear();
   clearAllLiveAssignmentTelemetryWatchdogs();
   if (clearAssignments) {
-    liveState.assignmentEvents = [];
+    liveState.assignmentEvents.clear();
     if (liveState.channelTable) {
       liveState.channelTable = {
         ...liveState.channelTable,
@@ -5800,7 +5863,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "assignment_event") {
     liveState.assignmentEvents.push(message);
-    while (liveState.assignmentEvents.length > 8) liveState.assignmentEvents.shift();
     if (message.event === "tx_period_ack_sent") {
       scheduleLiveAssignmentTelemetryWatchdog(message);
     }
@@ -5861,7 +5923,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "session_event") {
     liveState.sessionEvents.push(message);
-    while (liveState.sessionEvents.length > 8) liveState.sessionEvents.shift();
     if (message.event === "assignments_cleared") {
       clearLiveSerialDrones({ clearAssignments: true });
     }
@@ -5873,7 +5934,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "channel_scan_event") {
     liveState.channelScanEvents.push(message);
-    while (liveState.channelScanEvents.length > 80) liveState.channelScanEvents.shift();
     if (message.event === "scan_started") {
       liveState.scanRows.clear();
       liveState.scanCandidateCount = Number(message.candidateChannels) || 48;
@@ -5917,7 +5977,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "scanner_event") {
     liveState.scannerEvents.push(message);
-    while (liveState.scannerEvents.length > 12) liveState.scannerEvents.shift();
     if (
       message.event === "telemetry_missed" ||
       message.event === "stale_slot_skipped" ||
@@ -5934,7 +5993,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     }
   } else if (message.type === "search_event") {
     liveState.searchEvents.push(message);
-    while (liveState.searchEvents.length > 12) liveState.searchEvents.shift();
     liveState.searchPending = false;
     if (typeof message.searchMode === "boolean") {
       liveState.searchMode = message.searchMode;
@@ -5948,7 +6006,6 @@ function handleLiveProtocolMessage(message, source = "serial") {
     renderLiveGcStatus();
   } else if (message.type === "orphan_recovery_event") {
     liveState.orphanRecoveryEvents.push(message);
-    while (liveState.orphanRecoveryEvents.length > 20) liveState.orphanRecoveryEvents.shift();
     if (message.event === "started") {
       liveState.spectrumStatus = "Confirming CAD-suspect channels...";
     } else if (message.event === "confirmation_listen") {
@@ -7832,7 +7889,7 @@ function disableCommsKeyboardTracking() {
 function getCommsLog(stationId) {
   const id = Number(stationId);
   if (!commsLogsByStationId.has(id)) {
-    commsLogsByStationId.set(id, { messages: [] });
+    commsLogsByStationId.set(id, { messages: new RingLog() });
   }
   return commsLogsByStationId.get(id);
 }
@@ -7850,13 +7907,14 @@ function renderCommsPanel(gs, listEl) {
   thread.className = "comms-thread";
   listEl.appendChild(thread);
 
-  if (!log.messages.length) {
+  const messages = log.messages.toArray();
+  if (!messages.length) {
     const empty = document.createElement("div");
     empty.className = "sequence-empty";
     empty.textContent = `No comms messages with ${(gs.name || `Home #${gs.id + 1}`).trim()} yet.`;
     thread.appendChild(empty);
   } else {
-    log.messages.forEach((m) => {
+    messages.forEach((m) => {
       const row = document.createElement("div");
       row.className = `comms-msg ${m.from === "us" ? "from-us" : "from-gs"}`;
       row.textContent = m.text;

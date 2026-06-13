@@ -1,4 +1,49 @@
-const MAX_LOG_LINES = 200;
+const LOG_RING_CAPACITY = 1024;
+
+class RingLog {
+  constructor(capacity = LOG_RING_CAPACITY) {
+    this.capacity = Math.max(1, Math.floor(Number(capacity) || LOG_RING_CAPACITY));
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+
+  push(entry) {
+    const logSequence = this.nextSequence;
+    const logSlot = logSequence % this.capacity;
+    const loggedAt = Date.now();
+    const stored = entry && typeof entry === "object" && !Array.isArray(entry)
+      ? { ...entry }
+      : { message: String(entry ?? "") };
+    const next = { ...stored, logSequence, logSlot, loggedAt };
+    this.entries[logSlot] = next;
+    this.nextSequence += 1;
+    if (this.size < this.capacity) this.size += 1;
+    return next;
+  }
+
+  toArray() {
+    const start = this.nextSequence - this.size;
+    const ordered = [];
+    for (let i = 0; i < this.size; i += 1) {
+      const entry = this.entries[(start + i) % this.capacity];
+      if (entry) ordered.push(entry);
+    }
+    return ordered;
+  }
+
+  clear() {
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+}
+
+function formatLogEntry(entry) {
+  const sequence = String(entry.logSequence).padStart(6, "0");
+  const time = entry.timeLabel || new Date(entry.loggedAt).toLocaleTimeString();
+  return `#${sequence} [${time}] ${entry.message || ""}`;
+}
 
 const sampleTelemetry = {
   type: "drone_telemetry",
@@ -264,8 +309,8 @@ const state = {
   reader: null,
   keepReading: false,
   lineBuffer: "",
-  jsonLines: [],
-  rawLines: [],
+  jsonLines: new RingLog(),
+  rawLines: new RingLog(),
   jsonCount: 0,
   rawCount: 0,
   lastPortInfo: null,
@@ -329,18 +374,15 @@ function updateCounters() {
 }
 
 function renderLogs() {
-  els.jsonLog.textContent = state.jsonLines.join("\n");
-  els.rawLog.textContent = state.rawLines.join("\n");
+  els.jsonLog.textContent = state.jsonLines.toArray().map(formatLogEntry).join("\n");
+  els.rawLog.textContent = state.rawLines.toArray().map(formatLogEntry).join("\n");
   els.jsonLog.scrollTop = els.jsonLog.scrollHeight;
   els.rawLog.scrollTop = els.rawLog.scrollHeight;
 }
 
 function appendLog(kind, line) {
   const target = kind === "json" ? state.jsonLines : state.rawLines;
-  target.push(line);
-  while (target.length > MAX_LOG_LINES) {
-    target.shift();
-  }
+  target.push({ message: line, timeLabel: nowLabel() });
   if (kind === "json") {
     state.jsonCount += 1;
     els.jsonStatus.textContent = `Last JSON ${nowLabel()}`;
@@ -684,8 +726,8 @@ function handleUnexpectedDisconnect(reason) {
 }
 
 function clearLogs() {
-  state.jsonLines = [];
-  state.rawLines = [];
+  state.jsonLines.clear();
+  state.rawLines.clear();
   state.jsonCount = 0;
   state.rawCount = 0;
   els.lastLineAt.textContent = "Never";

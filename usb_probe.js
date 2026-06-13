@@ -1,11 +1,56 @@
 const ESPRESSIF_VENDOR_ID = 0x303a;
 const ESP32_S3_SERIAL_JTAG_PRODUCT_ID = 0x1001;
-const MAX_LOG_LINES = 200;
+const LOG_RING_CAPACITY = 1024;
+
+class RingLog {
+  constructor(capacity = LOG_RING_CAPACITY) {
+    this.capacity = Math.max(1, Math.floor(Number(capacity) || LOG_RING_CAPACITY));
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+
+  push(entry) {
+    const logSequence = this.nextSequence;
+    const logSlot = logSequence % this.capacity;
+    const loggedAt = Date.now();
+    const stored = entry && typeof entry === "object" && !Array.isArray(entry)
+      ? { ...entry }
+      : { message: String(entry ?? "") };
+    const next = { ...stored, logSequence, logSlot, loggedAt };
+    this.entries[logSlot] = next;
+    this.nextSequence += 1;
+    if (this.size < this.capacity) this.size += 1;
+    return next;
+  }
+
+  toArray() {
+    const start = this.nextSequence - this.size;
+    const ordered = [];
+    for (let i = 0; i < this.size; i += 1) {
+      const entry = this.entries[(start + i) % this.capacity];
+      if (entry) ordered.push(entry);
+    }
+    return ordered;
+  }
+
+  clear() {
+    this.entries = new Array(this.capacity);
+    this.nextSequence = 0;
+    this.size = 0;
+  }
+}
+
+function formatLogEntry(entry) {
+  const sequence = String(entry.logSequence).padStart(6, "0");
+  const time = entry.timeLabel || new Date(entry.loggedAt).toLocaleTimeString();
+  return `#${sequence} [${time}] ${entry.message || ""}`;
+}
 
 const els = {};
 const state = {
   device: null,
-  logLines: [],
+  logLines: new RingLog(),
   claimedInterfaceNumber: null,
   readEndpointNumber: null,
   reading: false,
@@ -66,11 +111,8 @@ function setState(kind, label, detail) {
 }
 
 function appendLog(line) {
-  state.logLines.push(`[${nowLabel()}] ${line}`);
-  while (state.logLines.length > MAX_LOG_LINES) {
-    state.logLines.shift();
-  }
-  els.eventLog.textContent = state.logLines.join("\n");
+  state.logLines.push({ message: line, timeLabel: nowLabel() });
+  els.eventLog.textContent = state.logLines.toArray().map(formatLogEntry).join("\n");
   els.eventLog.scrollTop = els.eventLog.scrollHeight;
   els.logStatus.textContent = `Last event ${nowLabel()}`;
 }
@@ -423,7 +465,7 @@ async function stopRead() {
 }
 
 function clearLog() {
-  state.logLines = [];
+  state.logLines.clear();
   els.eventLog.textContent = "";
   els.logStatus.textContent = "Ready";
 }
