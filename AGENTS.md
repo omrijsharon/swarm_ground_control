@@ -26,6 +26,16 @@ That repo owns the ESP32/LoRa firmware. In this branch design:
 - Drone ESP32 nodes read flight-controller telemetry through Betaflight MSP and transmit compact binary LoRa telemetry.
 - SGC does not talk LoRa directly and does not own timing-critical radio behavior.
 
+## ESP32 Build, Flash, And OTA Guide
+
+Build, USB flash, provisioning, and drone OTA instructions live in:
+
+```text
+ESP32_BUILD_FLASH_OTA_GUIDE.md
+```
+
+Read this guide before building or flashing GC/drone ESP32 firmware. It documents the PowerShell helper scripts under `tools/`, the generic firmware/OTA workflow, and the rule that normal firmware-only or OTA updates must preserve the existing LittleFS `/config.json` identity unless provisioning is explicitly intended.
+
 ## Planning Docs
 
 The branch plan lives in:
