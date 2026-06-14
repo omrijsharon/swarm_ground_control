@@ -391,18 +391,6 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   min-width: 0;
 }
 
-.live-gc-relay-item{
-  display: grid;
-  grid-template-columns: minmax(0, 0.55fr) minmax(0, 1.45fr);
-  align-items: end;
-  gap: 10px;
-}
-
-.live-gc-relay-item .live-gc-value{
-  margin-top: 0;
-  text-align: right;
-}
-
 .live-gc-item-action{
   cursor: pointer;
   border-radius: 6px;
@@ -1484,6 +1472,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 .status-entry.live-entry{
   align-items: flex-start;
   gap: 9px;
+  position: relative;
 }
 
 .status-entry.live-entry.fresh{
@@ -1494,8 +1483,14 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   border-color: rgba(255,211,108,0.32);
 }
 
+.status-entry.live-entry.binding,
 .status-entry.live-entry.locking{
   border-color: rgba(120,220,255,0.42);
+}
+
+.status-entry.live-entry.binding-failed{
+  border-color: rgba(120,220,255,0.28);
+  background: rgba(120,220,255,0.05);
 }
 
 .status-entry.live-entry.weak{
@@ -1517,6 +1512,16 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   min-width: 0;
 }
 
+.live-entry-status-stack{
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  min-width: 74px;
+}
+
 .live-entry-grid{
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1534,7 +1539,6 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 
 .live-freshness{
   appearance: none;
-  margin-left: auto;
   flex: 0 0 auto;
   padding: 2px 6px;
   border-radius: 999px;
@@ -1548,6 +1552,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 }
 
 .live-freshness.fresh{ color: #6CFF92; }
+.live-freshness.binding,
 .live-freshness.locking{ color: #78DCFF; }
 .live-freshness.late{ color: #FFD36C; }
 .live-freshness.weak{ color: #FFD36C; }
@@ -1575,6 +1580,87 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
 .live-freshness-action.weak:focus-visible{
   border-color: rgba(255,211,108,0.42);
   background: rgba(255,211,108,0.16);
+}
+
+.live-freshness.binding{
+  border-color: rgba(120,220,255,0.28);
+  background: rgba(120,220,255,0.08);
+}
+
+.live-bind-progress-overlay{
+  position: relative;
+  z-index: 5;
+  width: 72px;
+  height: 72px;
+  pointer-events: none;
+  display: grid;
+  place-items: center;
+  align-self: center;
+}
+
+.live-bind-progress-overlay::before{
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.38);
+  filter: blur(12px);
+}
+
+@property --binding-progress{
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.live-bind-progress{
+  --binding-progress: 0deg;
+  width: 64px;
+  height: 64px;
+  border-radius: 999px;
+  position: relative;
+  background: conic-gradient(#78DCFF var(--binding-progress), rgba(120,220,255,0.20) 0deg);
+  box-shadow: 0 0 0 1px rgba(255,255,255,0.16), 0 0 18px rgba(120,220,255,0.32);
+  transition: --binding-progress 20ms linear;
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 16px),
+    rgba(0,0,0,0.18) calc(100% - 14px),
+    #000 calc(100% - 11px),
+    #000 calc(100% - 4px),
+    rgba(0,0,0,0.24) calc(100% - 2px),
+    transparent 100%
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - 16px),
+    rgba(0,0,0,0.18) calc(100% - 14px),
+    #000 calc(100% - 11px),
+    #000 calc(100% - 4px),
+    rgba(0,0,0,0.24) calc(100% - 2px),
+    transparent 100%
+  );
+}
+
+.live-bind-progress-percent{
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  min-width: 34px;
+  color: rgba(245,252,255,0.98);
+  font-size: 12px;
+  font-weight: 950;
+  line-height: 1;
+  text-align: center;
+  text-shadow: 0 1px 5px rgba(0,0,0,0.85), 0 0 12px rgba(0,0,0,0.65);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-binding-line .live-binding-reason{
+  color: rgba(255,255,255,0.68);
+  text-transform: none;
 }
 
 .live-drone-secondary{

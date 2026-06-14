@@ -180,6 +180,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Remove USB serial metadata and visible serial/debug log text below the control buttons.
   - [x] Remove the `Assigned debug` line from the GC/radio panel.
   - [x] Remove the `Last command` line from the GC/radio panel.
+  - [x] Remove secondary radio-detail rows from the GC/radio panel: Shared, TX Power, Airtime, Buffer, and Recovery.
   - [x] Remove heading, fusion, and GPS rows from live drone cards.
   - [x] Show live drone speed in km/h only.
   - [x] Apply the same live drone detail simplification to the hover/pinned tooltip.
@@ -217,15 +218,35 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [ ] Manually verify confirming `Re-scan` fills the spectrum live and telemetry recovers after scan.
 
 - [ ] Milestone 18: Drone TST re-bind UI
-  - [x] Add transient `LOCKING` display state for manual TST recovery.
+  - [x] Add transient `BINDING` display state for manual TST recovery.
   - [x] Make only the `OFFLINE` badge clickable.
   - [x] Clicking `OFFLINE` sends `relock_drone` with the drone `nodeId`.
   - [x] Stop badge clicks from also selecting/focusing the drone card.
-  - [x] Clear `LOCKING` immediately when telemetry arrives for that node.
-  - [x] Expire `LOCKING` after `8 seconds` if telemetry does not resume.
-  - [x] Apply `ONLINE`/`LOCKING` label mapping in the drone tooltip.
-  - [ ] Manually verify `OFFLINE -> LOCKING -> ONLINE` in the browser.
-  - [ ] Manually verify failed relock returns to `OFFLINE` after timeout.
+  - [x] Clear `BINDING` immediately when telemetry arrives for that node.
+  - [x] Expire `BINDING` after `8 seconds` if telemetry does not resume.
+  - [x] Apply `ONLINE`/`BINDING` label mapping in the drone tooltip.
+  - [ ] Manually verify `OFFLINE -> BINDING -> ONLINE` in the browser.
+  - [ ] Manually verify failed Re-bind returns to `OFFLINE` after timeout.
+
+- [x] Milestone 19: New drone discovery UI
+  - [x] Create a live drone row as soon as GC/MaGC reports shared-channel bind discovery before telemetry arrives.
+  - [x] Render pre-telemetry drones as blue `BINDING` rows with unknown telemetry fields shown as `N/A`.
+  - [x] Add a circular progress ring driven by bind lifecycle phases and known discovery-profile timing.
+  - [x] Place the bind progress ring directly beneath the top-right drone state indicator.
+  - [x] Show the current loading percentage in the center of the binding ring.
+  - [x] Animate active bind progress every `20 ms` by updating only the ring style, not the full drone list.
+  - [x] Align visible phase durations to the actual firmware event gaps: post-discovery SILENCE airtime, JOIN_ASSIGN airtime, ACK wait, then telemetry timing.
+  - [x] Hold progress near the end of a phase when firmware events have not advanced yet.
+  - [x] Pause/mark the binding row when ACK/timing phases fail instead of continuing progress.
+  - [x] Keep the row in `BINDING` as `Timing 1/2` after first telemetry until `telemetry_period_locked` or `timingAccepted:true`.
+  - [x] Pace the `84%` to `96%` timing phase over about `3 * txPeriodMs + 250 ms`, capped at `6000 ms`, then crawl from `96%` to `99%` over `4000 ms` while waiting for confirmed lock.
+  - [x] Treat confirmed timing lock as the start of completion from the current visible progress, animate to `100%` over `200 ms`, hold `100%` for `40 ms`, then switch to `ONLINE` without letting repeated telemetry restart completion.
+  - [x] Keep the completed binding overlay visible at `100%` until the drone has a fresh telemetry sample, so the card transitions directly from `BINDING` to `ONLINE` instead of `STALE`/`LATE`.
+  - [x] Do not create a new bind progress row from `drone_link_status state:"locking"` alone; it may update an existing bind row, but automatic recovery status is not proof of a new bind dialog.
+  - [x] Complete/clear temporary bind progress when `channel_table` or `assignments` reports the node assignment as `timingAccepted:true` or `periodConfidence:"locked"`.
+  - [x] Complete the temporary binding row only when telemetry-period lock is confirmed.
+  - [x] Publish binding placeholders in Cloudflare `drones_state` snapshots so remote viewers see the same read-only bind progress.
+  - [x] Rename user-facing lock/re-lock/locking wording in SGC to Bind/Re-bind/BINDING while keeping firmware command and event names compatible.
 
 ## Out Of Scope
 
@@ -261,7 +282,7 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Honor explicit `search_event.searchMode` instead of inferring Search state from event names.
   - Field log `sgc_gc_serial_2026-06-10T22-11-31-922Z.jsonl` showed automatic no-assignment discovery emitted `join_detected` / `assignment_completed` with `searchMode:false`, but SGC inferred Search was active and left the button pressed. SGC now trusts the firmware boolean when present.
 - [x] Parse `drone_link_status`.
-- [x] Display `ONLINE`, `LOCKING`, `WEAK`, `OFFLINE`, and `OFF`.
+- [x] Display `ONLINE`, `BINDING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
 - [x] Let `WEAK` and `OFFLINE` badges request `relock_drone`.
 - [x] Tolerate CAD-gated recovery diagnostics on `drone_link_status`.
@@ -272,11 +293,11 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Show concise debug lines for CAD-gated recovery scanner events.
   - Events include `cad_recovery_queued`, `cad_recovery_probe`, `auto_relock_scheduled`, `auto_relock_listen`, `auto_relock_backoff`, and `auto_relock_exhausted`.
 - [x] Debounce terminal link states so a single missed receive window or one isolated packet cannot flicker the drone between `ONLINE` and `OFFLINE`.
-  - Any valid `drone_telemetry` clears stored `LOCKING`/`WEAK`/`OFF`/`OFFLINE` link status for that node immediately.
+  - Any valid `drone_telemetry` clears stored `BINDING`/`WEAK`/`OFF`/`OFFLINE` link status for that node immediately.
   - Ignore `drone_link_status` events whose `gcMillis` is older than or equal to the latest accepted telemetry for that node.
 - [x] Add visible GC diagnostic log controls to the USB panel.
   - `Download` exported the rolling serial/UI JSONL capture with a current-state snapshot.
-  - `Clear` let the operator reset the capture before reproducing a Search/relock failure.
+  - `Clear` let the operator reset the capture before reproducing a Bind/Re-bind failure.
   - The visible controls were restored for the four-drone scheduler investigation.
   - The capture uses a fixed `1024` entry ring so long bench sessions keep bounded browser memory while preserving chronological export order.
 - [ ] Manually verify disconnecting a drone leaves it in a stable non-online state.
