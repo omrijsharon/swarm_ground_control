@@ -157,6 +157,12 @@ let createWaypointMenuEl = null;
 let pendingCreateWaypoint = null; // { lat, lng }
 let liveMapMenuEl = null;
 let pendingLiveMapPlacement = null; // { lat, lng }
+let distanceMeasurements = [];
+let pendingDistanceMeasurement = null; // { startLat, startLng, previewLat?, previewLng? }
+let nextDistanceMeasurementId = 1;
+let distanceMeasurementMenuEl = null;
+let distanceMeasurementHelperEl = null;
+let distanceMeasurementHitRegions = [];
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -3701,13 +3707,43 @@ function getLiveBaudRate() {
   return liveState.baudRate;
 }
 
+function getLiveAssignedCountForBindingState() {
+  const status = liveState.gcStatus || {};
+  const assignedDrones = Number(status.assignedDrones);
+  if (Number.isFinite(assignedDrones)) return assignedDrones;
+  const assignedChannels = Number(status.assignedChannels);
+  if (Number.isFinite(assignedChannels)) return assignedChannels;
+  const assignments = liveState.channelTable && Array.isArray(liveState.channelTable.assignments)
+    ? liveState.channelTable.assignments
+    : null;
+  return assignments ? assignments.length : null;
+}
+
+function getLiveBindingState() {
+  const explicitBinding = Boolean(liveState.searchMode || liveState.searchPending);
+  const assignedCount = getLiveAssignedCountForBindingState();
+  const passiveBinding =
+    !explicitBinding &&
+    !isLiveRemoteViewerMode() &&
+    liveState.connected &&
+    assignedCount === 0;
+  return { explicitBinding, passiveBinding, assignedCount };
+}
+
 function applyLiveSearchButtonState(searchBtn) {
   if (!searchBtn) return;
-  const active = liveState.searchMode || liveState.searchPending;
+  const { explicitBinding, passiveBinding } = getLiveBindingState();
+  const active = explicitBinding || passiveBinding;
   searchBtn.textContent = active ? "Binding..." : "Bind";
-  searchBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || active;
+  searchBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || explicitBinding || passiveBinding;
   searchBtn.classList.toggle("is-active", active);
-  searchBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+  searchBtn.title = isLiveRemoteViewerMode()
+    ? "Remote live endpoint is read-only."
+    : passiveBinding
+      ? "GC has no assigned drones and is already listening for drones to bind."
+      : explicitBinding
+        ? "GC is binding/searching for drones."
+        : "";
 }
 
 function syncLiveRelayInputsFromState() {
@@ -6522,6 +6558,189 @@ function closeLiveMapMenu() {
   document.removeEventListener("pointerdown", handleLiveMapMenuOutsideClick, true);
 }
 
+function closeDistanceMeasurementMenu() {
+  if (distanceMeasurementMenuEl && distanceMeasurementMenuEl.parentNode) {
+    distanceMeasurementMenuEl.parentNode.removeChild(distanceMeasurementMenuEl);
+  }
+  distanceMeasurementMenuEl = null;
+  document.removeEventListener("pointerdown", handleDistanceMeasurementMenuOutsideClick, true);
+}
+
+function handleDistanceMeasurementMenuOutsideClick(event) {
+  if (!distanceMeasurementMenuEl) return;
+  if (distanceMeasurementMenuEl.contains(event.target)) return;
+  closeDistanceMeasurementMenu();
+}
+
+function showDistanceMeasurementHelper() {
+  const host = document.getElementById("app") || document.body;
+  if (!distanceMeasurementHelperEl) {
+    distanceMeasurementHelperEl = document.createElement("div");
+    distanceMeasurementHelperEl.className = "distance-measure-helper";
+    distanceMeasurementHelperEl.textContent = "Choose endpoint for distance measurement";
+  }
+  if (!distanceMeasurementHelperEl.parentNode) {
+    host.appendChild(distanceMeasurementHelperEl);
+  }
+  window.addEventListener("keydown", handleDistanceMeasurementKeydown, true);
+}
+
+function hideDistanceMeasurementHelper() {
+  if (distanceMeasurementHelperEl && distanceMeasurementHelperEl.parentNode) {
+    distanceMeasurementHelperEl.parentNode.removeChild(distanceMeasurementHelperEl);
+  }
+  window.removeEventListener("keydown", handleDistanceMeasurementKeydown, true);
+}
+
+function handleDistanceMeasurementKeydown(event) {
+  if (!pendingDistanceMeasurement || event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelPendingDistanceMeasurement();
+  suppressMapClickUntil = performance.now() + 300;
+  longPressSuppressUntil = performance.now() + 300;
+}
+
+function cancelPendingDistanceMeasurement() {
+  pendingDistanceMeasurement = null;
+  hideDistanceMeasurementHelper();
+  forceRedraw();
+}
+
+function startDistanceMeasurement(latlng) {
+  if (!LIVE_POSITION_MODE || !latlng) return;
+  const startLat = Number(latlng.lat);
+  const startLng = Number(latlng.lng);
+  if (!isFinite(startLat) || !isFinite(startLng)) return;
+  closeDistanceMeasurementMenu();
+  pendingDistanceMeasurement = { startLat, startLng };
+  showDistanceMeasurementHelper();
+  forceRedraw();
+}
+
+function updatePendingDistanceMeasurementPreview(latlng) {
+  if (!pendingDistanceMeasurement || !latlng) return;
+  const previewLat = Number(latlng.lat);
+  const previewLng = Number(latlng.lng);
+  if (!isFinite(previewLat) || !isFinite(previewLng)) return;
+  pendingDistanceMeasurement.previewLat = previewLat;
+  pendingDistanceMeasurement.previewLng = previewLng;
+  draw();
+}
+
+function completeDistanceMeasurement(latlng) {
+  if (!pendingDistanceMeasurement || !latlng) return false;
+  const endLat = Number(latlng.lat);
+  const endLng = Number(latlng.lng);
+  if (!isFinite(endLat) || !isFinite(endLng)) return false;
+  distanceMeasurements.push({
+    id: nextDistanceMeasurementId++,
+    startLat: pendingDistanceMeasurement.startLat,
+    startLng: pendingDistanceMeasurement.startLng,
+    endLat,
+    endLng,
+    createdAt: Date.now(),
+  });
+  pendingDistanceMeasurement = null;
+  hideDistanceMeasurementHelper();
+  suppressMapClickUntil = performance.now() + 250;
+  longPressSuppressUntil = performance.now() + 250;
+  forceRedraw();
+  return true;
+}
+
+function deleteDistanceMeasurement(id) {
+  const numericId = Number(id);
+  distanceMeasurements = distanceMeasurements.filter((measurement) => measurement.id !== numericId);
+  closeDistanceMeasurementMenu();
+  forceRedraw();
+}
+
+function pointToSegmentDistancePx(point, a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 <= 0.0001) {
+    return Math.hypot(point.x - a.x, point.y - a.y);
+  }
+  const t = Math.max(0, Math.min(1, ((point.x - a.x) * dx + (point.y - a.y) * dy) / len2));
+  const x = a.x + dx * t;
+  const y = a.y + dy * t;
+  return Math.hypot(point.x - x, point.y - y);
+}
+
+function pointInRotatedRect(point, rect) {
+  if (!rect) return false;
+  const cos = Math.cos(-rect.angle);
+  const sin = Math.sin(-rect.angle);
+  const dx = point.x - rect.cx;
+  const dy = point.y - rect.cy;
+  const localX = dx * cos - dy * sin;
+  const localY = dx * sin + dy * cos;
+  return Math.abs(localX) <= rect.width / 2 && Math.abs(localY) <= rect.height / 2;
+}
+
+function findDistanceMeasurementHit(containerPoint) {
+  if (!containerPoint || !distanceMeasurementHitRegions.length) return null;
+  for (let i = distanceMeasurementHitRegions.length - 1; i >= 0; i--) {
+    const hit = distanceMeasurementHitRegions[i];
+    if (!hit || !hit.measurement) continue;
+    if (hit.labelRect && pointInRotatedRect(containerPoint, hit.labelRect)) {
+      return hit.measurement;
+    }
+    if (hit.start && hit.end && pointToSegmentDistancePx(containerPoint, hit.start, hit.end) <= 12) {
+      return hit.measurement;
+    }
+  }
+  return null;
+}
+
+function openDistanceMeasurementMenu(measurement, containerPoint) {
+  if (!measurement || !containerPoint || !map) return;
+  const host = document.getElementById("app") || document.body;
+  closeLiveMapMenu();
+  closeDistanceMeasurementMenu();
+  closeGroundStationMenu(false);
+  closeGroundStationNameMenu();
+  closeLiveDroneActionSheet();
+
+  distanceMeasurementMenuEl = document.createElement("div");
+  distanceMeasurementMenuEl.className = "relative-menu distance-measure-menu";
+  distanceMeasurementMenuEl.addEventListener("pointerdown", (event) => event.stopPropagation());
+  host.appendChild(distanceMeasurementMenuEl);
+  enableMenuDrag(distanceMeasurementMenuEl);
+
+  distanceMeasurementMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Distance</h4>
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:2px;">
+      <button class="cmd-chip cmd-action danger" data-action="delete-distance-measurement" type="button">Delete</button>
+    </div>
+  `;
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const menuW = distanceMeasurementMenuEl.offsetWidth || 240;
+  const menuH = distanceMeasurementMenuEl.offsetHeight || 110;
+  const pad = 10;
+  const left = Math.max(pad, Math.min(window.innerWidth - menuW - pad, mapRect.left + containerPoint.x + 12));
+  const top = Math.max(pad, Math.min(window.innerHeight - menuH - pad, mapRect.top + containerPoint.y - 10));
+  distanceMeasurementMenuEl.style.left = `${left}px`;
+  distanceMeasurementMenuEl.style.top = `${top}px`;
+
+  const deleteBtn = distanceMeasurementMenuEl.querySelector("[data-action='delete-distance-measurement']");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteDistanceMeasurement(measurement.id);
+      suppressMapClickUntil = performance.now() + 350;
+      longPressSuppressUntil = performance.now() + 350;
+    });
+  }
+
+  document.addEventListener("pointerdown", handleDistanceMeasurementMenuOutsideClick, true);
+}
+
 function handleLiveMapMenuOutsideClick(event) {
   if (!liveMapMenuEl) return;
   if (liveMapMenuEl.contains(event.target)) return;
@@ -6536,7 +6755,9 @@ function openLiveMapMenu(latlng, containerPoint) {
 
   const host = document.getElementById("app") || document.body;
   activeGroundStationId = null;
+  cancelPendingDistanceMeasurement();
   closeLiveMapMenu();
+  closeDistanceMeasurementMenu();
   closeLiveDroneActionSheet();
   closeUserHomePrompt();
   closeGroundStationMenu(false);
@@ -6564,6 +6785,7 @@ function openLiveMapMenu(latlng, containerPoint) {
       <button class="cmd-chip cmd-action" data-action="set-live-home" type="button" ${
         isLiveRemoteViewerMode() ? "disabled" : ""
       }>Set HOME here</button>
+      <button class="cmd-chip cmd-action" data-action="measure-distance" type="button">Measure distance</button>
     </div>
   `;
 
@@ -6582,6 +6804,19 @@ function openLiveMapMenu(latlng, containerPoint) {
       addUserHomeAtLatLng(placement);
       suppressMapClickUntil = performance.now() + 450;
       longPressSuppressUntil = performance.now() + 450;
+    });
+  }
+
+  const measureDistance = liveMapMenuEl.querySelector("[data-action='measure-distance']");
+  if (measureDistance) {
+    measureDistance.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const placement = pendingLiveMapPlacement;
+      if (!placement) return;
+      closeLiveMapMenu();
+      startDistanceMeasurement(placement);
+      suppressMapClickUntil = performance.now() + 250;
+      longPressSuppressUntil = performance.now() + 250;
     });
   }
 
@@ -7369,6 +7604,9 @@ function setupHoverHandlers() {
 
   map.on("mousemove", (e) => {
     lastPointer = e.containerPoint;
+    if (pendingDistanceMeasurement && e && e.latlng) {
+      updatePendingDistanceMeasurementPreview(e.latlng);
+    }
     // Bearing is controlled only by the flank knob (no hover updates).
     if (pinnedDroneId !== null) {
       updateTooltip();
@@ -7556,6 +7794,10 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  if (pendingDistanceMeasurement && e && e.latlng) {
+    completeDistanceMeasurement(e.latlng);
+    return;
+  }
   // If we're asking the user to place their Home, the next click places it.
   if (pendingUserHomePlacement) {
     addUserHomeAtLatLng(e.latlng);
@@ -9677,7 +9919,18 @@ function attemptFollowMenuFromPoint(containerPoint) {
 function handleContextMenu(e) {
   e.originalEvent?.preventDefault?.();
   if (LIVE_POSITION_MODE) {
+    if (pendingDistanceMeasurement) {
+      cancelPendingDistanceMeasurement();
+      suppressMapClickUntil = performance.now() + 350;
+      longPressSuppressUntil = performance.now() + 350;
+      return;
+    }
     if (pendingUserHomePlacement) return;
+    const measurementHit = findDistanceMeasurementHit(e.containerPoint);
+    if (measurementHit) {
+      openDistanceMeasurementMenu(measurementHit, e.containerPoint);
+      return;
+    }
     const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius() + 6);
     if (nearGs) {
       openGroundStationMenu(nearGs, e.containerPoint);
@@ -9713,9 +9966,20 @@ function handleContextMenu(e) {
 
 function attemptActionLongPress(containerPoint) {
   if (LIVE_POSITION_MODE) {
+    if (pendingDistanceMeasurement) {
+      cancelPendingDistanceMeasurement();
+      suppressMapClickUntil = performance.now() + 350;
+      longPressSuppressUntil = performance.now() + 350;
+      return;
+    }
     if (pendingUserHomePlacement) {
       const latlng = map.containerPointToLatLng(containerPoint);
       addUserHomeAtLatLng(latlng);
+      return;
+    }
+    const measurementHit = findDistanceMeasurementHit(containerPoint);
+    if (measurementHit) {
+      openDistanceMeasurementMenu(measurementHit, containerPoint);
       return;
     }
     const nearGs = findNearestGroundStation(containerPoint, getHoverRadius() + 6);
@@ -11299,6 +11563,187 @@ function drawLivePositionDrones(zoom) {
   });
 }
 
+function roundedRectPath(ctx2, x, y, width, height, radius) {
+  const r = Math.max(0, Math.min(radius, width / 2, height / 2));
+  ctx2.beginPath();
+  ctx2.moveTo(x + r, y);
+  ctx2.lineTo(x + width - r, y);
+  ctx2.quadraticCurveTo(x + width, y, x + width, y + r);
+  ctx2.lineTo(x + width, y + height - r);
+  ctx2.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  ctx2.lineTo(x + r, y + height);
+  ctx2.quadraticCurveTo(x, y + height, x, y + height - r);
+  ctx2.lineTo(x, y + r);
+  ctx2.quadraticCurveTo(x, y, x + r, y);
+  ctx2.closePath();
+}
+
+function formatDistanceMeasurement(distanceMeters) {
+  if (!isFinite(distanceMeters)) return "N/A";
+  if (distanceMeters < 1000) {
+    return `${Math.round(distanceMeters)} m`;
+  }
+  return `${(distanceMeters / 1000).toFixed(1)} km`;
+}
+
+function drawDistanceMeasurements() {
+  distanceMeasurementHitRegions = [];
+  if (!ctx || !map || !LIVE_POSITION_MODE) return;
+
+  const arrowColor = "rgba(255,255,255,0.96)";
+  const haloColor = "rgba(0,0,0,0.62)";
+
+  const drawMeasurementArrow = (measurement, { cacheHit = true, preview = false } = {}) => {
+    if (!measurement) return;
+    const start = latLngToScreen(measurement.startLat, measurement.startLng);
+    const end = latLngToScreen(measurement.endLat, measurement.endLng);
+    if (!start || !end) return;
+
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 2) return;
+
+    const ux = dx / len;
+    const uy = dy / len;
+    const perpX = -uy;
+    const perpY = ux;
+    const arrowLen = Math.max(12, Math.min(18, len * 0.18));
+    const arrowWidth = arrowLen * 0.52;
+
+    ctx.save();
+    if (preview) {
+      ctx.globalAlpha = 0.86;
+    }
+    ctx.setLineDash([]);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.shadowColor = haloColor;
+    ctx.shadowBlur = 9;
+    ctx.shadowOffsetX = 0;
+    ctx.shadowOffsetY = 2;
+
+    [start, end].forEach((point) => {
+      ctx.beginPath();
+      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+      ctx.fillStyle = arrowColor;
+      ctx.fill();
+      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = "rgba(0,0,0,0.48)";
+      ctx.stroke();
+    });
+
+    ctx.lineWidth = 3.2;
+    ctx.strokeStyle = arrowColor;
+    ctx.beginPath();
+    ctx.moveTo(start.x, start.y);
+    ctx.lineTo(end.x, end.y);
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(end.x, end.y);
+    ctx.lineTo(end.x - ux * arrowLen + perpX * arrowWidth, end.y - uy * arrowLen + perpY * arrowWidth);
+    ctx.lineTo(end.x - ux * arrowLen - perpX * arrowWidth, end.y - uy * arrowLen - perpY * arrowWidth);
+    ctx.closePath();
+    ctx.fillStyle = arrowColor;
+    ctx.fill();
+
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+    ctx.restore();
+
+    const distanceMeters = map.distance(
+      [measurement.startLat, measurement.startLng],
+      [measurement.endLat, measurement.endLng]
+    );
+    const label = formatDistanceMeasurement(distanceMeters);
+    const midX = (start.x + end.x) / 2;
+    const midY = (start.y + end.y) / 2;
+    const labelX = midX + perpX * 18;
+    const labelY = midY + perpY * 18;
+    let angle = Math.atan2(dy, dx);
+    if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
+      angle += Math.PI;
+    }
+
+    ctx.save();
+    ctx.font = "800 13px Inter, system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const textWidth = ctx.measureText(label).width;
+    const boxWidth = textWidth + 16;
+    const boxHeight = 24;
+    ctx.translate(labelX, labelY);
+    ctx.rotate(angle);
+    ctx.fillStyle = "rgba(18,24,32,0.88)";
+    ctx.strokeStyle = "rgba(0,0,0,0.55)";
+    ctx.lineWidth = 3;
+    roundedRectPath(ctx, -boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight, 7);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = "rgba(235,250,255,0.98)";
+    ctx.shadowColor = "rgba(0,0,0,0.75)";
+    ctx.shadowBlur = 4;
+    ctx.fillText(label, 0, 0);
+    ctx.restore();
+
+    if (cacheHit) {
+      distanceMeasurementHitRegions.push({
+        measurement,
+        start,
+        end,
+        labelRect: {
+          cx: labelX,
+          cy: labelY,
+          width: boxWidth + 8,
+          height: boxHeight + 8,
+          angle,
+        },
+      });
+    }
+  };
+
+  distanceMeasurements.forEach((measurement) => {
+    drawMeasurementArrow(measurement);
+  });
+
+  if (pendingDistanceMeasurement) {
+    const hasPreview =
+      isFinite(Number(pendingDistanceMeasurement.previewLat)) &&
+      isFinite(Number(pendingDistanceMeasurement.previewLng));
+    if (hasPreview) {
+      drawMeasurementArrow(
+        {
+          id: "pending",
+          startLat: pendingDistanceMeasurement.startLat,
+          startLng: pendingDistanceMeasurement.startLng,
+          endLat: pendingDistanceMeasurement.previewLat,
+          endLng: pendingDistanceMeasurement.previewLng,
+        },
+        { cacheHit: false, preview: true }
+      );
+    } else {
+      const start = latLngToScreen(pendingDistanceMeasurement.startLat, pendingDistanceMeasurement.startLng);
+      if (start) {
+        ctx.save();
+        ctx.fillStyle = "rgba(255,255,255,0.96)";
+        ctx.shadowColor = "rgba(0,0,0,0.62)";
+        ctx.shadowBlur = 9;
+        ctx.shadowOffsetY = 2;
+        ctx.beginPath();
+        ctx.arc(start.x, start.y, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.shadowOffsetY = 0;
+        ctx.lineWidth = 1.4;
+        ctx.strokeStyle = "rgba(0,0,0,0.48)";
+        ctx.stroke();
+        ctx.restore();
+      }
+    }
+  }
+}
+
 function draw() {
   if (!ctx || !map) return;
 
@@ -11334,6 +11779,8 @@ function draw() {
     drawGroundStationIcon(p.x, p.y, gsSize, { active });
     drawGroundStationLabel(p.x, p.y, gs.name || `Home #${gs.id + 1}`, gsSize);
   });
+
+  drawDistanceMeasurements();
 
   if (LIVE_POSITION_MODE) {
     drawLivePositionDrones(zoom);

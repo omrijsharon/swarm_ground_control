@@ -1922,6 +1922,30 @@ html, body { height: 100%; margin: 0; overflow: hidden; font-family: 'Inter', ui
   line-height: 1.35;
 }
 
+.distance-measure-helper{
+  position: fixed;
+  z-index: 2600;
+  top: max(14px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: min(460px, calc(100vw - 32px));
+  padding: 9px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(120,220,255,0.30);
+  background: rgba(18, 24, 32, 0.90);
+  box-shadow: 0 12px 28px rgba(0,0,0,0.34), 0 0 18px rgba(120,220,255,0.16);
+  color: rgba(245,252,255,0.96);
+  font-size: var(--ui-font-sm);
+  font-weight: 850;
+  line-height: 1.2;
+  text-align: center;
+  pointer-events: none;
+}
+
+.distance-measure-menu{
+  min-width: 230px;
+}
+
 .relative-menu .sync-btn{
   border: 1px solid rgba(255,255,255,0.25);
   background: rgba(120,220,255,0.12);
