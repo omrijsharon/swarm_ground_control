@@ -137,13 +137,17 @@ This feature spans firmware, serial JSON, and SGC UI. Keep the detailed implemen
   - [x] Add forced shared rejoin probes after repeated assigned-channel misses.
     - After `3` misses, the GC uses a `160 ms` shared rejoin probe. After `8` misses, it uses an `1100 ms` extended shared window to catch a reset drone retrying `JOIN_REQUEST`.
   - [x] Gate automatic assigned-channel recovery with CAD/LBT.
-    - After `3` listened misses, the GC queues event-driven recovery slots. Each slot runs exactly one CAD/LBT probe on one stale assignment, then returns to normal scheduling.
+    - After `12` listened misses, the GC queues event-driven recovery slots. Each slot runs exactly one CAD/LBT probe on one stale assignment, then returns to normal scheduling.
   - [x] Cap and back off automatic recovery slots.
     - CAD/LBT activity schedules bounded RX relock. Failed RX listens schedule the next CAD slot with `1s`, `2s`, `3s`, then `4s` backoff. Recovery stops after `5` slots until manual `relock_drone`.
   - [x] Distinguish `OFFLINE` from `OFF`.
     - Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`. Stronger last RSSI plus two separate no-activity CAD/LBT probes marks the drone `OFF`.
   - [x] Protect healthy predicted drone slots from stale recovery windows.
     - Recovery/acquisition listens are clipped before the next known TST window from another active assignment, so a missing node should not make a live node miss enough packets to cascade offline.
+  - [x] Add all-lost automatic recovery cycling.
+    - If assignments still exist but every active assignment is `OFFLINE` or `OFF`, the GC alternates shared-channel Bind dwell and assigned-channel Re-bind rounds until at least one drone is recovered.
+    - This is based on GC assignment/link state, not the browser card list, and it does not clear persisted assignments.
+    - SGC shows the Bind button as `Binding...` during the all-lost `shared_bind` phase.
   - [x] Keep rejoin timing acquisition responsive after `JOIN_ACK`.
     - The GC retries assigned-channel timing-proposal acquisition every `20 ms` after a miss, and drones retry proposals up to `12` times. This is intended to let a reconnected node become online while the GC is also protecting other live slots.
   - [x] Build-check the firmware after the scheduler change.

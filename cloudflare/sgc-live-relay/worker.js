@@ -1,6 +1,6 @@
 const APP_PREFIX = "/swarm_ground_control";
 const GITHUB_PAGES_ORIGIN = "https://omrijsharon.github.io";
-const APP_ASSET_VERSION = "live-scene-relay-4";
+const APP_ASSET_VERSION = "live-scene-relay-5";
 const MAX_RELAY_MESSAGE_BYTES = 64 * 1024;
 const PUBLISHER_STARTUP_GRACE_MS = 5000;
 const PUBLISHER_IDLE_TIMEOUT_MS = 10000;

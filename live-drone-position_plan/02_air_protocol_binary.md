@@ -496,8 +496,8 @@ GC scan timing:
 - For known-phase drones, consider only catchable windows where the profile-specific tune guard is still available.
 - Group candidates by overlapping receive windows and select by normalized update age, miss priority, and near-future listen start.
 - If the GC intentionally skips a lower-priority overlapping packet window, advance that drone's predicted TST without incrementing `missCount`.
-- The first two listened misses preserve phase and only advance to the next catchable predicted slot.
-- After three consecutive listened misses, queue an event-driven recovery slot on the assigned channel/profile. Each slot runs exactly one CAD/LBT probe before returning to normal scheduler selection.
+- The first eleven listened misses preserve phase and only advance to the next catchable predicted slot.
+- After twelve consecutive listened misses, queue an event-driven recovery slot on the assigned channel/profile. Each slot runs exactly one CAD/LBT probe before returning to normal scheduler selection.
 - Full automatic RX relock is scheduled only when a recovery-slot CAD/LBT probe detects activity, plus one immediate first-slot weak-link attempt when last RSSI was `<= -114 dBm` or unknown.
 - Classify `WEAK` when activity is detected but telemetry does not decode.
 - Classify `OFF` only after `2` separate no-activity CAD/LBT probes when last RSSI was stronger than `-114 dBm`; weak or unknown last RSSI stays `OFFLINE`.

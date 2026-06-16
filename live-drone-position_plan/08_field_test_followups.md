@@ -37,9 +37,9 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Add radio backend support for LoRa CAD/activity detection.
 - [x] Use RadioLib `scanChannel()` on SX1262 backends instead of RSSI-only detection.
 - [x] Add GC link states: `locking`, `weak`, `offline`, and `off`.
-- [x] Preserve TST phase after the first two missed assigned-channel listen windows.
+- [x] Preserve TST phase after the first eleven missed assigned-channel listen windows.
   - The GC now treats early misses as scheduler misses, advances to the next catchable predicted slot, and does not clear runtime TST state.
-- [x] After three consecutive listened misses, run CAD/LBT first on that drone's assigned channel/profile.
+- [x] After twelve consecutive listened misses, run CAD/LBT first on that drone's assigned channel/profile.
   - The GC queues event-driven CAD recovery slots. Each slot runs one automatic CAD/LBT probe for one stale assignment; full automatic RX relock is CAD-gated and capped. Manual relock remains operator-requested.
 - [x] During recovery, use CAD/activity detection as the cheap gate and valid telemetry as the only proof of recovery.
 - [x] If CAD/LBT sees no LoRa activity, avoid full RX relock unless the last RSSI was weak enough to justify one immediate link-loss relock.
@@ -52,8 +52,8 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Treat malformed assigned-channel packets, wrong-node packets, duplicate packets, control echoes, and CAD hits as activity evidence.
   - These do not count as valid telemetry, but they prevent one negative recovery window from falsely proving the drone is powered off.
 - [x] Clear terminal `OFF` runtime state when Search rediscovers the same node or when valid assigned-channel telemetry arrives, so rejoin/acquisition is not blocked by stale OFF state.
-- [x] Treat "all active assignments are terminal OFF" as shared-channel rejoin discovery instead of scanner idle.
-  - Field diagnostics `sgc_gc_serial_2026-06-10T22-17-44-551Z.jsonl` and `sgc_gc_serial_2026-06-10T22-20-40-474Z.jsonl` showed node `6` only rejoined after Delete because deleting made `assignedDrones = 0`, which kept the GC on shared discovery. The GC now uses the same shared rejoin behavior when assignments still exist but every active assignment is already classified `OFF`.
+- [x] Treat "all active assignments are lost" as a recovery cycle instead of scanner idle.
+  - Field diagnostics `sgc_gc_serial_2026-06-10T22-17-44-551Z.jsonl` and `sgc_gc_serial_2026-06-10T22-20-40-474Z.jsonl` showed node `6` only rejoined after Delete because deleting made `assignedDrones = 0`, which kept the GC on shared discovery. The GC now uses shared Bind when assignments still exist but every active assignment is classified `OFFLINE` or `OFF`, then alternates to full assigned-channel Re-bind rounds if shared Bind times out.
 - [x] Fix Search-mode stale-assignment rejoin probing so reset drones on the shared channel can actually be rediscovered.
 - [x] Roll back pending assignments when JOIN_ACK retries are exhausted.
   - The field diagnostic showed `join_ack_retries_exhausted` leaving node `6` active with `timingAccepted=false`, after which the scanner chased it and emitted `LOCKING`/`WEAK`. A failed ACK now restores the previous assignment or removes the new pending assignment from RAM/flash.
@@ -94,7 +94,7 @@ Goal: address the first field-test findings without expanding this branch into m
 - [x] Emit per-drone `expectedUpdateMs` in `drone_telemetry` and `channel_table.assignments[]`.
   - SGC uses this expected service interval to scale ONLINE/LATE/STALE/OFFLINE thresholds, so four Robust drones at about `0.3-0.5 Hz` are not falsely marked stale when that rate is within receiver capacity.
 - [x] Use a broad one-drone assigned-channel listen window when Search is inactive.
-- [x] Replace the old immediate single-miss recovery with three-miss bounded recovery.
+- [x] Replace the old immediate single-miss recovery with twelve-miss bounded recovery.
 - [x] Emit `drone_link_status` JSON with `nodeId`, `state`, `activityDetected`, `txPeriodMs`, and `gcMillis`.
 - [x] Show `LOCKING`, `WEAK`, `OFFLINE`, and `OFF` in SGC.
 - [x] Use orange for `WEAK`, red for `OFFLINE`, and gray for `OFF`.

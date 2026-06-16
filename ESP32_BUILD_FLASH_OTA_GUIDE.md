@@ -5,6 +5,7 @@ This guide explains the current live-position firmware workflow for:
 - Single GC ESP32: ground-control XIAO ESP32S3 connected to SGC by USB serial.
 - MaGC ESP32: magic ground-control module for Bind/search/scan/allocation.
 - TeleGC ESP32: telemetry ground-control module connected to SGC by USB serial.
+- Bridge receiver ESP32: fixed LoRa backhaul receiver connected to SGC by USB serial.
 - Drone ESP32: drone XIAO ESP32S3, normally updated by Web OTA.
 
 The firmware lives in the companion repo:
@@ -43,6 +44,8 @@ Supported live-position roles:
 - `ground_station`: single-module GC, connected directly to SGC.
 - `magic_ground_control`: MaGC, shared-channel Bind/search/scan/allocation module.
 - `telemetry_ground_control`: TeleGC, telemetry RX module connected to SGC.
+- `bridge_receiver`: LoRa bridge receiver connected to SGC. V2 forwards compact
+  GC snapshots downlink and queues SGC commands for scheduled RF uplink.
 - `drone`: drone ESP32 connected to the FC MSP UART.
 
 ## Scripts
@@ -145,6 +148,20 @@ Use OTA for normal drone firmware updates. OTA preserves existing LittleFS confi
 simple-mesh-<node_id>
 ```
 
+For the LoRa bridge receiver, use:
+
+```text
+simple-mesh-bridge
+```
+
+Ground-control roles also use role-specific OTA SSIDs:
+
+```text
+simple-mesh-GC
+simple-mesh-MaGC
+simple-mesh-TeleGC
+```
+
 Example:
 
 ```text
@@ -191,6 +208,10 @@ The provisioning script temporarily writes `simple-mesh\data\config.json`, uploa
 
 ### Provision Single GC
 
+GC bridge support is enabled by default. The GC starts with lightweight bridge
+beacons and only sends full bridge snapshots after a bridge receiver says hello.
+For bench isolation, add `-BackhaulDisabled`.
+
 ```powershell
 .\tools\provision_node.ps1 -Role gc -Port COM18
 ```
@@ -208,6 +229,9 @@ This writes:
 
 Use this for the Bind/search/scan/allocation module. It is not connected to SGC
 by USB during normal operation; it talks to TeleGC over UART.
+
+MaGC bridge support is also enabled by default. For bench isolation, add
+`-BackhaulDisabled`.
 
 ```powershell
 .\tools\provision_node.ps1 -Role magc -Port COM18
@@ -280,6 +304,42 @@ If you use different pins, pass them during provisioning:
 .\tools\provision_node.ps1 -Role magc -Port COM18 -InterGcRxPin 44 -InterGcTxPin 43 -InterGcBaud 921600
 .\tools\provision_node.ps1 -Role telegc -Port COM19 -InterGcRxPin 44 -InterGcTxPin 43 -InterGcBaud 921600
 ```
+
+### Provision Bridge Receiver
+
+Use this for the ESP32+SX1262 module connected to the computer when the real GC
+or MaGC is on a rooftop and sends UF LoRa bridge snapshots.
+
+```powershell
+.\tools\provision_node.ps1 -Role bridge -Port COM18
+```
+
+This writes:
+
+```json
+{
+  "node_id": 0,
+  "node_role": "bridge_receiver",
+  "live_position": {
+    "backhaul": {
+      "frequency_mhz": 902.0,
+      "period_ms": 1000,
+      "max_drones": 5
+    }
+  }
+}
+```
+
+The bridge receiver listens on `902.0 MHz / SF7 / BW500 / CR4/5`, decodes
+`BRIDGE_SNAPSHOT`, and emits `drones_state`, `assignments`, compact
+`channel_table`, and `gc_status.bridgeMode = true` over USB.
+
+With bridge V2, SGC mutating controls are enabled only while the bridge reports
+`gc_status.bridgeControl = true` and a fresh backhaul packet age under `3 s`.
+Commands such as Bind, Re-bind, Re-scan, profile apply, and clear assignment are
+queued by the bridge and transmitted in the scheduled uplink slot after a GC
+downlink. HOME markers, drone aliases, distance measurements, and Cloudflare
+publishing remain local browser features.
 
 ### Provision Drone
 

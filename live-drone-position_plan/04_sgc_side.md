@@ -248,6 +248,23 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Publish binding placeholders in Cloudflare `drones_state` snapshots so remote viewers see the same read-only bind progress.
   - [x] Rename user-facing lock/re-lock/locking wording in SGC to Bind/Re-bind/BINDING while keeping firmware command and event names compatible.
 
+- [ ] Milestone 20: LoRa bridge receiver UI
+  - [x] Accept serial `drones_state` messages as local telemetry, not only as
+    Cloudflare endpoint messages.
+  - [x] Stop mock telemetry when serial `drones_state` arrives.
+  - [x] Preserve local drone aliases by `nodeId` for bridge-fed snapshots.
+  - [x] Omit map markers for bridge entries without valid GPS.
+  - [x] Publish bridge-fed serial scenes to Cloudflare through the existing
+    browser relay publisher.
+  - [x] Detect `gc_status.bridgeMode === true`.
+  - [x] Show `LoRa bridge` in the source row when connected to a bridge receiver.
+  - [x] Disable GC-mutating controls in bridge mode: Reset, Bind, Re-bind,
+    Delete assignment, Re-scan, and Profile Apply.
+  - [x] Keep local SGC-only tools available in bridge mode: HOME markers, drone
+    aliases, and distance measurements.
+  - [ ] Browser-verify bridge receiver USB `drones_state` drives live drones.
+  - [ ] Browser-verify bridge mode disables only GC-mutating controls.
+
 ## Out Of Scope
 
 - [x] Do not add mission execution.
@@ -281,6 +298,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Parse `search_event` and `gc_status.searchMode`.
 - [x] Honor explicit `search_event.searchMode` instead of inferring Search state from event names.
   - Field log `sgc_gc_serial_2026-06-10T22-11-31-922Z.jsonl` showed automatic no-assignment discovery emitted `join_detected` / `assignment_completed` with `searchMode:false`, but SGC inferred Search was active and left the button pressed. SGC now trusts the firmware boolean when present.
+- [x] Clear local Bind/Search button state when assignment completion or serial telemetry proves the bind flow has moved into normal telemetry.
+- [x] Prevent passive `Binding...` from sticking by treating any positive assignment evidence from channel table, live serial drones, or GC status as assigned.
+- [x] Show `Binding...` while firmware reports all-lost shared recovery.
+  - `gc_status.allLostRecoveryActive === true` plus `allLostRecoveryPhase === "shared_bind"` means every assigned drone is lost and the GC is already listening on shared discovery for a bind/rejoin. The button is active and disabled during that phase, but it returns to normal during the assigned re-bind phase.
 - [x] Parse `drone_link_status`.
 - [x] Display `ONLINE`, `BINDING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
@@ -353,3 +374,18 @@ These tasks mirror `09_cloudflare_live_relay.md`.
   - [ ] Browser-verify a second browser automatically views the same drones.
   - [ ] Browser-verify remote command controls are unavailable.
   - [ ] Browser-verify orphan recovery events and recovered drones render from a bench capture.
+
+## LoRa Bridge V2 UI
+
+These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
+
+- [x] Treat USB `drones_state` from `source:"lora_bridge"` as local serial telemetry.
+- [x] Render card-only bridge drones without GPS coordinates and omit their map markers until `lat`/`lng` arrives.
+- [x] Preserve local drone aliases for bridge-fed `nodeId` rows.
+- [x] Enable GC-mutating controls in bridge mode only when `gc_status.bridgeControl === true` and the backhaul packet age is under `3 s`.
+- [x] Show a persistent `Bridge RF` status-grid row in bridge mode with live/stale state, packet age, RSSI/SNR, and command queue depth.
+- [x] Show bridge handshake states so the operator can distinguish waiting for GC beacon, beacon-only RF contact, and live bridge control.
+- [x] Route normal SGC command JSON to the bridge receiver when bridge control is fresh; the bridge firmware queues RF uplink commands.
+- [x] Keep bridge controls disabled when the RF downlink is stale or the browser is a remote endpoint viewer.
+- [x] Consume bridge-emitted `command_ack` through the existing pending-command UI path.
+- [ ] Browser/RF-verify Bind, Re-bind, Re-scan, profile apply, and clear assignment through the bridge.

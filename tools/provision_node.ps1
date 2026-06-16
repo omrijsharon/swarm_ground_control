@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("gc", "magc", "telegc", "drone")]
+    [ValidateSet("gc", "magc", "telegc", "bridge", "drone")]
     [string]$Role,
     [Parameter(Mandatory = $true)]
     [string]$Port,
@@ -11,6 +11,11 @@ param(
     [int]$InterGcRxPin = 44,
     [int]$InterGcTxPin = 43,
     [int]$InterGcBaud = 921600,
+    [switch]$BackhaulEnabled,
+    [switch]$BackhaulDisabled,
+    [double]$BackhaulFrequencyMhz = 902.0,
+    [int]$BackhaulPeriodMs = 1000,
+    [int]$BackhaulMaxDrones = 5,
     [string]$FirmwareRepo = "C:\Users\tamipinhasi\Documents\PlatformIO\Projects\simple-mesh",
     [string]$Environment = "seeed-xiao-s3"
 )
@@ -29,10 +34,22 @@ function Invoke-Checked {
     }
 }
 
+function Set-Utf8NoBomContent {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Value
+    )
+
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($Path, $Value, $utf8NoBom)
+}
+
 function New-LiveNodeConfig {
     param(
         [Parameter(Mandatory = $true)]
-        [ValidateSet("gc", "magc", "telegc", "drone")]
+        [ValidateSet("gc", "magc", "telegc", "bridge", "drone")]
         [string]$Role,
         [Parameter(Mandatory = $true)]
         [int]$NodeId,
@@ -40,25 +57,35 @@ function New-LiveNodeConfig {
         [int]$SimulatedMspBatchMs,
         [int]$InterGcRxPin,
         [int]$InterGcTxPin,
-        [int]$InterGcBaud
+        [int]$InterGcBaud,
+        [bool]$BackhaulEnabled,
+        [double]$BackhaulFrequencyMhz,
+        [int]$BackhaulPeriodMs,
+        [int]$BackhaulMaxDrones
     )
 
-    if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc") {
+    if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc" -or $Role -eq "bridge") {
         $nodeRole = "ground_station"
         if ($Role -eq "magc") {
             $nodeRole = "magic_ground_control"
         } elseif ($Role -eq "telegc") {
             $nodeRole = "telemetry_ground_control"
+        } elseif ($Role -eq "bridge") {
+            $nodeRole = "bridge_receiver"
         }
+        $loraFrequency = if ($Role -eq "bridge") { $BackhaulFrequencyMhz } else { 915.0 }
+        $spreadingFactor = if ($Role -eq "bridge") { 7 } else { 9 }
+        $bandwidth = if ($Role -eq "bridge") { 500000 } else { 125000 }
+        $codingRate = if ($Role -eq "bridge") { 5 } else { 8 }
         return [ordered]@{
             node_id = 0
             node_role = $nodeRole
             lora = [ordered]@{
-                frequency = 915.0
+                frequency = $loraFrequency
                 tx_power = 22
-                spreading_factor = 9
-                bandwidth = 125000
-                coding_rate = 8
+                spreading_factor = $spreadingFactor
+                bandwidth = $bandwidth
+                coding_rate = $codingRate
                 preamble_length = 8
                 sync_word = 18
             }
@@ -74,10 +101,16 @@ function New-LiveNodeConfig {
                 simulated_fc = $false
                 simulated_msp_batch_ms = 8
                 inter_gc = [ordered]@{
-                    enabled = ($Role -ne "gc")
+                    enabled = ($Role -eq "magc" -or $Role -eq "telegc")
                     baud = $InterGcBaud
                     rx_pin = $InterGcRxPin
                     tx_pin = $InterGcTxPin
+                }
+                backhaul = [ordered]@{
+                    enabled = ($Role -eq "gc" -or $Role -eq "magc") -and $BackhaulEnabled
+                    frequency_mhz = $BackhaulFrequencyMhz
+                    period_ms = $BackhaulPeriodMs
+                    max_drones = $BackhaulMaxDrones
                 }
             }
         }
@@ -106,6 +139,12 @@ function New-LiveNodeConfig {
         live_position = [ordered]@{
             simulated_fc = $SimulatedFc
             simulated_msp_batch_ms = $SimulatedMspBatchMs
+            backhaul = [ordered]@{
+                enabled = $false
+                frequency_mhz = $BackhaulFrequencyMhz
+                period_ms = $BackhaulPeriodMs
+                max_drones = $BackhaulMaxDrones
+            }
         }
     }
 }
@@ -114,7 +153,7 @@ if (-not (Test-Path -LiteralPath $FirmwareRepo)) {
     throw "Firmware repo not found: $FirmwareRepo"
 }
 
-if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc") {
+if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc" -or $Role -eq "bridge") {
     $NodeId = 0
 } elseif ($NodeId -le 0 -or $NodeId -gt 255) {
     throw "Drone provisioning requires -NodeId in the range 1..255."
@@ -133,9 +172,16 @@ if ($hadOriginalConfig) {
 
 Push-Location $FirmwareRepo
 try {
-    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs -InterGcRxPin $InterGcRxPin -InterGcTxPin $InterGcTxPin -InterGcBaud $InterGcBaud
+    $effectiveBackhaulEnabled = [bool]$BackhaulEnabled
+    if (($Role -eq "gc" -or $Role -eq "magc") -and -not [bool]$BackhaulDisabled) {
+        $effectiveBackhaulEnabled = $true
+    }
+    if ($Role -ne "gc" -and $Role -ne "magc") {
+        $effectiveBackhaulEnabled = $false
+    }
+    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs -InterGcRxPin $InterGcRxPin -InterGcTxPin $InterGcTxPin -InterGcBaud $InterGcBaud -BackhaulEnabled $effectiveBackhaulEnabled -BackhaulFrequencyMhz $BackhaulFrequencyMhz -BackhaulPeriodMs $BackhaulPeriodMs -BackhaulMaxDrones $BackhaulMaxDrones
     $json = $nodeConfig | ConvertTo-Json -Depth 6
-    Set-Content -LiteralPath $configPath -Value $json -Encoding UTF8
+    Set-Utf8NoBomContent -Path $configPath -Value $json
 
     Write-Host "Provisioning node."
     Write-Host "Repo: $FirmwareRepo"
@@ -151,6 +197,12 @@ try {
         Write-Host "Inter-GC UART RX pin: $InterGcRxPin"
         Write-Host "Inter-GC UART TX pin: $InterGcTxPin"
     }
+    if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "bridge") {
+        Write-Host "Backhaul frequency MHz: $BackhaulFrequencyMhz"
+        Write-Host "Backhaul period ms: $BackhaulPeriodMs"
+        Write-Host "Backhaul max drones: $BackhaulMaxDrones"
+        Write-Host "Backhaul TX enabled: $effectiveBackhaulEnabled"
+    }
     Write-Host "LittleFS /config.json WILL be overwritten on the board."
     if (-not $ConfigOnly) {
         Write-Host "Firmware will also be flashed."
@@ -164,7 +216,7 @@ try {
     }
 } finally {
     if ($hadOriginalConfig) {
-        Set-Content -LiteralPath $configPath -Value $originalConfig -Encoding UTF8
+        Set-Utf8NoBomContent -Path $configPath -Value $originalConfig
     } elseif (Test-Path -LiteralPath $configPath) {
         Remove-Item -LiteralPath $configPath
     }

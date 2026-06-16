@@ -352,12 +352,42 @@ function isLiveRemoteViewerMode() {
   return liveState.telemetrySourceMode === "live" || (liveState.telemetrySourceMode === "auto" && !liveState.connected);
 }
 
+function isLiveBridgeMode() {
+  return Boolean(liveState.gcStatus?.bridgeMode);
+}
+
+function getLiveBridgeDownlinkAgeMs() {
+  const age = Number(liveState.gcStatus?.backhaulLastPacketAgeMs);
+  return Number.isFinite(age) ? age : Infinity;
+}
+
+function isLiveBridgeControlAvailable() {
+  if (!isLiveBridgeMode()) return false;
+  if (liveState.gcStatus?.bridgeControl !== true) return false;
+  if (liveState.gcStatus?.bridgeStale === true) return false;
+  return getLiveBridgeDownlinkAgeMs() <= 3000;
+}
+
+function isLiveCommandReadOnlyMode() {
+  return isLiveRemoteViewerMode() || (isLiveBridgeMode() && !isLiveBridgeControlAvailable());
+}
+
+function liveCommandReadOnlyMessage() {
+  if (isLiveRemoteViewerMode()) return "Remote live endpoint is read-only.";
+  if (isLiveBridgeMode()) return "LoRa bridge control link is not ready.";
+  return "";
+}
+
 function isLiveRelayMode() {
-  return liveState.telemetrySourceMode === "auto" || liveState.telemetrySourceMode === "live" || liveState.telemetrySourceMode === "broadcast";
+  return liveState.telemetrySourceMode === "auto" ||
+    liveState.telemetrySourceMode === "usb" ||
+    liveState.telemetrySourceMode === "live" ||
+    liveState.telemetrySourceMode === "broadcast";
 }
 
 function isLiveRelayBroadcastMode() {
-  return liveState.telemetrySourceMode === "broadcast" || (liveState.telemetrySourceMode === "auto" && liveState.connected);
+  return liveState.telemetrySourceMode === "broadcast" ||
+    ((liveState.telemetrySourceMode === "auto" || liveState.telemetrySourceMode === "usb") && liveState.connected);
 }
 
 function getLiveRelayDesiredRole() {
@@ -3418,6 +3448,44 @@ function renderLiveBindingLine(host, bindingState, now = Date.now()) {
   }
 }
 
+function renderLiveBridgeCardLine(host, linkStatus, now = Date.now()) {
+  host.className = "status-mission live-timing-line";
+  host.innerHTML = "";
+  const stateEl = document.createElement("span");
+  stateEl.className = "live-timing-frequency";
+  stateEl.textContent = formatLiveDisplayState(normalizeLiveDisplayState(linkStatus?.state || "unknown"));
+  host.appendChild(stateEl);
+
+  const separatorEl = document.createElement("span");
+  separatorEl.className = "live-timing-separator";
+  separatorEl.textContent = "|";
+  host.appendChild(separatorEl);
+
+  const sourceEl = document.createElement("span");
+  sourceEl.className = "live-timing-ago";
+  sourceEl.textContent = "bridge";
+  host.appendChild(sourceEl);
+
+  const receivedAt = Number(linkStatus?.receivedAt);
+  if (Number.isFinite(receivedAt)) {
+    const ageSeparatorEl = document.createElement("span");
+    ageSeparatorEl.className = "live-timing-separator";
+    ageSeparatorEl.textContent = "|";
+    host.appendChild(ageSeparatorEl);
+
+    const age = formatLiveAgeParts(receivedAt, now);
+    const ageValueEl = document.createElement("span");
+    ageValueEl.className = "live-timing-age-value";
+    ageValueEl.textContent = age.value;
+    host.appendChild(ageValueEl);
+
+    const ageUnitEl = document.createElement("span");
+    ageUnitEl.className = "live-timing-age-unit";
+    ageUnitEl.textContent = age.unit;
+    host.appendChild(ageUnitEl);
+  }
+}
+
 function loadLiveDroneAliases() {
   try {
     const raw = window.localStorage?.getItem(LIVE_DRONE_ALIAS_STORAGE_KEY);
@@ -3530,11 +3598,30 @@ function normalizeLiveRadioProfile(profile = {}) {
 
 function liveProfileFromGcStatus() {
   const status = liveState.gcStatus || {};
+  const defaultProfileId = Number(status.defaultAssignmentRadioProfileId);
+  if (Number.isFinite(defaultProfileId)) {
+    const decoded = decodeLiveRadioProfileId(defaultProfileId);
+    if (decoded) return decoded;
+  }
   return normalizeLiveRadioProfile({
     spreadingFactor: status.spreadingFactor,
     bandwidthHz: status.bandwidthHz,
     codingRate: status.codingRate,
   });
+}
+
+function liveProfileIdFromGcStatus() {
+  const status = liveState.gcStatus || {};
+  const defaultProfileId = Number(status.defaultAssignmentRadioProfileId);
+  if (Number.isFinite(defaultProfileId)) return defaultProfileId;
+  const radioProfileId = Number(status.radioProfileId);
+  if (Number.isFinite(radioProfileId)) return radioProfileId;
+  return encodeLiveRadioProfileId(liveProfileFromGcStatus());
+}
+
+function syncLiveProfileDraftFromGcStatus({ force = false } = {}) {
+  if (!force && (liveState.profilePickerOpen || liveState.profileApplyPending)) return;
+  liveState.profileDraft = liveProfileFromGcStatus();
 }
 
 function liveDiscoveryProfileFromGcStatus() {
@@ -3743,6 +3830,7 @@ function getLiveDisplayState(drone, freshness, now = Date.now()) {
       return freshness;
     }
     if (linkStatus && (!Number.isFinite(latestReceivedAt) || !Number.isFinite(statusReceivedAt) || statusReceivedAt >= latestReceivedAt)) {
+      if (state === "online" || state === "fresh") return "fresh";
       if (["binding", "weak", "off", "offline"].includes(state)) return state;
     }
   }
@@ -3779,38 +3867,58 @@ function getLiveBaudRate() {
 
 function getLiveAssignedCountForBindingState() {
   const status = liveState.gcStatus || {};
-  const assignedDrones = Number(status.assignedDrones);
-  if (Number.isFinite(assignedDrones)) return assignedDrones;
-  const assignedChannels = Number(status.assignedChannels);
-  if (Number.isFinite(assignedChannels)) return assignedChannels;
   const assignments = liveState.channelTable && Array.isArray(liveState.channelTable.assignments)
     ? liveState.channelTable.assignments
     : null;
-  return assignments ? assignments.length : null;
+  const counts = [];
+  if (assignments) counts.push(assignments.length);
+  if (liveState.serialTelemetrySeen) counts.push(getLiveSerialDroneCount());
+  const assignedDrones = Number(status.assignedDrones);
+  if (Number.isFinite(assignedDrones)) counts.push(assignedDrones);
+  const assignedChannels = Number(status.assignedChannels);
+  if (Number.isFinite(assignedChannels)) counts.push(assignedChannels);
+  if (!counts.length) return null;
+  return Math.max(...counts.map((count) => Math.max(0, Number(count) || 0)));
 }
 
 function getLiveBindingState() {
+  const status = liveState.gcStatus || {};
   const explicitBinding = Boolean(liveState.searchMode || liveState.searchPending);
+  const allLostSharedBinding =
+    !explicitBinding &&
+    !isLiveCommandReadOnlyMode() &&
+    liveState.connected &&
+    status.allLostRecoveryActive === true &&
+    status.allLostRecoveryPhase === "shared_bind";
   const assignedCount = getLiveAssignedCountForBindingState();
   const passiveBinding =
     !explicitBinding &&
-    !isLiveRemoteViewerMode() &&
+    !allLostSharedBinding &&
+    !isLiveCommandReadOnlyMode() &&
     liveState.connected &&
     assignedCount === 0;
-  return { explicitBinding, passiveBinding, assignedCount };
+  return { explicitBinding, passiveBinding, allLostSharedBinding, assignedCount };
 }
 
 function applyLiveSearchButtonState(searchBtn) {
   if (!searchBtn) return;
-  const { explicitBinding, passiveBinding } = getLiveBindingState();
-  const active = explicitBinding || passiveBinding;
+  const { explicitBinding, passiveBinding, allLostSharedBinding } = getLiveBindingState();
+  const active = explicitBinding || passiveBinding || allLostSharedBinding;
+  const readOnlyReason = liveCommandReadOnlyMessage();
   searchBtn.textContent = active ? "Binding..." : "Bind";
-  searchBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || explicitBinding || passiveBinding;
+  searchBtn.disabled =
+    isLiveCommandReadOnlyMode() ||
+    !liveState.connected ||
+    explicitBinding ||
+    passiveBinding ||
+    allLostSharedBinding;
   searchBtn.classList.toggle("is-active", active);
-  searchBtn.title = isLiveRemoteViewerMode()
-    ? "Remote live endpoint is read-only."
+  searchBtn.title = readOnlyReason
+    ? readOnlyReason
     : passiveBinding
       ? "GC has no assigned drones and is already listening for drones to bind."
+      : allLostSharedBinding
+        ? "All assigned drones are lost; GC is listening on the shared channel for drones to bind."
       : explicitBinding
         ? "GC is binding/searching for drones."
         : "";
@@ -3891,6 +3999,57 @@ function formatLiveRelayDebugSummary() {
   return "N/A";
 }
 
+function formatLiveBridgeRfSummary(status = liveState.gcStatus || {}) {
+  if (!status?.bridgeMode) return "N/A";
+  const handshake = String(status.bridgeHandshake || "");
+  const ageMs = Number(status.backhaulLastPacketAgeMs);
+  if (!Number.isFinite(ageMs) || ageMs >= 0xFFFFFFFF) {
+    if (handshake === "waiting_for_beacon") return "Waiting for GC beacon";
+    return "No GC RF";
+  }
+  const live = status.bridgeControl === true && status.bridgeStale !== true && ageMs <= 3000;
+  const rssi = Number(status.backhaulRssi);
+  const snr = Number(status.backhaulSnr);
+  const queueDepth = Number(status.bridgeCommandQueueDepth);
+  const parts = [
+    live ? "Live" : (handshake === "beacon_seen" ? "Beacon" : "Stale"),
+    `age ${formatRelayDebugMs(ageMs)}`,
+  ];
+  if (Number.isFinite(rssi) && rssi > -127) {
+    parts.push(`${rssi.toFixed(0)} dBm`);
+  }
+  if (Number.isFinite(snr)) {
+    parts.push(`${snr.toFixed(1)} dB`);
+  }
+  if (Number.isFinite(queueDepth) && queueDepth > 0) {
+    parts.push(`q${queueDepth}`);
+  }
+  return parts.join(" | ");
+}
+
+function formatLiveBridgeRfDetails(status = liveState.gcStatus || {}) {
+  if (!status?.bridgeMode) return "";
+  const handshake = String(status.bridgeHandshake || "");
+  const ageMs = Number(status.backhaulLastPacketAgeMs);
+  if (!Number.isFinite(ageMs) || ageMs >= 0xFFFFFFFF) {
+    if (handshake === "waiting_for_beacon") {
+      return "Bridge USB is connected and waiting for a GC bridge beacon.";
+    }
+    return "Bridge USB is connected, but no GC backhaul downlink has been received.";
+  }
+  const queueDepth = Number(status.bridgeCommandQueueDepth);
+  const ackStatus = status.bridgeLastAckStatus ? String(status.bridgeLastAckStatus) : "none";
+  const ackReason = status.bridgeLastAckReason ? ` (${status.bridgeLastAckReason})` : "";
+  return [
+    status.bridgeControl === true && status.bridgeStale !== true
+      ? "GC RF link is live."
+      : (handshake === "beacon_seen" ? "GC RF beacon received; waiting for a control snapshot." : "GC RF link is stale or control is unavailable."),
+    `Last downlink age: ${formatRelayDebugMs(ageMs)}.`,
+    Number.isFinite(queueDepth) ? `Command queue: ${queueDepth}.` : "",
+    `Last ACK: ${ackStatus}${ackReason}.`,
+  ].filter(Boolean).join(" ");
+}
+
 function formatLiveRelayDebugDetails() {
   const debug = liveState.relayDebug || {};
   if (liveState.relayRole === "publisher") {
@@ -3943,6 +4102,23 @@ function clearLiveRelayReconnectTimer() {
   if (!liveState.relayReconnectTimer) return;
   window.clearTimeout(liveState.relayReconnectTimer);
   liveState.relayReconnectTimer = null;
+}
+
+function isLiveRelaySocketCurrent(socket) {
+  return Boolean(socket && liveState.relaySocket === socket);
+}
+
+function isLiveRelaySocketOpeningOrOpen(socket) {
+  const readyState = Number(socket?.readyState);
+  return readyState === 0 || readyState === 1;
+}
+
+function isLiveRelayDesiredSocketActive(role) {
+  return liveState.relayRole === role && isLiveRelaySocketOpeningOrOpen(liveState.relaySocket);
+}
+
+function appendStaleLiveRelayEventDebug(eventName) {
+  appendLiveDebug(`relay: ignored stale socket ${eventName}`);
 }
 
 function closeLiveRelayConnection({ user = true, reason = "closed" } = {}) {
@@ -4109,6 +4285,14 @@ function startLiveRelayScenePublishing() {
   liveState.relayHomesStateTimer = window.setInterval(publishLiveHomesState, LIVE_RELAY_HOMES_STATE_INTERVAL_MS);
 }
 
+function ensureLiveRelayScenePublishing() {
+  if (!isLiveRelayPublisherSocketOpen()) return false;
+  if (!liveState.relayDronesStateTimer || !liveState.relayHomesStateTimer) {
+    startLiveRelayScenePublishing();
+  }
+  return true;
+}
+
 function stopLiveRelayScenePublishing() {
   if (liveState.relayDronesStateTimer) {
     window.clearInterval(liveState.relayDronesStateTimer);
@@ -4237,7 +4421,7 @@ function connectLiveRelay({ auto = false } = {}) {
   }
   readLiveRelayInputs();
   const role = getLiveRelayDesiredRole();
-  if (liveState.relaySocket && liveState.relayConnected && liveState.relayRole === role) return;
+  if (isLiveRelayDesiredSocketActive(role)) return;
 
   closeLiveRelayConnection({ user: false, reason: "reconnect" });
   liveState.relayUserClosed = false;
@@ -4258,6 +4442,10 @@ function connectLiveRelay({ auto = false } = {}) {
 
   liveState.relaySocket = socket;
   socket.addEventListener("open", () => {
+    if (!isLiveRelaySocketCurrent(socket)) {
+      appendStaleLiveRelayEventDebug("open");
+      return;
+    }
     liveState.relayConnected = true;
     liveState.relayState = "connected";
     liveState.relayReconnectAttempts = 0;
@@ -4267,15 +4455,26 @@ function connectLiveRelay({ auto = false } = {}) {
     renderLiveControls();
     updateStatusList();
   });
-  socket.addEventListener("message", (event) => handleLiveRelayEnvelope(String(event.data || "")));
+  socket.addEventListener("message", (event) => {
+    if (!isLiveRelaySocketCurrent(socket)) return;
+    handleLiveRelayEnvelope(String(event.data || ""));
+  });
   socket.addEventListener("error", () => {
+    if (!isLiveRelaySocketCurrent(socket)) {
+      appendStaleLiveRelayEventDebug("error");
+      return;
+    }
     liveState.relayState = "error";
     liveState.relayLastError = "Relay socket error.";
     renderLiveControls();
   });
   socket.addEventListener("close", (event) => {
-    stopLiveRelayScenePublishing();
-    if (liveState.relaySocket === socket) liveState.relaySocket = null;
+    if (!isLiveRelaySocketCurrent(socket)) {
+      appendStaleLiveRelayEventDebug("close");
+      return;
+    }
+    if (role === "publisher") stopLiveRelayScenePublishing();
+    liveState.relaySocket = null;
     liveState.relayConnected = false;
     liveState.relayRole = null;
     liveState.relayViewerCount = null;
@@ -4305,7 +4504,10 @@ function setLiveTelemetrySourceMode(mode) {
 function ensureLiveRelayForCurrentState() {
   if (!isLiveRelayMode()) return;
   const desiredRole = getLiveRelayDesiredRole();
-  if (liveState.relayConnected && liveState.relayRole === desiredRole) return;
+  if (isLiveRelayDesiredSocketActive(desiredRole)) {
+    if (desiredRole === "publisher") ensureLiveRelayScenePublishing();
+    return;
+  }
   liveState.relayUserClosed = false;
   connectLiveRelay({ auto: true });
 }
@@ -4328,8 +4530,8 @@ function renderLiveControls() {
   if (baudInput) baudInput.disabled = liveState.connected;
   if (resetBtn) {
     resetBtn.textContent = liveState.freshSessionPending ? "Resetting..." : "Reset";
-    resetBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
-    resetBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+    resetBtn.disabled = isLiveCommandReadOnlyMode() || !liveState.connected || liveState.freshSessionPending || liveState.freshSessionConfirming;
+    resetBtn.title = liveCommandReadOnlyMessage();
   }
   applyLiveSearchButtonState(searchBtn);
   syncLiveRelayInputsFromState();
@@ -5085,9 +5287,10 @@ async function requestLiveDroneRelock(nodeId) {
   const id = Number(nodeId);
   if (!Number.isFinite(id) || id <= 0) return;
   recordLiveGcDiagnosticEvent("ui_rebind_requested", { nodeId: id });
-  if (isLiveRemoteViewerMode()) {
-    recordLiveGcDiagnosticEvent("ui_rebind_rejected", { nodeId: id, reason: "remote_view_only" });
-    appendLiveDebug("re-bind unavailable: remote live endpoint is read-only");
+  if (isLiveCommandReadOnlyMode()) {
+    const reason = isLiveBridgeMode() ? "bridge_mode" : "remote_view_only";
+    recordLiveGcDiagnosticEvent("ui_rebind_rejected", { nodeId: id, reason });
+    appendLiveDebug(`re-bind unavailable: ${liveCommandReadOnlyMessage()}`);
     return;
   }
   if (!liveState.connected) {
@@ -5131,9 +5334,9 @@ async function startLiveSearchMode() {
     assignedDrones: Number(liveState.gcStatus?.assignedDrones),
   });
   if (liveState.searchPending || liveState.searchMode) return;
-  if (isLiveRemoteViewerMode()) {
-    recordLiveGcDiagnosticEvent("ui_bind_rejected", { reason: "remote_view_only" });
-    appendLiveDebug("bind unavailable: remote live endpoint is read-only");
+  if (isLiveCommandReadOnlyMode()) {
+    recordLiveGcDiagnosticEvent("ui_bind_rejected", { reason: isLiveBridgeMode() ? "bridge_mode" : "remote_view_only" });
+    appendLiveDebug(`bind unavailable: ${liveCommandReadOnlyMessage()}`);
     renderLiveControls();
     return;
   }
@@ -5163,10 +5366,10 @@ async function startLiveSearchMode() {
 
 async function startLiveSpectrumRescan() {
   if (liveState.spectrumRescanPending) return;
-  if (isLiveRemoteViewerMode()) {
+  if (isLiveCommandReadOnlyMode()) {
     liveState.spectrumRescanConfirming = false;
-    liveState.spectrumStatus = "Remote live endpoint is read-only.";
-    appendLiveDebug("channel rescan unavailable: remote live endpoint is read-only");
+    liveState.spectrumStatus = liveCommandReadOnlyMessage();
+    appendLiveDebug(`channel rescan unavailable: ${liveCommandReadOnlyMessage()}`);
     renderLiveGcStatus();
     return;
   }
@@ -5204,8 +5407,8 @@ async function startLiveSpectrumRescan() {
 
 async function applyLiveProfileDraft() {
   if (liveState.profileApplyPending) return;
-  if (isLiveRemoteViewerMode()) {
-    appendLiveDebug("profile update unavailable: remote live endpoint is read-only");
+  if (isLiveCommandReadOnlyMode()) {
+    appendLiveDebug(`profile update unavailable: ${liveCommandReadOnlyMessage()}`);
     renderLiveGcStatus();
     return;
   }
@@ -5401,13 +5604,13 @@ function renderLiveProfilePicker(host) {
   const actions = document.createElement("div");
   actions.className = "live-profile-actions";
   const status = document.createElement("span");
-  status.textContent = isLiveRemoteViewerMode()
-    ? "Remote view only"
-    : liveState.connected ? "Applies to new joins" : "Connect GC to apply";
+  status.textContent = isLiveCommandReadOnlyMode()
+    ? (isLiveBridgeMode() ? "Bridge control unavailable" : "Remote view only")
+    : isLiveBridgeMode() ? "Bridge command link" : liveState.connected ? "Applies to new joins" : "Connect GC to apply";
   const applyBtn = document.createElement("button");
   applyBtn.className = "live-btn";
   applyBtn.type = "button";
-  applyBtn.disabled = isLiveRemoteViewerMode() || !liveState.connected || liveState.profileApplyPending;
+  applyBtn.disabled = isLiveCommandReadOnlyMode() || !liveState.connected || liveState.profileApplyPending;
   applyBtn.textContent = liveState.profileApplyPending ? "Applying..." : "Apply";
   applyBtn.dataset.commandPreview = JSON.stringify(commandPreview);
   applyBtn.addEventListener("click", applyLiveProfileDraft);
@@ -5428,10 +5631,16 @@ function renderLiveGcStatus() {
   const channelSummary = getLiveChannelSummary(table);
   const occupied = Number.isFinite(channelSummary.occupied) ? channelSummary.occupied : 0;
   const free = Number.isFinite(channelSummary.free) ? channelSummary.free : null;
+  const sourceValue = isLiveRemoteViewerMode()
+    ? "Live endpoint"
+    : isLiveBridgeMode()
+      ? "LoRa bridge"
+      : liveState.connected ? "USB connected" : "USB disconnected";
   const items = [
-    { label: "Source", value: isLiveRemoteViewerMode() ? "Live endpoint" : liveState.connected ? "USB connected" : "USB disconnected" },
+    { label: "Source", value: sourceValue },
     { label: "Relay", value: formatLiveRelayDebugSummary() },
-    { label: "Profile", value: status.spreadingFactor ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
+    ...(isLiveBridgeMode() ? [{ label: "Bridge RF", value: formatLiveBridgeRfSummary(status), title: formatLiveBridgeRfDetails(status) }] : []),
+    { label: "Profile", value: liveState.gcStatus ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
     { label: "Channels", value: free !== null ? `${free} free / ${occupied} occupied` : "N/A", action: "channels" },
@@ -5440,9 +5649,10 @@ function renderLiveGcStatus() {
 
   const grid = document.createElement("div");
   grid.className = "live-gc-grid";
-  items.forEach(({ label, value, action }) => {
+  items.forEach(({ label, value, action, title }) => {
     const item = document.createElement("div");
     item.className = "live-gc-item";
+    if (title) item.title = title;
     if (action === "profile" || action === "channels") {
       item.classList.add("live-gc-item-action");
       item.setAttribute("role", "button");
@@ -6016,6 +6226,7 @@ function refreshLiveBindingUi(source = "serial", { publish = true } = {}) {
   renderLiveGcStatus();
   syncLiveBindingAnimationTimer();
   if (source === "serial" && publish) {
+    ensureLiveRelayForCurrentState();
     publishLiveDronesState({ force: true, minIntervalMs: 0 });
   }
 }
@@ -6120,9 +6331,16 @@ function handleLiveLinkStatusForBinding(message, source = "serial") {
 }
 
 function applyLiveDronesState(message, source = "live-endpoint") {
-  if (source === "live-endpoint" && !liveState.serialTelemetrySeen) {
+  const isSerialSceneState = source === "serial";
+  const isBridgeSerialScene = isSerialSceneState && String(message?.source || "").toLowerCase() === "lora_bridge";
+  if ((source === "live-endpoint" || isSerialSceneState) && !liveState.serialTelemetrySeen) {
     stopLivePositionMock({ clearDrones: true, clearStatus: true });
     liveState.serialTelemetrySeen = true;
+  }
+  if (isSerialSceneState) {
+    liveState.serialTelemetrySeen = true;
+    liveState.searchPending = false;
+    liveState.searchMode = false;
   }
 
   const now = Date.now();
@@ -6140,7 +6358,11 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     const displayState = normalizeLiveDisplayState(entry.displayState);
     const hasPosition = Number.isFinite(lat) && Number.isFinite(lng);
     const isBindingSnapshot = isLiveBindingStateName(displayState) || entry.bindPhase;
-    if (!hasPosition && !isBindingSnapshot) return;
+    const isBridgeCardSnapshot =
+      isBridgeSerialScene &&
+      !hasPosition &&
+      ["online", "fresh", "binding", "weak", "off", "offline", "unknown"].includes(displayState);
+    if (!hasPosition && !isBindingSnapshot && !isBridgeCardSnapshot) return;
 
     const cleanName = String(entry.name || "").trim().slice(0, 28);
     if (cleanName) remoteNames.set(nodeId, cleanName);
@@ -6170,13 +6392,20 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     } else {
       clearLiveBindingState(nodeId);
     }
-    if (["binding", "weak", "off", "offline"].includes(displayState)) {
+    if (["online", "fresh", "binding", "weak", "off", "offline", "unknown"].includes(displayState)) {
       liveState.linkStatuses.set(nodeId, {
         type: "drone_link_status",
         nodeId,
         state: displayState,
         receivedAt,
         holdUntilRecovered: ["weak", "off", "offline"].includes(displayState),
+        frequencyMhz: entry.frequencyMhz ?? null,
+        radioProfileId: entry.radioProfileId ?? null,
+        txPeriodMs: entry.txPeriodMs ?? null,
+        rssi: entry.rssi ?? null,
+        snr: entry.snr ?? null,
+        satelliteCount: entry.satelliteCount ?? null,
+        bridgeCardOnly: !hasPosition,
       });
     } else {
       liveState.linkStatuses.delete(nodeId);
@@ -6191,7 +6420,7 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       Number.isFinite(incomingSequenceId) &&
       Number.isFinite(latestSequenceId) &&
       incomingSequenceId === latestSequenceId;
-    if (duplicateSequence) {
+    if (duplicateSequence && !isBridgeSerialScene) {
       duplicateDroneCount += 1;
       return;
     }
@@ -6247,6 +6476,10 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     updateTooltip();
     draw();
   }
+  if (isSerialSceneState) {
+    ensureLiveRelayForCurrentState();
+    publishLiveDronesState({ minIntervalMs: LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS });
+  }
 }
 
 function applyLiveHomesState(message, source = "live-endpoint") {
@@ -6299,6 +6532,10 @@ function applyLiveTelemetry(message, source = "serial") {
   const now = Date.now();
   const previousReceivedAt = Number(drone.lastReceivedAt);
   const nodeId = Number(message.nodeId);
+  if (source === "serial") {
+    liveState.searchPending = false;
+    liveState.searchMode = false;
+  }
   const telemetryTimingAccepted =
     message.timingAccepted === true ||
     String(message.periodConfidence || "").toLowerCase() === "locked";
@@ -6352,11 +6589,10 @@ function applyLiveTelemetry(message, source = "serial") {
     now
   );
   updateStatusList();
+  renderLiveControls();
   draw();
   if (source === "serial") {
-    if (!isLiveRelayPublisherSocketOpen()) {
-      ensureLiveRelayForCurrentState();
-    }
+    ensureLiveRelayForCurrentState();
     publishLiveDronesState({ minIntervalMs: LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS });
   }
 }
@@ -6462,8 +6698,16 @@ function handleLiveProtocolMessage(message, source = "serial") {
     applyLiveTelemetry(message, source);
   } else if (message.type === "gc_status") {
     liveState.gcStatus = message;
+    syncLiveProfileDraftFromGcStatus();
     liveState.searchMode = !!message.searchMode;
     if (!liveState.searchMode) liveState.searchPending = false;
+    if (message.bridgeMode) {
+      liveState.pendingCommands.forEach((pending, commandId) => {
+        if (["get_status", "get_channel_table", "get_assignments", "ping"].includes(pending?.command)) {
+          liveState.pendingCommands.delete(commandId);
+        }
+      });
+    }
     renderLiveControls();
     renderLiveGcStatus();
   } else if (message.type === "assignment_event") {
@@ -6514,6 +6758,21 @@ function handleLiveProtocolMessage(message, source = "serial") {
       } else if (pending.command === "set_radio_profile") {
         liveState.profileApplyPending = false;
         if (message.accepted) {
+          const acceptedProfileId = Number(pending.radioProfileId);
+          const acceptedProfile = decodeLiveRadioProfileId(acceptedProfileId);
+          if (acceptedProfile) {
+            liveState.profileDraft = acceptedProfile;
+            liveState.gcStatus = {
+              ...(liveState.gcStatus || {}),
+              defaultAssignmentRadioProfileId: acceptedProfileId,
+              ...(isLiveBridgeMode() ? {} : {
+                radioProfileId: acceptedProfileId,
+                spreadingFactor: acceptedProfile.spreadingFactor,
+                bandwidthHz: acceptedProfile.bandwidthHz,
+                codingRate: acceptedProfile.codingRate,
+              }),
+            };
+          }
           closeLiveProfilePicker();
         }
       } else if (pending.command === "clear_assignment") {
@@ -6611,7 +6870,9 @@ function handleLiveProtocolMessage(message, source = "serial") {
     liveState.searchPending = false;
     if (typeof message.searchMode === "boolean") {
       liveState.searchMode = message.searchMode;
-    } else if (["search_started", "join_detected", "assignment_completed", "search_telemetry_round"].includes(message.event)) {
+    } else if (message.event === "assignment_completed") {
+      liveState.searchMode = false;
+    } else if (["search_started", "join_detected", "search_telemetry_round"].includes(message.event)) {
       liveState.searchMode = true;
     } else if (["search_complete", "search_timeout"].includes(message.event)) {
       liveState.searchMode = false;
@@ -6701,6 +6962,24 @@ async function sendLiveSerialCommand(command, fields = {}) {
     updateStatusList();
     return null;
   }
+  const readOnlyBridgeCommands = new Set(["ping", "get_status", "get_channel_table", "get_assignments"]);
+  if (isLiveBridgeMode() && !isLiveBridgeControlAvailable() && !readOnlyBridgeCommands.has(command)) {
+    if (command === "clear_all_assignments") liveState.freshSessionPending = false;
+    if (command === "rescan_channels") liveState.spectrumRescanPending = false;
+    if (command === "start_search") liveState.searchPending = false;
+    if (command === "set_radio_profile") liveState.profileApplyPending = false;
+    if (command === "clear_assignment" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.deleteRequests.delete(Number(fields.nodeId));
+    }
+    if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
+      liveState.relockRequests.delete(Number(fields.nodeId));
+    }
+    appendLiveDebug("command rejected locally: LoRa bridge control link is not ready");
+    renderLiveControls();
+    renderLiveGcStatus();
+    updateStatusList();
+    return null;
+  }
   if (!liveState.connected || !liveState.port?.writable) {
     if (command === "clear_all_assignments") liveState.freshSessionPending = false;
     if (command === "rescan_channels") liveState.spectrumRescanPending = false;
@@ -6766,8 +7045,8 @@ async function requestLiveGcSnapshot() {
 
 function requestFreshSessionConfirmation() {
   if (liveState.freshSessionPending) return;
-  if (isLiveRemoteViewerMode()) {
-    appendLiveDebug("fresh session unavailable: remote live endpoint is read-only");
+  if (isLiveCommandReadOnlyMode()) {
+    appendLiveDebug(`fresh session unavailable: ${liveCommandReadOnlyMessage()}`);
     renderLiveControls();
     renderLiveGcStatus();
     return;
@@ -6793,9 +7072,9 @@ function cancelFreshSessionConfirmation() {
 
 async function startFreshSession() {
   if (liveState.freshSessionPending) return;
-  if (isLiveRemoteViewerMode()) {
+  if (isLiveCommandReadOnlyMode()) {
     liveState.freshSessionConfirming = false;
-    appendLiveDebug("fresh session unavailable: remote live endpoint is read-only");
+    appendLiveDebug(`fresh session unavailable: ${liveCommandReadOnlyMessage()}`);
     renderLiveControls();
     renderLiveGcStatus();
     return;
@@ -7427,8 +7706,8 @@ async function requestLiveDroneDelete(nodeId) {
   const id = Number(nodeId);
   const drone = getDroneById(id);
   if (!Number.isFinite(id) || !drone || !canDeleteLiveDrone(drone)) return;
-  if (isLiveRemoteViewerMode()) {
-    appendLiveDebug(`delete unavailable: remote live endpoint is read-only for node ${id}`);
+  if (isLiveCommandReadOnlyMode()) {
+    appendLiveDebug(`delete unavailable: ${liveCommandReadOnlyMessage()} node ${id}`);
     return;
   }
   if (!liveState.connected) {
@@ -7500,8 +7779,8 @@ function openLiveDroneActionSheet(drone, anchor = null) {
   relockBtn.className = "live-btn";
   relockBtn.type = "button";
   relockBtn.textContent = "Re-bind";
-  relockBtn.disabled = isLiveRemoteViewerMode();
-  relockBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+  relockBtn.disabled = isLiveCommandReadOnlyMode();
+  relockBtn.title = liveCommandReadOnlyMessage();
   relockBtn.addEventListener("click", () => {
     requestLiveDroneRelock(drone.id);
     closeLiveDroneActionSheet();
@@ -7513,8 +7792,8 @@ function openLiveDroneActionSheet(drone, anchor = null) {
     deleteBtn.className = "live-btn live-danger-btn";
     deleteBtn.type = "button";
     deleteBtn.textContent = liveState.deleteRequests.has(Number(drone.id)) ? "Deleting..." : "Delete";
-    deleteBtn.disabled = isLiveRemoteViewerMode() || liveState.deleteRequests.has(Number(drone.id));
-    deleteBtn.title = isLiveRemoteViewerMode() ? "Remote live endpoint is read-only." : "";
+    deleteBtn.disabled = isLiveCommandReadOnlyMode() || liveState.deleteRequests.has(Number(drone.id));
+    deleteBtn.title = liveCommandReadOnlyMessage();
     deleteBtn.addEventListener("click", () => {
       requestLiveDroneDelete(drone.id);
       closeLiveDroneActionSheet();
@@ -7637,7 +7916,8 @@ function renderLiveStatusList() {
     .filter((drone) => {
       if (!drone) return false;
       const latest = drone.getLatest && drone.getLatest();
-      return latest || liveState.bindingStates.has(Number(drone.id));
+      const id = Number(drone.id);
+      return latest || liveState.bindingStates.has(id) || liveState.linkStatuses.has(id);
     })
     .sort((a, b) => a.id - b.id);
 
@@ -7652,6 +7932,7 @@ function renderLiveStatusList() {
   sorted.forEach((d) => {
     const latest = d.getLatest();
     const bindingState = liveState.bindingStates.get(Number(d.id));
+    const linkStatus = liveState.linkStatuses.get(Number(d.id));
     const freshness = latest ? getLiveFreshnessState(d, now) : "offline";
     const displayState = getLiveDisplayState(d, freshness, now);
     const row = document.createElement("div");
@@ -7679,18 +7960,20 @@ function renderLiveStatusList() {
     const detail = document.createElement("div");
     if (latest) {
       renderLiveTimingLine(detail, d, latest, now);
-    } else {
+    } else if (bindingState) {
       renderLiveBindingLine(detail, bindingState, now);
+    } else {
+      renderLiveBridgeCardLine(detail, linkStatus, now);
     }
     const grid = document.createElement("div");
     grid.className = "live-entry-grid";
     const speed = Number(latest?.groundSpeed);
     const displayLatest = latest || {
-      frequencyMhz: bindingState?.frequencyMhz ?? null,
-      radioProfileId: bindingState?.radioProfileId ?? null,
-      rssi: bindingState?.rssi ?? null,
-      snr: bindingState?.snr ?? null,
-      satelliteCount: null,
+      frequencyMhz: bindingState?.frequencyMhz ?? linkStatus?.frequencyMhz ?? null,
+      radioProfileId: bindingState?.radioProfileId ?? linkStatus?.radioProfileId ?? null,
+      rssi: bindingState?.rssi ?? linkStatus?.rssi ?? null,
+      snr: bindingState?.snr ?? linkStatus?.snr ?? null,
+      satelliteCount: bindingState?.satelliteCount ?? linkStatus?.satelliteCount ?? null,
     };
     const fields = [
       ["Alt", latest ? `${Number(latest.alt || 0).toFixed(1)} m` : "N/A"],
@@ -7710,7 +7993,7 @@ function renderLiveStatusList() {
     main.appendChild(grid);
     row.appendChild(main);
 
-    const actionableBadge = !isLiveRemoteViewerMode() && (displayState === "offline" || displayState === "weak");
+    const actionableBadge = !isLiveCommandReadOnlyMode() && (displayState === "offline" || displayState === "weak");
     const badge = document.createElement(actionableBadge ? "button" : "div");
     badge.className = `live-freshness ${displayState}`;
     const badgeText = document.createElement("span");

@@ -74,11 +74,36 @@ Candidate:
   - [x] Include clear channel count.
   - [x] Include current scan mode.
   - [x] Include optional orphan occupied-channel recovery status.
+  - [x] Include optional all-lost recovery status.
 
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"allLostRecoveryActive":false,"allLostAssignedCount":0,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
+```
+
+All-lost recovery fields are optional. When the GC still has assignments but every active assignment is `OFFLINE` or `OFF`, firmware reports `allLostRecoveryActive:true`, `allLostRecoveryPhase:"shared_bind"` or `"assigned_rebind"`, and `allLostAssignedCount`. SGC uses `shared_bind` as the user-facing signal that the GC is already in shared-channel Bind mode even though assignments still exist.
+
+Bridge receiver mode uses the same USB serial transport but emits scene snapshots
+instead of per-packet telemetry. A `bridge_receiver` device emits:
+
+- `drones_state` with `source:"lora_bridge"`, `schemaVersion:1`, `sentAt`
+  using bridge `millis()`, and a full `drones[]` snapshot decoded from
+  `BRIDGE_SNAPSHOT`.
+- `gc_status` with `bridgeMode:true`, `backhaulFrequencyMhz`,
+  `backhaulProfile:"SF7/BW500/CR4/5"`, `backhaulLastPacketAgeMs`,
+  `backhaulRssi`, `backhaulSnr`, and `assignedDrones`.
+
+SGC treats serial `drones_state` as local telemetry: it stops mock mode, updates
+live drones by `nodeId`, preserves local aliases, and can publish the same scene
+to Cloudflare. In `bridgeMode`, SGC disables GC-mutating controls because the
+bridge path is one-way.
+
+Example bridge serial messages:
+
+```json
+{"type":"drones_state","schemaVersion":1,"sentAt":123456,"source":"lora_bridge","drones":[{"nodeId":6,"lat":32.0596637,"lng":34.8503487,"alt":18.4,"heading":127.5,"headingSource":"bridge_snapshot","courseOverGround":127.5,"yaw":130,"groundSpeed":8.4,"satelliteCount":12,"rssi":-78,"snr":9.5,"frequencyMhz":905.5,"radioProfileId":0,"sequenceId":44,"ageMs":180,"displayState":"online","txPeriodMs":100}]}
+{"type":"gc_status","nodeId":0,"radioProfileId":9,"sharedFrequencyMhz":915.0,"spreadingFactor":7,"bandwidthHz":500000,"codingRate":5,"txPowerDbm":22,"telemetryAirtimeMs":66.6,"txPeriodMs":1000,"assignedDrones":1,"bridgeMode":true,"backhaulFrequencyMhz":902.0,"backhaulProfile":"SF7/BW500/CR4/5","backhaulLastPacketAgeMs":250,"backhaulRssi":-61,"backhaulSnr":12.5,"scanMode":"bridge_receiver","gcMillis":123456}
 ```
 
 - [x] Milestone 3: Define assignment event JSON
@@ -127,6 +152,8 @@ Examples:
 
 Current timing note: the GC no longer waits for a separate timing proposal packet. It accepts valid 20-byte telemetry after `JOIN_ACK`, emits a first-packet observation, then locks the period from the next valid packet with a nonzero `sequenceDelta`.
 
+SGC binding UI note: the web app now creates a pre-telemetry drone row from existing bind lifecycle events. `join_request_received` / `search_event.join_detected` starts the blue `BINDING` row, `silence_sent`, `assign_sent`, `join_ack_received`, `assignment_active`, `post_ack_lock_listen`, `assigned_acquire_listen`, and `telemetry_period_observed` advance the progress ring. First `drone_telemetry` moves the row to `Timing 1/2`; only `telemetry_period_locked` or telemetry with `timingAccepted:true` completes the temporary bind state. Firmware event names remain unchanged for compatibility.
+
 Protocol note: live-position air control packets now use high-range packet IDs `0xA1-0xA6`. These IDs are not exposed directly in serial JSON, but the change prevents assigned-channel telemetry from node IDs such as `6` from being mistaken for legacy timing-control packets. This is a breaking firmware change; the GC and all drone ESP32s must be reflashed together.
 
 - [x] Milestone 3b: Define scanner event JSON
@@ -145,14 +172,19 @@ Examples:
 {"type":"scanner_event","event":"telemetry_received","nodeId":2,"estimatedTstGcMillis":123456,"nextTstGcMillis":123483,"missCount":0,"gcMillis":123482}
 {"type":"scanner_event","event":"telemetry_missed","nodeId":2,"nextTstGcMillis":123510,"missCount":1,"reason":"listen_window_expired","gcMillis":123490}
 {"type":"scanner_event","event":"phase_preserved_after_miss","nodeId":2,"missCount":1,"reason":"known_tst_preserved","gcMillis":123520}
-{"type":"scanner_event","event":"cad_recovery_queued","nodeId":2,"missCount":3,"reason":"missed_expected_windows","gcMillis":123900}
+{"type":"scanner_event","event":"cad_recovery_queued","nodeId":2,"missCount":12,"reason":"missed_expected_windows","gcMillis":123900}
 {"type":"scanner_event","event":"cad_recovery_probe","nodeId":2,"activityDetected":false,"cadStatus":"free","autoRelockAttempt":1,"noActivityProbeCount":1,"reason":"no_activity_probe_pending","gcMillis":124000}
 {"type":"scanner_event","event":"auto_relock_scheduled","nodeId":2,"autoRelockAttempt":1,"autoRelockMaxAttempts":5,"nextAutoRelockInMs":0,"reason":"weak_rssi_link_loss","gcMillis":124010}
 {"type":"scanner_event","event":"auto_relock_listen","nodeId":2,"autoRelockAttempt":1,"reason":"cad_gated_auto_relock","gcMillis":124020}
 {"type":"scanner_event","event":"search_skip_no_miss","nodeId":2,"skippedSlots":9,"reason":"shared_search_dwell","gcMillis":124200}
+{"type":"scanner_event","event":"all_lost_shared_bind","reason":"all_assignments_lost","gcMillis":125000}
+{"type":"scanner_event","event":"all_lost_assigned_rebind","nodeId":2,"frequencyMhz":917.5,"channelIndex":30,"reason":"all_lost_assigned_rebind","gcMillis":128600}
+{"type":"scanner_event","event":"all_lost_recovery_recovered","reason":"assigned_rebind_telemetry_received","gcMillis":129200}
 ```
 
 Default firmware behavior suppresses high-rate scanner events such as `assigned_listen`, `assigned_acquire_listen`, `shared_listen`, and `telemetry_received` unless `LIVE_POSITION_VERBOSE_SCANNER_EVENTS` is enabled. Keep normal `drone_telemetry` output lightweight enough that USB serial does not block the LoRa receive loop.
+
+All-lost recovery events are emitted when the GC has at least one assignment and every active assignment is already classified `OFFLINE` or `OFF`. The GC alternates between `all_lost_shared_bind` on the robust discovery channel and `all_lost_assigned_rebind` full-RX windows on the existing assignments until valid telemetry or a successful bind recovers at least one drone. This loop does not delete persisted assignments.
 
 - [x] Milestone 3c: Define orphan occupied-channel recovery JSON
   - [x] Emit recovery lifecycle events as `orphan_recovery_event`.
@@ -515,3 +547,16 @@ These tasks mirror `09_cloudflare_live_relay.md`.
 - [x] Do not relay raw firmware log text.
 - [x] Deploy and verify the Worker live endpoint with a direct WebSocket publisher/viewer smoke test.
 - [ ] Verify a remote SGC browser can display relayed telemetry from an operator browser.
+
+## LoRa Bridge V2 USB Contract
+
+These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
+
+- [x] Bridge receiver emits USB `drones_state` with `source:"lora_bridge"` for RF snapshots.
+- [x] Bridge receiver emits card-only drone entries when the GC reports an assignment but no GPS telemetry is known yet.
+  - These entries include `nodeId`, `displayState`, `frequencyMhz`, `radioProfileId`, `txPeriodMs`, RSSI/SNR when known, and omit `lat`/`lng`.
+- [x] Bridge receiver emits USB `gc_status` with `bridgeMode:true`, `bridgeControl`, `bridgeStale`, `bridgeCommandQueueDepth`, `backhaulLastPacketAgeMs`, `backhaulRssi`, and `backhaulSnr`.
+- [x] Bridge receiver emits optional `bridgeHandshake` status such as `waiting_for_beacon`, `beacon_seen`, `live`, or `stale`.
+- [x] Bridge receiver emits USB `command_ack` when a queued RF command is ACKed, rejected, or duplicate-ACKed by the GC/MaGC.
+- [x] Bridge receiver emits compact `assignments` and `channel_table` summaries from the latest RF snapshot.
+- [ ] Add a compact bridge event-batch USB mapping if we need smoother Bind/Search event mirroring than the 1 Hz snapshot/status path.

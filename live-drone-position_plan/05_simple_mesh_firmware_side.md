@@ -16,6 +16,14 @@ Dual-LoRa ground station mode is also supported:
 - MaGC and TeleGC exchange newline-delimited JSON over Inter-GC UART at
   `921600`; the existing `ground_station` role remains the single-module mode.
 
+Optional LoRa bridge mode is also supported:
+
+- Bridge receiver ESP32 (`bridge_receiver` / `bridge` / `lora_bridge`): fixed
+  `902.0 MHz / SF7 / BW500 / CR4/5` receiver that decodes GC/MaGC
+  `BRIDGE_SNAPSHOT` packets and emits USB `drones_state` for SGC.
+- Classic GC and MaGC can transmit one compact bridge scene snapshot every
+  `1000 ms` when `live_position.backhaul.enabled = true`.
+
 ## Milestones And Tasks
 
 - [x] Milestone 1: Add branch-specific firmware mode
@@ -37,6 +45,8 @@ Dual-LoRa ground station mode is also supported:
     - Serial boot logs should print `[OTA] Web OTA ready` before mesh initialization completes.
   - [x] Use a node-specific OTA SSID.
     - Firmware now advertises `simple-mesh-<node_id>`, for example `simple-mesh-4`, instead of one shared `simple-mesh` SSID for every board.
+    - Ground-control roles advertise `simple-mesh-GC`, `simple-mesh-MaGC`, or `simple-mesh-TeleGC`.
+    - The bridge receiver role advertises `simple-mesh-bridge` so it is easy to identify separately from generic node `0` devices.
   - [x] Keep the OTA password fixed for this branch.
     - Password remains `n3v3rd1sarm`; OTA page remains on `http://192.168.4.1:8080`.
   - [x] Emit periodic OTA AP diagnostics over USB serial.
@@ -60,6 +70,29 @@ Dual-LoRa ground station mode is also supported:
   - [ ] Bench-verify SGC connected to TeleGC can Bind through MaGC.
   - [ ] Bench-verify TeleGC receives telemetry and updates TST/period from packets.
   - [ ] Bench-verify single-GC mode still works unchanged.
+
+- [ ] Milestone 1C: Add always-ready LoRa bridge backhaul mode
+  - [x] Add `bridge_receiver` role plus `bridge` and `lora_bridge` aliases.
+  - [x] Add `live_position.backhaul` config for enable flag, frequency, period,
+    and max drones.
+  - [x] Define `BRIDGE_SNAPSHOT` packet `0xB1` with a 9-byte header and up to
+    five 31-byte drone records.
+  - [x] Add compile-time bridge packet size checks and boot airtime diagnostics.
+  - [x] Reserve telemetry channels `902.5-904.0 MHz` for the backhaul area.
+  - [x] Keep reserved channels exposed as normal `reserved` entries, without a
+    special UI reason.
+  - [x] Update classic GC/MaGC scheduler to transmit low-priority bridge
+    snapshots when backhaul is enabled.
+  - [x] Add TeleGC-to-MaGC scene snapshot forwarding over Inter-GC UART.
+  - [x] Add bridge receiver decode path and USB `drones_state` /
+    `gc_status.bridgeMode` output.
+  - [x] Add `BRIDGE_BEACON` / `BRIDGE_HELLO` presence handshake so GC/MaGC only
+    sends full snapshots after a bridge is present.
+  - [x] Add bridge hello heartbeat and GC/MaGC session timeout fallback to beacon
+    mode.
+  - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
+  - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
+  - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.
 
 - [x] Milestone 2: Implement binary packet definitions
   - [x] Define packet type IDs for shared-channel control packets.
@@ -100,6 +133,8 @@ Dual-LoRa ground station mode is also supported:
   - [x] Define BW500 channel center table from `902.5` to `927.5 MHz`.
   - [x] Mark `915.0 MHz` as shared discovery/control.
   - [x] Mark `914.5 MHz` and `915.5 MHz` as reserved/guard.
+  - [x] Mark `902.5 MHz` through `904.0 MHz` as reserved for the optional
+    bridge backhaul area.
   - [x] Treat remaining channels as telemetry candidates.
   - [x] Scan each telemetry candidate with the Fast, Balanced, and Robust simple profiles.
   - [x] Use CAD/LBT activity to classify channels as free or occupied.
@@ -327,17 +362,30 @@ Dual-LoRa ground station mode is also supported:
     - Drone steady telemetry reads the batched MSP live-position snapshot before TX, waits until its fixed MSP slot expires, then transmits on the regular local cadence.
     - Real-FC refresh uses the batched `MSP_MULTIPLE_MSP` path, so GPS, attitude, and altitude are refreshed together instead of single MSP jobs competing with one another.
   - [x] Use CAD-gated profile-aware recovery after repeated missed packets.
-  - [x] Preserve known TST phase after the first two listened misses.
+  - [x] Preserve known TST phase after the first eleven listened misses.
     - Early misses advance the predicted slot and emit `phase_preserved_after_miss`; they do not clear TST or start CAD/OFF classification.
-  - [x] Start automatic link recovery only after three consecutive listened misses.
+  - [x] Start automatic link recovery only after twelve consecutive listened misses.
     - Automatic recovery queues event-driven CAD/LBT recovery slots on the assigned channel/profile. Each scheduler pass can run at most one automatic CAD/LBT probe for one stale assignment.
     - Full RX relock is scheduled only when CAD/LBT detects activity, or once immediately from the first slot for a weak or unknown last RSSI (`<= -114 dBm` or unavailable).
   - [x] Cap automatic recovery slots and back off failed attempts.
     - Automatic recovery stops after `5` CAD recovery slots. Failed RX listens schedule the next CAD slot with `1s`, `2s`, `3s`, then `4s` backoff; RX is not retried during backoff unless a later CAD slot detects activity.
+  - [x] Add weak-link long-range recovery for assigned profile `64` (`SF12 / BW125 / CR4/8`).
+    - Profile `64` with last RSSI `<= -114 dBm` or unknown bypasses CAD-gated recovery and runs bounded full-RX sweeps instead.
+    - Sweep listen time is `max(4200 ms, txPeriodMs + airtimeMs + 700 ms)`, capped at `6000 ms`; the current profile `64` case listens for about `4200 ms`.
+    - The first sweep is immediate after the `12` listened-miss stale threshold. Failed sweeps back off by `5s`, `10s`, `15s`, then continue every `30s` while the assignment remains `OFFLINE`.
+    - Multi-drone recovery throttles long-range sweeps to avoid repeatedly stealing healthy known-phase receive windows.
+  - [x] Enable boosted SX1262 RX gain for SF12/BW125 profiles.
+    - The RadioLib backend calls `setRxBoostedGainMode(true, true)` when applying SF12/BW125 and warns without blocking if the chip rejects it.
   - [x] Classify strong-link silence as `OFF` and weak-link loss as `OFFLINE`.
     - Two separate CAD/LBT no-activity probes mark a strong-link drone `OFF`. Last RSSI `<= -114 dBm` or unknown remains `OFFLINE`.
   - [x] Protect known live drone TST windows from recovery/acquisition windows.
     - If a recovery/acquisition listen would overlap another drone's known predicted receive slot, the GC clips the recovery window or skips directly to the known slot. This is intended to prevent a disconnected node from causing another live node to cascade into offline state.
+  - [x] Add all-lost auto Bind / Re-bind cycling.
+    - When at least one assignment exists and every active assignment is already `OFFLINE` or `OFF`, the GC treats the station as having no usable drones.
+    - The scanner alternates robust shared-channel Bind dwell with a full assigned-channel re-bind round over persisted assignments until any drone is recovered.
+    - Assigned re-bind rounds use profile-aware full-RX windows, including the long profile `64` sweep timing, and do not delete or clear persisted assignments.
+    - The assigned re-bind round deadline is computed from the active assignments' listen windows, so several slow long-range drones are not clipped by the old fixed Search-round limit.
+    - The GC reports `gc_status.allLostRecoveryActive`, `allLostRecoveryPhase`, and `allLostAssignedCount`, plus `scanner_event` entries such as `all_lost_shared_bind`, `all_lost_assigned_rebind`, `all_lost_recovery_cycle`, and `all_lost_recovery_recovered`.
   - [x] Keep telemetry-period acquisition responsive after a drone rejoins.
     - After `JOIN_ACK`, the GC schedules assigned-channel telemetry acquisition immediately. If it misses a packet before timing locks, it retries after `20 ms` instead of backing off to the shared-channel interval.
   - [x] Remove the active drone timing-proposal retry loop.
@@ -592,6 +640,9 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Support the extra-long assigned telemetry profile `64` (`SF12 / BW125 / CR4/8`).
   - `TX_PERIOD_MAX_ACCEPT_MS` is now `2000 ms`, enough for profile `64`'s about `1712 ms` telemetry airtime and about `1787 ms` computed TX period.
   - Automatic recovery can listen up to `6000 ms`, OOCR up to `4200 ms`, and Search telemetry rounds use a dynamic budget so slow assignments are not clipped by the old `1500 ms` round deadline.
+- [ ] Bench-test weak-link reconnect on assigned profile `64`.
+  - Expected behavior: edge-link loss around `-120 dBm` remains `OFFLINE`, emits `long_range_rx_sweep_*` scanner events, keeps retrying beyond 60 seconds, and re-locks if packets become decodable again.
+  - Regression expectation: a strong-RSSI powered-off drone still reaches `OFF`, and fast/balanced/robust profiles still use CAD-gated recovery.
 - [x] Guard GC post-ACK acquisition against ACK-shaped stale/control packets.
   - Field log `sgc_gc_serial_2026-06-10T21-10-59-288Z.jsonl` showed `tx_period_ack_sent node 6` followed by repeated assigned-channel packets with `packetLen=12` and `firstByte=0xA6`, so the GC never emitted `drone_telemetry`.
   - Current firmware no longer sends `TX_PERIOD_ACK`, but the GC still ignores legacy ACK-shaped packets during assigned telemetry receive and continues acquisition instead of treating them as telemetry.
@@ -621,3 +672,16 @@ These tasks mirror `08_field_test_followups.md`.
 - [ ] Bench-verify `clear_assignment` removes the selected node from `/live_assignments.json`.
 - [ ] Bench-verify one Fast, one Balanced, and one Robust assignment.
 - [ ] Field-verify `WEAK` and `OFF` classification with real link conditions.
+
+## LoRa Bridge V2 Firmware
+
+These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
+
+- [x] Upgrade `BRIDGE_SNAPSHOT` to version `2` with command ACK and GC status summary fields.
+- [x] Add `BRIDGE_COMMAND` packet `0xC1` with compact command IDs for SGC actions.
+- [x] Include persisted-assignment placeholders in bridge snapshots even when no post-boot telemetry has arrived.
+- [x] Add GC/MaGC scheduled uplink RX after each backhaul downlink.
+- [x] Add duplicate-command cache and retry-safe ACK state.
+- [x] Add bridge receiver FIFO command queue and one-command-per-downlink-slot transmit behavior.
+- [x] Map bridge commands into existing GC command behavior for Bind, Re-bind, Re-scan, profile apply, clear one assignment, and clear all assignments.
+- [ ] Bench-verify RF command retry and duplicate ACK behavior with GC and bridge connected simultaneously.
