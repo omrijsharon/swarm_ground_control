@@ -24,6 +24,10 @@ Optional LoRa bridge mode is also supported:
 - Classic GC and MaGC can transmit one compact bridge scene snapshot every
   `1000 ms` when `live_position.backhaul.enabled = true`.
 
+ESP-NOW bridge transport is now the primary bridge path when
+`live_position.bridge_transport.enabled = true`; the LoRa bridge remains the
+automatic fallback.
+
 ## Milestones And Tasks
 
 - [x] Milestone 1: Add branch-specific firmware mode
@@ -685,3 +689,17 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Add bridge receiver FIFO command queue and one-command-per-downlink-slot transmit behavior.
 - [x] Map bridge commands into existing GC command behavior for Bind, Re-bind, Re-scan, profile apply, clear one assignment, and clear all assignments.
 - [ ] Bench-verify RF command retry and duplicate ACK behavior with GC and bridge connected simultaneously.
+
+## ESP-NOW Bridge Primary Firmware
+
+These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
+
+- [x] Add `live_position.bridge_transport` config and defaults.
+- [x] Add ESP-NOW bridge frame size checks for the current 250-byte payload limit.
+- [x] Add GC/MaGC ESP-NOW beacon, snapshot, command, ACK, and duplicate handling.
+- [x] Add bridge receiver ESP-NOW snapshot and command queue handling.
+- [x] Preserve LoRa bridge as automatic fallback.
+- [x] Keep ESP-NOW probe traffic active while LoRa fallback is live.
+- [x] Promote back to ESP-NOW automatically after fresh ESP-NOW bridge contact.
+- [ ] Bench-verify ESP-NOW bridge live status and 4 Hz snapshots.
+- [ ] Bench-verify LoRa fallback after ESP-NOW stale/loss and promotion back to ESP-NOW.

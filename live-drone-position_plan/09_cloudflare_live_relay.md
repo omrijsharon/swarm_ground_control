@@ -75,14 +75,17 @@ wss://www.flying-agents.com/swarm_ground_control/live/ws
 - [x] Disable operator commands while acting as a viewer.
 - [x] Disable Reset, Bind, Re-bind, Delete, Re-scan, and Profile Apply while acting as a viewer.
 - [x] Disable local drone rename and HOME editing while acting as a viewer.
-- [x] Show relay publish/receive rate and latency diagnostics in SGC.
+- [x] Show relay publish/receive rate, visible last-packet age, and latency diagnostics in SGC.
+- [x] Include publisher source metadata in `drones_state` so endpoint viewers can distinguish direct GC USB, ESP-NOW bridge, and LoRa bridge publishers.
 - [ ] Verify a remote WebSocket viewer receives relayed `drones_state` from a publisher smoke test.
 - [ ] Verify a remote browser receives live drone telemetry from an operator browser.
 - [ ] Verify relay disconnect/reconnect does not break USB serial reading.
 
 ## Scene Message Types
 
-`drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, and packet age. Serial telemetry arrivals drive the publish cadence with an `80 ms` minimum data interval, while the `250 ms` timer is kept as a heartbeat. Viewers ignore duplicate sequence snapshots so heartbeat frames do not distort displayed telemetry rate.
+`drones_state` is a full snapshot of live drone instances and includes publisher-side names, location, heading, speed, link display fields, packet age, and publisher source metadata. Serial telemetry arrivals drive the publish cadence with an `80 ms` minimum data interval, while the `250 ms` timer is kept as a heartbeat. Viewers ignore duplicate sequence snapshots so heartbeat frames do not distort displayed telemetry rate.
+
+Publisher source metadata lets endpoint viewers show whether the field computer is connected directly to a GC over USB or through a bridge receiver. When the publisher is bridge-fed, `publisherBridgeTransport` reports `espnow` or `lora`, with optional bridge age, RSSI/SNR, control freshness, handshake, and fallback reason fields. The Worker simply forwards and caches these fields as part of the scene snapshot.
 
 `drones_state` may also include pre-telemetry bind placeholders with `displayState:"binding"`, `nodeId`, name, optional radio/link fields, and bind phase/progress fields but no `lat`/`lng`. Viewers render these as read-only animated `BINDING` rows and omit map markers until telemetry supplies GPS coordinates.
 
@@ -93,7 +96,7 @@ Worker schema change.
 
 `homes_state` is a full snapshot of HOME instances and includes only `id`, `name`, `lat`, and `lng`. It is sent every 5000 ms, immediately when the publisher connects, and immediately after a HOME is added, renamed, moved, or deleted.
 
-`/live/status` exposes relay diagnostics for field debugging: publisher-to-Worker latency, Worker-side drone snapshot rate, latest drone snapshot age, latest payload drone age, cached viewer broadcast count, and message counters. The SGC relay tooltip mirrors the same split with viewer receive rate, Worker-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
+`/live/status` exposes relay diagnostics for field debugging: publisher-to-Worker latency, Worker-side drone snapshot rate, latest drone snapshot age, latest payload drone age, cached viewer broadcast count, and message counters. The SGC Relay row shows the latest Worker drone snapshot age directly in endpoint mode, and its tooltip mirrors the same split with viewer receive rate, Worker-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
 
 ## Milestone 4: Field Verification
 

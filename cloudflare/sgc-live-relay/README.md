@@ -11,10 +11,12 @@ The current deployment uses one public session named `public`. Viewers do not ne
 
 The relay intentionally mirrors only the scene instances that viewers need:
 
-- `drones_state`: full drone snapshot from the publisher SGC. Serial telemetry arrivals drive the cadence with an 80 ms minimum send interval; a 250 ms timer remains as a heartbeat/backup.
+- `drones_state`: full drone snapshot from the publisher SGC, including publisher source metadata. Serial telemetry arrivals drive the cadence with an 80 ms minimum send interval; a 250 ms timer remains as a heartbeat/backup.
 - `homes_state`: full HOME snapshot from the publisher SGC, sent every 5 seconds and immediately after HOME changes.
 
 The Worker caches the latest drone and HOME snapshots and sends them immediately to late-joining viewers. It rejects old firmware/diagnostic relay messages such as `drone_telemetry`, `gc_status`, `channel_table`, and scan/search events.
+
+Endpoint viewers use `drones_state.publisherSource` plus optional bridge fields such as `publisherBridgeTransport`, `publisherBridgeAgeMs`, `publisherBridgeRssi`, and `publisherBridgeSnr` to show whether the publisher computer is connected directly to GC USB or through an ESP-NOW/LoRa bridge.
 
 Publisher connections that do not publish any scene state within 5 seconds, or stop publishing for 10 seconds, are treated as stale and evicted so the real GC browser can reconnect.
 
@@ -34,7 +36,7 @@ Use these fields to split endpoint lag by segment:
 - `lastDronesStateAgeMs`: time since the Worker last received a drone snapshot.
 - `lastBroadcastViewerCount`: number of viewers that the latest snapshot was broadcast to.
 
-The SGC relay status tooltip also shows publisher rate, viewer receive rate, publisher-to-Cloudflare delay, Cloudflare-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
+The SGC Relay row shows the visible last drone snapshot age in endpoint mode. Its tooltip also shows publisher rate, viewer receive rate, publisher-to-Cloudflare delay, Cloudflare-to-viewer delay, end-to-end delay, and duplicate/applied drone counts.
 
 ## Deploy
 

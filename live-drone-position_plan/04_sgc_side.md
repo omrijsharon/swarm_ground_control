@@ -380,6 +380,7 @@ These tasks mirror `09_cloudflare_live_relay.md`.
 These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 
 - [x] Treat USB `drones_state` from `source:"lora_bridge"` as local serial telemetry.
+- [x] Treat USB `drones_state` from `source:"espnow_bridge"` as local serial telemetry.
 - [x] Render card-only bridge drones without GPS coordinates and omit their map markers until `lat`/`lng` arrives.
 - [x] Preserve local drone aliases for bridge-fed `nodeId` rows.
 - [x] Enable GC-mutating controls in bridge mode only when `gc_status.bridgeControl === true` and the backhaul packet age is under `3 s`.
@@ -389,3 +390,13 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Keep bridge controls disabled when the RF downlink is stale or the browser is a remote endpoint viewer.
 - [x] Consume bridge-emitted `command_ack` through the existing pending-command UI path.
 - [ ] Browser/RF-verify Bind, Re-bind, Re-scan, profile apply, and clear assignment through the bridge.
+
+## ESP-NOW Bridge Primary UI
+
+These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
+
+- [x] Show active bridge transport as ESP-NOW, LoRa, or generic bridge.
+- [x] Show secondary bridge transport state such as `ESP-NOW probing`, `ESP-NOW beacon`, or `LoRa standby`.
+- [x] Keep bridge controls governed by `bridgeControl` and fresh packet age.
+- [x] Parse ESP-NOW bridge snapshots without changing drone card/map behavior.
+- [ ] Browser-verify ESP-NOW bridge status, LoRa fallback status, and promotion-back status labels.

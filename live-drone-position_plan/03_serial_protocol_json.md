@@ -87,17 +87,23 @@ All-lost recovery fields are optional. When the GC still has assignments but eve
 Bridge receiver mode uses the same USB serial transport but emits scene snapshots
 instead of per-packet telemetry. A `bridge_receiver` device emits:
 
-- `drones_state` with `source:"lora_bridge"`, `schemaVersion:1`, `sentAt`
+- `drones_state` with `source:"espnow_bridge"` or `source:"lora_bridge"`,
+  `schemaVersion:1`, `sentAt`
   using bridge `millis()`, and a full `drones[]` snapshot decoded from
   `BRIDGE_SNAPSHOT`.
 - `gc_status` with `bridgeMode:true`, `backhaulFrequencyMhz`,
   `backhaulProfile:"SF7/BW500/CR4/5"`, `backhaulLastPacketAgeMs`,
   `backhaulRssi`, `backhaulSnr`, and `assignedDrones`.
+- ESP-NOW primary bridge status may also include `bridgeTransport`,
+  `bridgePrimary`, `bridgeFallback`, `espnowBridgeLive`,
+  `espnowBeaconLive`, `espnowProbing`, `espnowLastPacketAgeMs`,
+  `espnowLastSnapshotAgeMs`, `loraFallbackLive`, `loraLastPacketAgeMs`,
+  `bridgeFallbackReason`, `bridgePromotionCount`, and `bridgeDemotionCount`.
 
 SGC treats serial `drones_state` as local telemetry: it stops mock mode, updates
 live drones by `nodeId`, preserves local aliases, and can publish the same scene
-to Cloudflare. In `bridgeMode`, SGC disables GC-mutating controls because the
-bridge path is one-way.
+to Cloudflare. In `bridgeMode`, SGC enables GC-mutating controls only when
+`bridgeControl:true` and the bridge downlink is fresh.
 
 Example bridge serial messages:
 
@@ -560,3 +566,12 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Bridge receiver emits USB `command_ack` when a queued RF command is ACKed, rejected, or duplicate-ACKed by the GC/MaGC.
 - [x] Bridge receiver emits compact `assignments` and `channel_table` summaries from the latest RF snapshot.
 - [ ] Add a compact bridge event-batch USB mapping if we need smoother Bind/Search event mirroring than the 1 Hz snapshot/status path.
+
+## ESP-NOW Bridge Primary USB Contract
+
+These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
+
+- [x] Accept `drones_state` with `source:"espnow_bridge"`.
+- [x] Add bridge status fields for ESP-NOW probing, snapshot age, fallback reason, and promotion/demotion counters.
+- [x] Keep `source:"lora_bridge"` as fallback-compatible serial scene input.
+- [x] Add bridge transport status fields for ESP-NOW primary and LoRa fallback.

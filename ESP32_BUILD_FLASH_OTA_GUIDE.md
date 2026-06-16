@@ -208,8 +208,10 @@ The provisioning script temporarily writes `simple-mesh\data\config.json`, uploa
 
 ### Provision Single GC
 
-GC bridge support is enabled by default. The GC starts with lightweight bridge
-beacons and only sends full bridge snapshots after a bridge receiver says hello.
+GC bridge support is enabled by default. ESP-NOW is the primary bridge transport
+on Wi-Fi channel `1`; the existing UF LoRa bridge remains the fallback. The GC
+starts with lightweight bridge beacons and only sends full bridge snapshots
+after a bridge receiver says hello.
 For bench isolation, add `-BackhaulDisabled`.
 
 ```powershell
@@ -330,9 +332,11 @@ This writes:
 }
 ```
 
-The bridge receiver listens on `902.0 MHz / SF7 / BW500 / CR4/5`, decodes
-`BRIDGE_SNAPSHOT`, and emits `drones_state`, `assignments`, compact
-`channel_table`, and `gc_status.bridgeMode = true` over USB.
+The bridge receiver listens for ESP-NOW bridge beacons first and also keeps the
+LoRa fallback receiver on `902.0 MHz / SF7 / BW500 / CR4/5`. It decodes
+`BRIDGE_SNAPSHOT` over either transport and emits `drones_state`,
+`assignments`, compact `channel_table`, and `gc_status.bridgeMode = true` over
+USB.
 
 With bridge V2, SGC mutating controls are enabled only while the bridge reports
 `gc_status.bridgeControl = true` and a fresh backhaul packet age under `3 s`.

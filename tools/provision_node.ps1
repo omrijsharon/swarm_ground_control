@@ -16,6 +16,12 @@ param(
     [double]$BackhaulFrequencyMhz = 902.0,
     [int]$BackhaulPeriodMs = 1000,
     [int]$BackhaulMaxDrones = 5,
+    [switch]$BridgeTransportDisabled,
+    [int]$EspNowChannel = 1,
+    [int]$EspNowSnapshotPeriodMs = 250,
+    [int]$EspNowCommandRetryMs = 100,
+    [int]$EspNowStaleMs = 1000,
+    [int]$LoraFallbackAfterMs = 3000,
     [string]$FirmwareRepo = "C:\Users\tamipinhasi\Documents\PlatformIO\Projects\simple-mesh",
     [string]$Environment = "seeed-xiao-s3"
 )
@@ -61,7 +67,13 @@ function New-LiveNodeConfig {
         [bool]$BackhaulEnabled,
         [double]$BackhaulFrequencyMhz,
         [int]$BackhaulPeriodMs,
-        [int]$BackhaulMaxDrones
+        [int]$BackhaulMaxDrones,
+        [bool]$BridgeTransportEnabled,
+        [int]$EspNowChannel,
+        [int]$EspNowSnapshotPeriodMs,
+        [int]$EspNowCommandRetryMs,
+        [int]$EspNowStaleMs,
+        [int]$LoraFallbackAfterMs
     )
 
     if ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "telegc" -or $Role -eq "bridge") {
@@ -112,6 +124,16 @@ function New-LiveNodeConfig {
                     period_ms = $BackhaulPeriodMs
                     max_drones = $BackhaulMaxDrones
                 }
+                bridge_transport = [ordered]@{
+                    enabled = ($Role -eq "gc" -or $Role -eq "magc" -or $Role -eq "bridge") -and $BridgeTransportEnabled
+                    primary = "espnow"
+                    fallback = "lora"
+                    espnow_channel = $EspNowChannel
+                    espnow_snapshot_period_ms = $EspNowSnapshotPeriodMs
+                    espnow_command_retry_ms = $EspNowCommandRetryMs
+                    espnow_stale_ms = $EspNowStaleMs
+                    lora_fallback_after_ms = $LoraFallbackAfterMs
+                }
             }
         }
     }
@@ -144,6 +166,16 @@ function New-LiveNodeConfig {
                 frequency_mhz = $BackhaulFrequencyMhz
                 period_ms = $BackhaulPeriodMs
                 max_drones = $BackhaulMaxDrones
+            }
+            bridge_transport = [ordered]@{
+                enabled = $false
+                primary = "espnow"
+                fallback = "lora"
+                espnow_channel = $EspNowChannel
+                espnow_snapshot_period_ms = $EspNowSnapshotPeriodMs
+                espnow_command_retry_ms = $EspNowCommandRetryMs
+                espnow_stale_ms = $EspNowStaleMs
+                lora_fallback_after_ms = $LoraFallbackAfterMs
             }
         }
     }
@@ -179,7 +211,11 @@ try {
     if ($Role -ne "gc" -and $Role -ne "magc") {
         $effectiveBackhaulEnabled = $false
     }
-    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs -InterGcRxPin $InterGcRxPin -InterGcTxPin $InterGcTxPin -InterGcBaud $InterGcBaud -BackhaulEnabled $effectiveBackhaulEnabled -BackhaulFrequencyMhz $BackhaulFrequencyMhz -BackhaulPeriodMs $BackhaulPeriodMs -BackhaulMaxDrones $BackhaulMaxDrones
+    $effectiveBridgeTransportEnabled = -not [bool]$BridgeTransportDisabled
+    if ($Role -eq "drone") {
+        $effectiveBridgeTransportEnabled = $false
+    }
+    $nodeConfig = New-LiveNodeConfig -Role $Role -NodeId $NodeId -SimulatedFc ([bool]$SimulatedFc) -SimulatedMspBatchMs $SimulatedMspBatchMs -InterGcRxPin $InterGcRxPin -InterGcTxPin $InterGcTxPin -InterGcBaud $InterGcBaud -BackhaulEnabled $effectiveBackhaulEnabled -BackhaulFrequencyMhz $BackhaulFrequencyMhz -BackhaulPeriodMs $BackhaulPeriodMs -BackhaulMaxDrones $BackhaulMaxDrones -BridgeTransportEnabled $effectiveBridgeTransportEnabled -EspNowChannel $EspNowChannel -EspNowSnapshotPeriodMs $EspNowSnapshotPeriodMs -EspNowCommandRetryMs $EspNowCommandRetryMs -EspNowStaleMs $EspNowStaleMs -LoraFallbackAfterMs $LoraFallbackAfterMs
     $json = $nodeConfig | ConvertTo-Json -Depth 6
     Set-Utf8NoBomContent -Path $configPath -Value $json
 
@@ -202,6 +238,11 @@ try {
         Write-Host "Backhaul period ms: $BackhaulPeriodMs"
         Write-Host "Backhaul max drones: $BackhaulMaxDrones"
         Write-Host "Backhaul TX enabled: $effectiveBackhaulEnabled"
+        Write-Host "Bridge transport enabled: $effectiveBridgeTransportEnabled"
+        Write-Host "Bridge transport primary: espnow"
+        Write-Host "Bridge transport fallback: lora"
+        Write-Host "ESP-NOW channel: $EspNowChannel"
+        Write-Host "ESP-NOW snapshot period ms: $EspNowSnapshotPeriodMs"
     }
     Write-Host "LittleFS /config.json WILL be overwritten on the board."
     if (-not $ConfigOnly) {

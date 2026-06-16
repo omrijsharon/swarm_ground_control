@@ -293,14 +293,20 @@ const liveState = {
     viewerWorkerToViewerMs: null,
     viewerEndToEndMs: null,
     viewerWorkerDronesStateIntervalMs: null,
+    viewerLastDronesStateWorkerAt: null,
+    viewerLastDronesStatePublisherSentAt: null,
     viewerDronesCount: null,
     viewerDroneMaxAgeMs: null,
     viewerAppliedDroneCount: null,
     viewerDuplicateDroneCount: null,
     workerMessageCount: null,
     workerDronesStateCount: null,
+    workerLastDronesStateAt: null,
+    workerLastDronesStateAgeMs: null,
+    workerPublisherIdleMs: null,
   },
   remoteDroneNames: new Map(),
+  remotePublisherStatus: null,
 };
 let orbitCloseSuppressUntil = 0;
 
@@ -361,6 +367,153 @@ function getLiveBridgeDownlinkAgeMs() {
   return Number.isFinite(age) ? age : Infinity;
 }
 
+function getLiveBridgeTransportLabel(status = liveState.gcStatus || {}) {
+  const transport = String(status.bridgeTransport || "").toLowerCase();
+  if (transport === "espnow") return "ESP-NOW";
+  if (transport === "lora") return "LoRa";
+  if (status.espnowBridgeLive === true) return "ESP-NOW";
+  if (status.loraFallbackLive === true) return "LoRa";
+  return "Bridge";
+}
+
+function getLiveBridgeSecondaryStatus(status = liveState.gcStatus || {}) {
+  const transport = String(status.bridgeTransport || "").toLowerCase();
+  if (transport === "espnow") {
+    return status.loraFallbackLive === true ? "LoRa standby" : "";
+  }
+  if (transport === "lora") {
+    if (status.espnowBridgeLive === true || status.espnowBeaconLive === true) return "ESP-NOW beacon";
+    if (status.espnowProbing === true) return "ESP-NOW probing";
+    return "ESP-NOW standby";
+  }
+  if (status.espnowProbing === true) return "ESP-NOW probing";
+  return "";
+}
+
+function normalizeLiveBridgeTransport(value) {
+  const transport = String(value || "").trim().toLowerCase();
+  if (transport === "espnow" || transport === "esp-now") return "espnow";
+  if (transport === "lora" || transport === "lo-ra") return "lora";
+  return "";
+}
+
+function formatLiveBridgeTransportName(value) {
+  const transport = normalizeLiveBridgeTransport(value);
+  if (transport === "espnow") return "ESP-NOW";
+  if (transport === "lora") return "LoRa";
+  return "Bridge";
+}
+
+function buildLivePublisherSourceMetadata(now = Date.now()) {
+  const status = liveState.gcStatus || {};
+  const bridgeMode = status.bridgeMode === true;
+  const bridgeTransport = bridgeMode
+    ? normalizeLiveBridgeTransport(status.bridgeTransport) ||
+      (status.espnowBridgeLive === true ? "espnow" : status.loraFallbackLive === true ? "lora" : "")
+    : "";
+  const bridgeAgeMs = Number(status.backhaulLastPacketAgeMs);
+  return {
+    publisherSource: bridgeMode ? "bridge" : liveState.connected ? "gc_usb" : "unknown",
+    publisherSerialConnected: liveState.connected === true,
+    publisherSentAt: now,
+    publisherBridgeTransport: bridgeMode ? bridgeTransport || null : null,
+    publisherBridgeControl: bridgeMode ? status.bridgeControl === true : null,
+    publisherBridgeStale: bridgeMode ? status.bridgeStale === true : null,
+    publisherBridgeAgeMs:
+      bridgeMode && Number.isFinite(bridgeAgeMs) && bridgeAgeMs >= 0 && bridgeAgeMs < 0xFFFFFFFF
+        ? Math.round(bridgeAgeMs)
+        : null,
+    publisherBridgeRssi: bridgeMode && Number.isFinite(Number(status.backhaulRssi)) ? Number(status.backhaulRssi) : null,
+    publisherBridgeSnr: bridgeMode && Number.isFinite(Number(status.backhaulSnr)) ? Number(status.backhaulSnr) : null,
+    publisherBridgeHandshake: bridgeMode ? String(status.bridgeHandshake || "") || null : null,
+    publisherBridgeFallbackReason: bridgeMode ? String(status.bridgeFallbackReason || "") || null : null,
+  };
+}
+
+function normalizeLivePublisherSourceMetadata(message, receivedAt = Date.now()) {
+  if (!message || typeof message !== "object") return null;
+  const source = String(message.publisherSource || "").trim().toLowerCase();
+  const sceneSource = String(message.source || "").trim().toLowerCase();
+  const bridgeTransport = normalizeLiveBridgeTransport(message.publisherBridgeTransport);
+  const inferredBridgeTransport =
+    bridgeTransport ||
+    (sceneSource === "espnow_bridge" ? "espnow" : sceneSource === "lora_bridge" ? "lora" : "");
+  const publisherSource =
+    source === "bridge" || inferredBridgeTransport
+      ? "bridge"
+      : source === "gc_usb" || source === "usb_gc" || source === "direct_gc"
+        ? "gc_usb"
+        : source || "unknown";
+  const bridgeAgeMs = relayDebugNumber(message.publisherBridgeAgeMs);
+  const publisherSentAt = relayDebugNumber(message.publisherSentAt ?? message.sentAt);
+  return {
+    publisherSource,
+    publisherSerialConnected: message.publisherSerialConnected === true,
+    publisherSentAt,
+    receivedAt,
+    publisherBridgeTransport: inferredBridgeTransport || null,
+    publisherBridgeControl: message.publisherBridgeControl === true,
+    publisherBridgeStale: message.publisherBridgeStale === true,
+    publisherBridgeAgeMs: bridgeAgeMs,
+    publisherBridgeRssi: relayDebugNumber(message.publisherBridgeRssi),
+    publisherBridgeSnr: relayDebugNumber(message.publisherBridgeSnr),
+    publisherBridgeHandshake: message.publisherBridgeHandshake ? String(message.publisherBridgeHandshake) : "",
+    publisherBridgeFallbackReason: message.publisherBridgeFallbackReason ? String(message.publisherBridgeFallbackReason) : "",
+  };
+}
+
+function getLiveRemotePublisherBridgeAgeMs(now = Date.now()) {
+  const status = liveState.remotePublisherStatus;
+  const ageMs = relayDebugNumber(status?.publisherBridgeAgeMs);
+  if (ageMs === null) return null;
+  const receivedAt = relayDebugNumber(status?.receivedAt);
+  return receivedAt !== null ? ageMs + Math.max(0, now - receivedAt) : ageMs;
+}
+
+function formatLiveRemotePublisherSource() {
+  const status = liveState.remotePublisherStatus;
+  if (!status) return "Live endpoint";
+  if (status.publisherSource === "bridge") {
+    return `Live endpoint via ${formatLiveBridgeTransportName(status.publisherBridgeTransport)} bridge`;
+  }
+  if (status.publisherSource === "gc_usb") return "Live endpoint via GC USB";
+  return "Live endpoint";
+}
+
+function formatLiveRemotePublisherBridgeSummary(status = liveState.remotePublisherStatus || {}) {
+  if (!status || status.publisherSource !== "bridge") return "N/A";
+  const ageMs = getLiveRemotePublisherBridgeAgeMs();
+  const live = status.publisherBridgeControl === true && status.publisherBridgeStale !== true;
+  const parts = [
+    `${formatLiveBridgeTransportName(status.publisherBridgeTransport)} ${live ? "live" : "stale"}`,
+    `age ${formatRelayDebugMs(ageMs)}`,
+  ];
+  if (Number.isFinite(Number(status.publisherBridgeRssi))) {
+    parts.push(`${Number(status.publisherBridgeRssi).toFixed(0)} dBm`);
+  }
+  if (Number.isFinite(Number(status.publisherBridgeSnr))) {
+    parts.push(`${Number(status.publisherBridgeSnr).toFixed(1)} dB`);
+  }
+  return parts.join(" | ");
+}
+
+function formatLiveRemotePublisherBridgeDetails(status = liveState.remotePublisherStatus || {}) {
+  if (!status || status.publisherSource !== "bridge") return "";
+  const ageMs = getLiveRemotePublisherBridgeAgeMs();
+  const fallbackReason = status.publisherBridgeFallbackReason
+    ? String(status.publisherBridgeFallbackReason).replace(/_/g, " ")
+    : "";
+  return [
+    `Publisher computer is connected through a ${formatLiveBridgeTransportName(status.publisherBridgeTransport)} bridge.`,
+    status.publisherBridgeControl === true && status.publisherBridgeStale !== true
+      ? "Bridge control/downlink was fresh when this snapshot was published."
+      : "Bridge link was stale or control unavailable when this snapshot was published.",
+    `Publisher bridge age: ${formatRelayDebugMs(ageMs)}.`,
+    status.publisherBridgeHandshake ? `Handshake: ${status.publisherBridgeHandshake}.` : "",
+    fallbackReason ? `Fallback: ${fallbackReason}.` : "",
+  ].filter(Boolean).join(" ");
+}
+
 function isLiveBridgeControlAvailable() {
   if (!isLiveBridgeMode()) return false;
   if (liveState.gcStatus?.bridgeControl !== true) return false;
@@ -374,7 +527,7 @@ function isLiveCommandReadOnlyMode() {
 
 function liveCommandReadOnlyMessage() {
   if (isLiveRemoteViewerMode()) return "Remote live endpoint is read-only.";
-  if (isLiveBridgeMode()) return "LoRa bridge control link is not ready.";
+  if (isLiveBridgeMode()) return `${getLiveBridgeTransportLabel()} control link is not ready.`;
   return "";
 }
 
@@ -3975,6 +4128,13 @@ function formatRelayDebugHz(intervalMs) {
   return `${(1000 / ms).toFixed(1)} Hz`;
 }
 
+function getLiveRelayLastDronesStateAgeMs(now = Date.now()) {
+  const debug = liveState.relayDebug || {};
+  const workerReceivedAt = relayDebugNumber(debug.viewerLastDronesStateWorkerAt ?? debug.workerLastDronesStateAt);
+  if (workerReceivedAt !== null) return Math.max(0, now - workerReceivedAt);
+  return relayDebugNumber(debug.workerLastDronesStateAgeMs);
+}
+
 function getDronesStateMaxAgeMs(message) {
   const ages = Array.isArray(message?.drones)
     ? message.drones.map((drone) => relayDebugNumber(drone?.ageMs)).filter((ageMs) => ageMs !== null)
@@ -3988,13 +4148,16 @@ function getDronesStateCount(message) {
 
 function formatLiveRelayDebugSummary() {
   const debug = liveState.relayDebug || {};
+  const now = Date.now();
   if (liveState.relayRole === "publisher") {
     if (!debug.publisherLastDronesStateSentAt) return "N/A";
-    return `pub ${formatRelayDebugHz(debug.publisherLastDronesStateIntervalMs)} / age ${formatRelayDebugMs(debug.publisherLastDroneMaxAgeMs)}`;
+    const sentAgeMs = Math.max(0, now - Number(debug.publisherLastDronesStateSentAt));
+    return `pub ${formatRelayDebugHz(debug.publisherLastDronesStateIntervalMs)} / sent ${formatRelayDebugMs(sentAgeMs)} / data ${formatRelayDebugMs(debug.publisherLastDroneMaxAgeMs)}`;
   }
   if (liveState.relayRole === "viewer" || isLiveRemoteViewerMode()) {
-    if (!debug.viewerLastDronesStateReceivedAt) return "N/A";
-    return `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs)} / lag ${formatRelayDebugMs(debug.viewerEndToEndMs)}`;
+    const lastAgeMs = getLiveRelayLastDronesStateAgeMs(now);
+    if (!debug.viewerLastDronesStateReceivedAt && lastAgeMs === null) return "N/A";
+    return `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs || debug.viewerWorkerDronesStateIntervalMs)} / last ${formatRelayDebugMs(lastAgeMs)} / lag ${formatRelayDebugMs(debug.viewerEndToEndMs)}`;
   }
   return "N/A";
 }
@@ -4003,6 +4166,7 @@ function formatLiveBridgeRfSummary(status = liveState.gcStatus || {}) {
   if (!status?.bridgeMode) return "N/A";
   const handshake = String(status.bridgeHandshake || "");
   const ageMs = Number(status.backhaulLastPacketAgeMs);
+  const transport = getLiveBridgeTransportLabel(status);
   if (!Number.isFinite(ageMs) || ageMs >= 0xFFFFFFFF) {
     if (handshake === "waiting_for_beacon") return "Waiting for GC beacon";
     return "No GC RF";
@@ -4011,8 +4175,10 @@ function formatLiveBridgeRfSummary(status = liveState.gcStatus || {}) {
   const rssi = Number(status.backhaulRssi);
   const snr = Number(status.backhaulSnr);
   const queueDepth = Number(status.bridgeCommandQueueDepth);
+  const secondary = getLiveBridgeSecondaryStatus(status);
   const parts = [
-    live ? "Live" : (handshake === "beacon_seen" ? "Beacon" : "Stale"),
+    live ? `${transport} live` : (handshake === "beacon_seen" ? `${transport} beacon` : `${transport} stale`),
+    secondary,
     `age ${formatRelayDebugMs(ageMs)}`,
   ];
   if (Number.isFinite(rssi) && rssi > -127) {
@@ -4031,20 +4197,31 @@ function formatLiveBridgeRfDetails(status = liveState.gcStatus || {}) {
   if (!status?.bridgeMode) return "";
   const handshake = String(status.bridgeHandshake || "");
   const ageMs = Number(status.backhaulLastPacketAgeMs);
+  const transport = getLiveBridgeTransportLabel(status);
   if (!Number.isFinite(ageMs) || ageMs >= 0xFFFFFFFF) {
     if (handshake === "waiting_for_beacon") {
-      return "Bridge USB is connected and waiting for a GC bridge beacon.";
+      return "Bridge USB is connected and waiting for a GC bridge beacon over ESP-NOW or LoRa fallback.";
     }
-    return "Bridge USB is connected, but no GC backhaul downlink has been received.";
+    return "Bridge USB is connected, but no GC bridge downlink has been received.";
   }
   const queueDepth = Number(status.bridgeCommandQueueDepth);
   const ackStatus = status.bridgeLastAckStatus ? String(status.bridgeLastAckStatus) : "none";
   const ackReason = status.bridgeLastAckReason ? ` (${status.bridgeLastAckReason})` : "";
+  const espnowAge = Number(status.espnowLastPacketAgeMs);
+  const espnowSnapshotAge = Number(status.espnowLastSnapshotAgeMs);
+  const loraAge = Number(status.loraLastPacketAgeMs);
+  const secondary = getLiveBridgeSecondaryStatus(status);
+  const fallbackReason = status.bridgeFallbackReason ? String(status.bridgeFallbackReason).replace(/_/g, " ") : "";
   return [
     status.bridgeControl === true && status.bridgeStale !== true
-      ? "GC RF link is live."
-      : (handshake === "beacon_seen" ? "GC RF beacon received; waiting for a control snapshot." : "GC RF link is stale or control is unavailable."),
+      ? `${transport} bridge link is live.`
+      : (handshake === "beacon_seen" ? `${transport} beacon received; waiting for a control snapshot.` : "Bridge RF link is stale or control is unavailable."),
+    secondary ? `${secondary}.` : "",
+    fallbackReason ? `Fallback: ${fallbackReason}.` : "",
     `Last downlink age: ${formatRelayDebugMs(ageMs)}.`,
+    Number.isFinite(espnowAge) && espnowAge < 0xFFFFFFFF ? `ESP-NOW age: ${formatRelayDebugMs(espnowAge)}.` : "",
+    Number.isFinite(espnowSnapshotAge) && espnowSnapshotAge < 0xFFFFFFFF ? `ESP-NOW snapshot age: ${formatRelayDebugMs(espnowSnapshotAge)}.` : "",
+    Number.isFinite(loraAge) && loraAge < 0xFFFFFFFF ? `LoRa age: ${formatRelayDebugMs(loraAge)}.` : "",
     Number.isFinite(queueDepth) ? `Command queue: ${queueDepth}.` : "",
     `Last ACK: ${ackStatus}${ackReason}.`,
   ].filter(Boolean).join(" ");
@@ -4052,6 +4229,7 @@ function formatLiveBridgeRfDetails(status = liveState.gcStatus || {}) {
 
 function formatLiveRelayDebugDetails() {
   const debug = liveState.relayDebug || {};
+  const lastBroadcastAgeMs = getLiveRelayLastDronesStateAgeMs();
   if (liveState.relayRole === "publisher") {
     if (!debug.publisherLastSentAt) return liveState.relayLastError || "";
     return [
@@ -4065,6 +4243,7 @@ function formatLiveRelayDebugDetails() {
     if (!debug.viewerLastReceivedAt) return liveState.relayLastError || "";
     return [
       `rx ${formatRelayDebugHz(debug.viewerLastDronesStateIntervalMs)}`,
+      `last relay packet ${formatRelayDebugMs(lastBroadcastAgeMs)}`,
       `pub->CF ${formatRelayDebugMs(debug.viewerPublisherToWorkerMs)}`,
       `CF->viewer ${formatRelayDebugMs(debug.viewerWorkerToViewerMs)}`,
       `end-to-end ${formatRelayDebugMs(debug.viewerEndToEndMs)}`,
@@ -4237,6 +4416,7 @@ function makeLiveDronesStateMessage(now = Date.now()) {
     type: "drones_state",
     schemaVersion: 1,
     sentAt: now,
+    ...buildLivePublisherSourceMetadata(now),
     drones: liveDrones,
   };
 }
@@ -4339,6 +4519,8 @@ function recordLiveRelayReceive(envelope) {
   debug.viewerLastDronesStateIntervalMs =
     debug.viewerLastDronesStateReceivedAt ? Math.max(0, now - debug.viewerLastDronesStateReceivedAt) : null;
   debug.viewerLastDronesStateReceivedAt = now;
+  debug.viewerLastDronesStateWorkerAt = workerReceivedAt;
+  debug.viewerLastDronesStatePublisherSentAt = publisherSentAt;
   debug.viewerPublisherToWorkerMs =
     relayDebugNumber(envelope?.publisherToWorkerMs) ??
     (workerReceivedAt !== null && publisherSentAt !== null ? Math.max(0, workerReceivedAt - publisherSentAt) : null);
@@ -4376,6 +4558,9 @@ function handleLiveRelayEnvelope(raw) {
     liveState.relayDebug.viewerPublisherToWorkerMs = relayDebugNumber(envelope.lastPublisherToWorkerMs);
     liveState.relayDebug.viewerDronesCount = relayDebugNumber(envelope.lastDronesStateDroneCount);
     liveState.relayDebug.viewerDroneMaxAgeMs = relayDebugNumber(envelope.lastDronesStateMaxDroneAgeMs);
+    liveState.relayDebug.workerLastDronesStateAt = relayDebugNumber(envelope.lastDronesStateAt);
+    liveState.relayDebug.workerLastDronesStateAgeMs = relayDebugNumber(envelope.lastDronesStateAgeMs);
+    liveState.relayDebug.workerPublisherIdleMs = relayDebugNumber(envelope.publisherIdleMs);
     liveState.relayLastError = "";
     renderLiveControls();
     renderLiveGcStatus();
@@ -5632,14 +5817,21 @@ function renderLiveGcStatus() {
   const occupied = Number.isFinite(channelSummary.occupied) ? channelSummary.occupied : 0;
   const free = Number.isFinite(channelSummary.free) ? channelSummary.free : null;
   const sourceValue = isLiveRemoteViewerMode()
-    ? "Live endpoint"
+    ? formatLiveRemotePublisherSource()
     : isLiveBridgeMode()
-      ? "LoRa bridge"
+      ? `${getLiveBridgeTransportLabel(status)} bridge`
       : liveState.connected ? "USB connected" : "USB disconnected";
   const items = [
     { label: "Source", value: sourceValue },
     { label: "Relay", value: formatLiveRelayDebugSummary() },
-    ...(isLiveBridgeMode() ? [{ label: "Bridge RF", value: formatLiveBridgeRfSummary(status), title: formatLiveBridgeRfDetails(status) }] : []),
+    ...(isLiveRemoteViewerMode() && liveState.remotePublisherStatus?.publisherSource === "bridge"
+      ? [{
+          label: "Bridge",
+          value: formatLiveRemotePublisherBridgeSummary(),
+          title: formatLiveRemotePublisherBridgeDetails(),
+        }]
+      : []),
+    ...(isLiveBridgeMode() ? [{ label: "Bridge", value: formatLiveBridgeRfSummary(status), title: formatLiveBridgeRfDetails(status) }] : []),
     { label: "Profile", value: liveState.gcStatus ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
@@ -6332,7 +6524,10 @@ function handleLiveLinkStatusForBinding(message, source = "serial") {
 
 function applyLiveDronesState(message, source = "live-endpoint") {
   const isSerialSceneState = source === "serial";
-  const isBridgeSerialScene = isSerialSceneState && String(message?.source || "").toLowerCase() === "lora_bridge";
+  const sceneSource = String(message?.source || "").toLowerCase();
+  const isBridgeSerialScene =
+    isSerialSceneState &&
+    (sceneSource === "lora_bridge" || sceneSource === "espnow_bridge" || sceneSource === "bridge");
   if ((source === "live-endpoint" || isSerialSceneState) && !liveState.serialTelemetrySeen) {
     stopLivePositionMock({ clearDrones: true, clearStatus: true });
     liveState.serialTelemetrySeen = true;
@@ -6344,6 +6539,9 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   }
 
   const now = Date.now();
+  if (source === "live-endpoint") {
+    liveState.remotePublisherStatus = normalizeLivePublisherSourceMetadata(message, now);
+  }
   const seenNodeIds = new Set();
   const remoteNames = new Map();
   const entries = Array.isArray(message.drones) ? message.drones : [];
@@ -6456,6 +6654,7 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   if (source === "live-endpoint") {
     liveState.relayDebug.viewerAppliedDroneCount = appliedDroneCount;
     liveState.relayDebug.viewerDuplicateDroneCount = duplicateDroneCount;
+    renderLiveGcStatus();
   }
   liveState.remoteDroneNames = remoteNames;
   const before = drones.length;
@@ -6974,7 +7173,7 @@ async function sendLiveSerialCommand(command, fields = {}) {
     if (command === "relock_drone" && Number.isFinite(Number(fields.nodeId))) {
       liveState.relockRequests.delete(Number(fields.nodeId));
     }
-    appendLiveDebug("command rejected locally: LoRa bridge control link is not ready");
+    appendLiveDebug(`command rejected locally: ${liveCommandReadOnlyMessage()}`);
     renderLiveControls();
     renderLiveGcStatus();
     updateStatusList();
@@ -13052,6 +13251,7 @@ window.addEventListener("DOMContentLoaded", () => {
     updateCommandSequencePanel();
     updateTooltip();
     renderLiveControls();
+    if (isLiveRemoteViewerMode()) renderLiveGcStatus();
     if (LIVE_POSITION_MODE) draw();
   }, 1000);
 

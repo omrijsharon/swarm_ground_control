@@ -216,6 +216,7 @@ export class LiveRelaySession {
     server.addEventListener("message", (event) => this.handlePublisherMessage(server, event.data));
     server.addEventListener("close", () => this.removePublisher(server));
     server.addEventListener("error", () => this.removePublisher(server));
+    const now = Date.now();
     this.safeSend(server, {
       kind: "relay_status",
       state: "connected",
@@ -229,6 +230,7 @@ export class LiveRelaySession {
       dronesStateCount: this.dronesStateCount,
       homesStateCount: this.homesStateCount,
       lastDronesStateIntervalMs: this.lastDronesStateIntervalMs,
+      lastDronesStateAgeMs: this.lastDronesStateAt ? Math.max(0, now - this.lastDronesStateAt) : null,
       lastPublisherToWorkerMs: this.lastPublisherToWorkerMs,
     });
     this.broadcastStatus();
@@ -253,6 +255,7 @@ export class LiveRelaySession {
       });
     });
 
+    const now = Date.now();
     this.safeSend(server, {
       kind: "relay_status",
       state: "connected",
@@ -270,6 +273,7 @@ export class LiveRelaySession {
       dronesStateCount: this.dronesStateCount,
       homesStateCount: this.homesStateCount,
       lastDronesStateIntervalMs: this.lastDronesStateIntervalMs,
+      lastDronesStateAgeMs: this.lastDronesStateAt ? Math.max(0, now - this.lastDronesStateAt) : null,
       lastPublisherToWorkerMs: this.lastPublisherToWorkerMs,
     });
     if (!this.publisher) {
@@ -426,6 +430,7 @@ export class LiveRelaySession {
       homesStateCount: this.homesStateCount,
       lastDronesStateIntervalMs: this.lastDronesStateIntervalMs,
       lastDronesStateRateHz: this.lastDronesStateIntervalMs > 0 ? 1000 / this.lastDronesStateIntervalMs : null,
+      lastDronesStateAgeMs: this.lastDronesStateAt ? Math.max(0, now - this.lastDronesStateAt) : null,
       lastPublisherToWorkerMs: this.lastPublisherToWorkerMs,
       lastDronesStateDroneCount: this.lastDronesStateDroneCount,
       lastDronesStateMinDroneAgeMs: this.lastDronesStateMinDroneAgeMs,
