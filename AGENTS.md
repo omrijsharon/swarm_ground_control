@@ -70,6 +70,19 @@ Rules:
 
 This checklist behavior is part of the desired workflow for this branch.
 
+## Context Retrieval And Semantic Search
+
+When a task needs retrieval, semantic search, or summarization inside a large file or code path, spawn a sub-agent for that retrieval pass whenever sub-agent tools are available.
+
+Use sub-agents especially for:
+
+- Summarizing long code files such as `script.js` or simple-mesh `src\live_position_protocol.cpp`.
+- Finding all relevant call sites or behavior paths for a feature or bug.
+- Searching documentation, logs, or plans for source-backed context.
+- Producing compact cheatsheets before making an implementation change.
+
+The goal is to preserve the main context window for decisions, edits, and verification. Keep delegated retrieval tasks narrow and read-only unless the user explicitly asks for parallel implementation work.
+
 ## Current Repo Reality
 
 At the time this guide was updated, the checked-in SGC app defaults to the live-position branch UI while retaining the older C2 prototype code:
