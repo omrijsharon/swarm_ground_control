@@ -269,6 +269,9 @@ const liveState = {
   assignmentTelemetryWatchdogs: new Map(),
   droneAliases: loadLiveDroneAliases(),
   droneActionSheet: null,
+  followDroneId: null,
+  followMovePending: false,
+  followResumeAt: 0,
   homePlacementActive: false,
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
   mockActive: false,
@@ -1410,6 +1413,7 @@ function focusTeamView(team) {
 }
 
 function clearSelection(hideTooltip = true) {
+  stopLiveDroneFollow();
   pinnedTeamId = null;
   pinnedDroneId = null;
   hoveredDroneId = null;
@@ -1910,6 +1914,59 @@ function scrollTeamIntoView(teamId) {
   header.scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
+function stopLiveDroneFollow() {
+  if (!LIVE_POSITION_MODE) return;
+  liveState.followDroneId = null;
+  liveState.followMovePending = false;
+  liveState.followResumeAt = 0;
+}
+
+function syncLiveDroneFollowState() {
+  if (!LIVE_POSITION_MODE || liveState.followDroneId === null) return false;
+  const followId = Number(liveState.followDroneId);
+  if (!Number.isFinite(followId) || Number(pinnedDroneId) !== followId || !getDroneById(followId)) {
+    stopLiveDroneFollow();
+    return false;
+  }
+  return true;
+}
+
+function startLiveDroneFollow(id, { resumeDelayMs = 650 } = {}) {
+  if (!LIVE_POSITION_MODE) return;
+  const followId = Number(id);
+  if (!Number.isFinite(followId) || !getDroneById(followId)) {
+    stopLiveDroneFollow();
+    return;
+  }
+  liveState.followDroneId = followId;
+  liveState.followMovePending = false;
+  const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  liveState.followResumeAt = now + Math.max(0, Number(resumeDelayMs) || 0);
+}
+
+function queueLiveDroneFollowCenter(drone, { force = false } = {}) {
+  if (!LIVE_POSITION_MODE || !map || !drone || !syncLiveDroneFollowState()) return;
+  if (Number(drone.id) !== Number(liveState.followDroneId)) return;
+  const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  if (!force && Number(liveState.followResumeAt) > now) return;
+  if (liveState.followMovePending) return;
+  liveState.followMovePending = true;
+  requestAnimationFrame(() => {
+    liveState.followMovePending = false;
+    if (!syncLiveDroneFollowState()) return;
+    const followedDrone = getDroneById(liveState.followDroneId);
+    const latest = followedDrone && followedDrone.getLatest && followedDrone.getLatest();
+    const lat = Number(latest?.lat);
+    const lng = Number(latest?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    if (typeof map.panTo === "function") {
+      map.panTo([lat, lng], { animate: false });
+    } else {
+      map.setView([lat, lng], map.getZoom(), { animate: false });
+    }
+  });
+}
+
 function setPinnedDrone(id) {
   const nextTeam = getTeamForDrone(id);
   const nextTeamId = nextTeam ? nextTeam.id : null;
@@ -1918,6 +1975,7 @@ function setPinnedDrone(id) {
   const team = getTeamForDrone(id);
   pinnedTeamId = team ? team.id : null;
   pinnedDroneId = team ? null : id;
+  syncLiveDroneFollowState();
   hoveredDroneId = id;
   tooltipMode = "info";
   closeSequenceMenu();
@@ -1941,6 +1999,7 @@ function setPinnedDrone(id) {
 }
 
 function setPinnedTeam(id, suppressTooltip = false) {
+  stopLiveDroneFollow();
   clearTooltipPinnedIfSelectionChanges(null, id);
   pinnedTeamId = id;
   pinnedDroneId = null;
@@ -7519,6 +7578,7 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       },
       receivedAt
     );
+    queueLiveDroneFollowCenter(drone);
     appliedDroneCount += 1;
   });
 
@@ -7542,6 +7602,7 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   });
   if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
+  syncLiveDroneFollowState();
   if (before !== drones.length || entries.length) {
     updateStatusList();
     updateTooltip();
@@ -7675,6 +7736,7 @@ function applyLiveTelemetry(message, source = "serial") {
     },
     now
   );
+  queueLiveDroneFollowCenter(drone);
   updateStatusList();
   renderLiveControls();
   draw();
@@ -7689,6 +7751,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   drones = drones.filter((drone) => drone.type !== "live");
   if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
+  syncLiveDroneFollowState();
   liveState.serialTelemetrySeen = false;
   liveState.relockRequests.clear();
   liveState.linkStatuses.clear();
@@ -7727,7 +7790,10 @@ function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
       assignments: liveState.channelTable.assignments.filter((assignment) => Number(assignment.nodeId) !== id),
     };
   }
-  if (pinnedDroneId === id) pinnedDroneId = null;
+  if (pinnedDroneId === id) {
+    pinnedDroneId = null;
+    stopLiveDroneFollow();
+  }
   if (hoveredDroneId === id) hoveredDroneId = null;
   if (before !== drones.length) {
     updateStatusList();
@@ -8790,6 +8856,7 @@ function stopLivePositionMock({ clearDrones = false, clearStatus = false } = {})
     drones = [];
     pinnedDroneId = null;
     hoveredDroneId = null;
+    stopLiveDroneFollow();
   }
   renderLiveControls();
   updateStatusList();
@@ -8830,6 +8897,7 @@ function scheduleLiveMockTick(drone, rng) {
       command: "Mock live telemetry",
       armed: true,
     });
+    queueLiveDroneFollowCenter(drone);
     updateStatusList();
     draw();
     const nextDelay = delayHint < 0.03 ? 5600 : delayHint < 0.12 ? 1800 : 220 + rng() * 260;
@@ -9606,9 +9674,11 @@ function renderLiveStatusList() {
     row.addEventListener("click", () => {
       if (performance.now() < suppressStatusClickUntil) return;
       if (pinnedDroneId === d.id) {
+        stopLiveDroneFollow();
         setPinnedDrone(null);
       } else {
         focusDroneById(d.id);
+        startLiveDroneFollow(d.id, { resumeDelayMs: 650 });
       }
     });
     attachLiveDroneLongPress(row, d);
