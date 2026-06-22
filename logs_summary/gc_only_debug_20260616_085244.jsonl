@@ -1,0 +1,94 @@
+{"kind":"info","source":"gc","port":"COM18","raw":"opened COM18 at 921600","timestamp":"2026-06-16T05:52:44.198+00:00","lineIndex":1}
+{"kind":"tx","source":"gc","port":"COM18","raw":"{\"type\":\"command\",\"command\":\"get_status\",\"commandId\":\"dbg-gc-0001\"}","json":{"type":"command","command":"get_status","commandId":"dbg-gc-0001"},"timestamp":"2026-06-16T05:52:44.404+00:00","lineIndex":2}
+{"kind":"rx","source":"gc","port":"COM18","raw":"ESP-ROM:esp32s3-20210327","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":3}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Build:Mar 27 2021","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":4}
+{"kind":"rx","source":"gc","port":"COM18","raw":"rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":5}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Saved PC:0x420a756a","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":6}
+{"kind":"rx","source":"gc","port":"COM18","raw":"SPIWP:0xee","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":7}
+{"kind":"rx","source":"gc","port":"COM18","raw":"mode:DIO, clock div:1","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":8}
+{"kind":"rx","source":"gc","port":"COM18","raw":"load:0x3fce3808,len:0x4bc","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":9}
+{"kind":"rx","source":"gc","port":"COM18","raw":"load:0x403c9700,len:0xbd8","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":10}
+{"kind":"rx","source":"gc","port":"COM18","raw":"load:0x403cc700,len:0x2a0c","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":11}
+{"kind":"rx","source":"gc","port":"COM18","raw":"entry 0x403c98d0","timestamp":"2026-06-16T05:52:44.415+00:00","lineIndex":12}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":13}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=== Drone Follow-Me Test Firmware ===","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":14}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Configuration loaded successfully","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":15}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] Applied live radio profile to runtime config","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":16}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":17}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=== Configuration ===","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":18}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Node ID: 0","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":19}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Node Role: ground_station","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":20}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":21}
+{"kind":"rx","source":"gc","port":"COM18","raw":"LoRa Settings:","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":22}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Frequency: 915.00 MHz","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":23}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  TX Power: 22 dBm","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":24}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Spreading Factor: 8","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":25}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Bandwidth: 500000 Hz","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":26}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Coding Rate: 4/5","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":27}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Preamble Length: 8","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":28}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Sync Word: 0x12","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":29}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":30}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Mesh Settings:","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":31}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Max Forwards: 0","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":32}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Buffer Size: 50","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":33}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  LBT Threshold: -120 dBm","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":34}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Backoff: 100-1000 ms","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":35}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Test Timeout: 10 sec","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":36}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":37}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Live Position:","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":38}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Simulated FC: no","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":39}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Simulated MSP Batch: 8 ms","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":40}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Inter-GC UART:","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":41}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Enabled: no","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":42}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Baud: 921600","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":43}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    RX Pin: 44","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":44}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    TX Pin: 43","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":45}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Backhaul:","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":46}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Enabled: yes","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":47}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Frequency: 902.000 MHz","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":48}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Period: 1000 ms","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":49}
+{"kind":"rx","source":"gc","port":"COM18","raw":"    Max Drones: 5","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":50}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=====================","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":51}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":52}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Node ID: 0","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":53}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Node Role: ground_station","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":54}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Hardware: Seeed XIAO ESP32-S3","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":55}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[  2266][E][vfs_api.cpp:105] open(): /littlefs/gs_coords.json does not exist, no permits for creation","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":56}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] Starting Web OTA service...","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":57}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] Initializing Web OTA for node 0 (SSID: simple-mesh-GC)","timestamp":"2026-06-16T05:52:46.498+00:00","lineIndex":58}
+{"kind":"rx","source":"gc","port":"COM18","raw":"E (4479) wifi_init_default: netstack cb reg failed with 12308","timestamp":"2026-06-16T05:52:46.702+00:00","lineIndex":59}
+{"kind":"rx","source":"gc","port":"COM18","raw":"E (4481) wifi_init_default: esp_wifi_get_mac failed with 12289","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":60}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] AP started: ssid=simple-mesh-GC channel=1 mac=DA:3B:DA:74:10:10 ip=192.168.4.1","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":61}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] Web OTA ready: http://192.168.4.1:8080 (SSID: simple-mesh-GC)","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":62}
+{"kind":"rx","source":"gc","port":"COM18","raw":"MSP Serial skipped for ground-control role","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":63}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":64}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=== SimpleMesh Initialization ===","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":65}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Initializing Seeed XIAO ESP32-S3 radio...","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":66}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Frequency: 915.00 MHz","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":67}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  Bandwidth: 500.0 kHz","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":68}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  SF: 8","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":69}
+{"kind":"rx","source":"gc","port":"COM18","raw":"  CR: 4/5","timestamp":"2026-06-16T05:52:47.114+00:00","lineIndex":70}
+{"kind":"rx","source":"gc","port":"COM18","raw":"SX1262 begin() failed: -2","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":71}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Radio backend initialization failed","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":72}
+{"kind":"rx","source":"gc","port":"COM18","raw":"ERROR: Radio initialization failed","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":73}
+{"kind":"rx","source":"gc","port":"COM18","raw":"CRITICAL ERROR: Mesh init failed!","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":74}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Continuing in OTA-only mode (mesh disabled)","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":75}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":76}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=== Auto-Tune Frequency Scan ===","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":77}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Skipping scan, using fixed frequency: 915.00 MHz","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":78}
+{"kind":"rx","source":"gc","port":"COM18","raw":"=== Auto-Tune Complete ===","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":79}
+{"kind":"rx","source":"gc","port":"COM18","raw":"","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":80}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[ 12949][E][vfs_api.cpp:105] open(): /littlefs/live_radio_profile.json does not exist, no permits for creation","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":81}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] no persisted default radio profile file","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":82}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] Protocol v1 enabled","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":83}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] radio_profiles: count=73 default=0 variable_fields=sf,bw,cr,preamble,airtime_buffer fixed_tx_power=22 dBm","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":84}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] packets: join_request=5 silence=4 join_assign=9 join_ack=5 tx_period_proposal=12 tx_period_ack=6 telemetry=20 bytes","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":85}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] radio: profile=0 sf=8 bw=500000 cr=4/5 preamble=8 crc=1 tx_power=22 dBm buffer=74 ms","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":86}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] discovery_radio: profile=255 sf=12 bw=125000 cr=4/8 preamble=8 crc=1 tx_power=22 dBm","timestamp":"2026-06-16T05:52:57.157+00:00","lineIndex":87}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] airtime: silence_4=925.696 ms join_request_5=925.696 ms join_assign_9=1187.840 ms join_ack_5=925.696 ms telemetry_20=25.728 ms tx_period=100 ms","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":88}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] bridge_backhaul: snapshot=0xB1/v2 command=0xC1/v1 profile=9 sf=7 bw=500000 cr=4/5 freq=902.0 MHz snapshot_full=174 bytes airtime=70.464 ms command6=9.024 ms command7=9.024 ms","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":89}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] channels: shared=915.0 MHz spacing=0.5 MHz bw500_total=51 telemetry_candidates=44","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":90}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[LIVE-POSITION] GC boot channel scan skipped because radio is not ready","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":91}
+{"kind":"rx","source":"gc","port":"COM18","raw":"Setup complete. Entering main loop...","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":92}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] AP running: ssid=simple-mesh-GC url=http://192.168.4.1:8080 stations=0","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":93}
+{"kind":"rx","source":"gc","port":"COM18","raw":"[OTA] OTA-only mode alive. running=1 ap_ip=192.168.4.1","timestamp":"2026-06-16T05:52:57.364+00:00","lineIndex":94}

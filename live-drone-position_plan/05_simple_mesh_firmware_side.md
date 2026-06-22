@@ -20,9 +20,10 @@ Optional LoRa bridge mode is also supported:
 
 - Bridge receiver ESP32 (`bridge_receiver` / `bridge` / `lora_bridge`): fixed
   `902.0 MHz / SF7 / BW500 / CR4/5` receiver that decodes GC/MaGC
-  `BRIDGE_SNAPSHOT` packets and emits USB `drones_state` for SGC.
-- Classic GC and MaGC can transmit one compact bridge scene snapshot every
-  `1000 ms` when `live_position.backhaul.enabled = true`.
+  bridge packets and emits USB `drones_state` for SGC.
+- Classic GC and MaGC use full `BRIDGE_SNAPSHOT` packets for session activation
+  and metadata refresh, then compact `BRIDGE_LIVE_DELTA` packets every `250 ms`
+  while LoRa fallback is the active bridge transport.
 
 ESP-NOW bridge transport is now the primary bridge path when
 `live_position.bridge_transport.enabled = true`; the LoRa bridge remains the
@@ -79,8 +80,10 @@ automatic fallback.
   - [x] Add `bridge_receiver` role plus `bridge` and `lora_bridge` aliases.
   - [x] Add `live_position.backhaul` config for enable flag, frequency, period,
     and max drones.
-  - [x] Define `BRIDGE_SNAPSHOT` packet `0xB1` with a 9-byte header and up to
-    five 31-byte drone records.
+  - [x] Define `BRIDGE_SNAPSHOT` packet `0xB1` with status/control metadata and
+    up to five full drone records.
+  - [x] Define compact `BRIDGE_LIVE_DELTA` packet `0xB2` with a 32-byte header
+    and up to five 20-byte records for 4 Hz LoRa fallback scene updates.
   - [x] Add compile-time bridge packet size checks and boot airtime diagnostics.
   - [x] Reserve telemetry channels `902.5-904.0 MHz` for the backhaul area.
   - [x] Keep reserved channels exposed as normal `reserved` entries, without a
@@ -94,6 +97,12 @@ automatic fallback.
     sends full snapshots after a bridge is present.
   - [x] Add bridge hello heartbeat and GC/MaGC session timeout fallback to beacon
     mode.
+  - [x] Keep full bridge snapshots on activation/metadata refresh and use
+    compact live deltas every `250 ms` while LoRa fallback is active.
+  - [x] Defer non-terminal LoRa bridge updates during the critical shared Bind
+    dialog, then send safe terminal/timing updates when the GC can retune.
+  - [x] Service active LoRa bridge sessions during long CAD scans between
+    samples so scan progress does not make the bridge look dead.
   - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
   - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
   - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.
@@ -371,6 +380,7 @@ automatic fallback.
   - [x] Start automatic link recovery only after twelve consecutive listened misses.
     - Automatic recovery queues event-driven CAD/LBT recovery slots on the assigned channel/profile. Each scheduler pass can run at most one automatic CAD/LBT probe for one stale assignment.
     - Full RX relock is scheduled only when CAD/LBT detects activity, or once immediately from the first slot for a weak or unknown last RSSI (`<= -114 dBm` or unavailable).
+    - In dual-GC mode, TeleGC now asks MaGC for assisted re-bind after the first missed expected TST/packet. The twelve-miss threshold still controls local OFF/OFFLINE recovery classification, not the early MaGC assist request.
   - [x] Cap automatic recovery slots and back off failed attempts.
     - Automatic recovery stops after `5` CAD recovery slots. Failed RX listens schedule the next CAD slot with `1s`, `2s`, `3s`, then `4s` backoff; RX is not retried during backoff unless a later CAD slot detects activity.
   - [x] Add weak-link long-range recovery for assigned profile `64` (`SF12 / BW125 / CR4/8`).
@@ -390,6 +400,11 @@ automatic fallback.
     - Assigned re-bind rounds use profile-aware full-RX windows, including the long profile `64` sweep timing, and do not delete or clear persisted assignments.
     - The assigned re-bind round deadline is computed from the active assignments' listen windows, so several slow long-range drones are not clipped by the old fixed Search-round limit.
     - The GC reports `gc_status.allLostRecoveryActive`, `allLostRecoveryPhase`, and `allLostAssignedCount`, plus `scanner_event` entries such as `all_lost_shared_bind`, `all_lost_assigned_rebind`, `all_lost_recovery_cycle`, and `all_lost_recovery_recovered`.
+  - [x] Add MaGC priority recovery and background OOCR.
+    - MaGC treats assigned-drone assisted re-bind as top-priority non-critical work and can preempt passive shared listening, but not the timing-critical silence/assign/ACK part of a shared bind dialog.
+    - MaGC starts shared-channel listening immediately on boot and defers full scan/OOCR work.
+    - For normal profiles, MaGC now gives a lost assigned drone only two quick assigned-channel chances with a combined budget under `2 s`. If both fail, MaGC keeps shared discovery as the priority for that node so a power-cycled drone can rejoin from the shared channel. The SF12/BW125/CR4/8 long-range profile gets one profile-aware long sweep before shared priority.
+    - MaGC OOCR runs as short CAD slices at most every `250 ms`, restores shared RX after each slice, queues CAD hits, and attempts at most one decoded-telemetry confirmation per `10 s` cycle after the shared channel has been quiet for about `2 s`.
   - [x] Keep telemetry-period acquisition responsive after a drone rejoins.
     - After `JOIN_ACK`, the GC schedules assigned-channel telemetry acquisition immediately. If it misses a packet before timing locks, it retries after `20 ms` instead of backing off to the shared-channel interval.
   - [x] Remove the active drone timing-proposal retry loop.
@@ -500,7 +515,7 @@ automatic fallback.
   - [x] Implement `get_assignments`.
   - [x] Implement `clear_all_assignments` for SGC `Start Fresh Session`.
   - [x] Emit `command_ack` for accepted and rejected commands.
-  - [x] On `clear_all_assignments`, delete `/live_assignments.json`.
+  - [x] On `clear_all_assignments`, empty `/live_assignments.json` to a valid zero-assignment JSON file.
   - [x] On `clear_all_assignments`, clear RAM assignment state.
   - [x] On `clear_all_assignments`, switch back to the shared discovery channel.
     - Shared discovery now means `915.0 MHz` with the robust discovery profile, not the assigned telemetry profile.
@@ -681,9 +696,10 @@ These tasks mirror `08_field_test_followups.md`.
 
 These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 
-- [x] Upgrade `BRIDGE_SNAPSHOT` to version `2` with command ACK and GC status summary fields.
+- [x] Upgrade `BRIDGE_SNAPSHOT` to version `3` with command ACK, GC status summary, and bind-progress fields.
 - [x] Add `BRIDGE_COMMAND` packet `0xC1` with compact command IDs for SGC actions.
 - [x] Include persisted-assignment placeholders in bridge snapshots even when no post-boot telemetry has arrived.
+- [x] Include bind phase, status, reason, elapsed/expected phase time, and timing observation count in bridge snapshots.
 - [x] Add GC/MaGC scheduled uplink RX after each backhaul downlink.
 - [x] Add duplicate-command cache and retry-safe ACK state.
 - [x] Add bridge receiver FIFO command queue and one-command-per-downlink-slot transmit behavior.

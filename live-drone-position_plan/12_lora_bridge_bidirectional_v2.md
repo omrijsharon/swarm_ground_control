@@ -36,7 +36,10 @@ connected to the GC, only at a lower update rate.
   sends a `BRIDGE_HELLO` heartbeat at least every `2000 ms`.
 - If GC/MaGC receives no bridge hello/command for `6000 ms`, it stops full
   snapshots and returns to beacon mode.
-- GC/MaGC sends one normal downlink frame every `1000 ms`.
+- When ESP-NOW is not fresh and a LoRa bridge session is active, GC/MaGC sends
+  compact `BRIDGE_LIVE_DELTA` frames every `250 ms`.
+- GC/MaGC still sends a full `BRIDGE_SNAPSHOT` on session activation and then
+  about every `5000 ms` so the bridge cache can refresh assignment metadata.
 - After every downlink TX, GC/MaGC opens a bridge uplink RX window:
   - `BRIDGE_UPLINK_GUARD_MS = 10`
   - `BRIDGE_UPLINK_RX_WINDOW_MS = 35`
@@ -98,13 +101,16 @@ bridge only transports the already-confirmed command.
 
 ## Downlink State Mirror
 
-Upgrade the current `BRIDGE_SNAPSHOT` to version `2`.
+Upgrade the current `BRIDGE_SNAPSHOT` to version `3`, and add compact
+`BRIDGE_LIVE_DELTA` (`0xB2`) for fast LoRa fallback updates.
 
 Downlink must carry:
 
 - Drone scene records, including GPS when known.
 - Assignment placeholders even when no post-boot telemetry exists.
 - Link states: `online`, `binding`, `weak`, `offline`, `off`, `unknown`.
+- Compact bind-progress metadata on each drone record: phase, status, reason,
+  elapsed phase time, expected phase duration, and timing observation count.
 - GC status summary:
   - assigned count
   - search/bind state
@@ -123,13 +129,31 @@ card-only record with no GPS and an `offline`, `off`, or `binding` display
 state. SGC must render it in the drone list and omit the map marker until valid
 coordinates exist.
 
-Add a small `BRIDGE_EVENT_BATCH` packet only if needed for smooth UI. It may
-carry compact assignment/search/scanner events during Bind/Search/scan. Default
-behavior:
+`BRIDGE_LIVE_DELTA` is optimized for frequent LoRa fallback updates:
 
-- Full scene snapshot: `1000 ms`.
-- Compact status/event downlink during Bind/Search/scan: up to `4 Hz`.
+- Header: `32 bytes`.
+- Drone record: `20 bytes`.
+- Five records plus header: `132 bytes`.
+- Coordinates are encoded as meter offsets from the packet origin.
+- Altitude is meters, heading is compact 0-254, speed is km/h, age is deciseconds.
+- Each record carries bind phase/status/reason and elapsed/expected phase time.
+- Assignment metadata that does not change often remains in the full snapshot
+  cache and is refreshed by periodic `BRIDGE_SNAPSHOT` packets.
+
+Default behavior:
+
+- Full scene snapshot: immediately after session activation, then every `5000 ms`.
+- Compact live delta: every `250 ms` while LoRa fallback is carrying an active
+  bridge session.
 - Do not send large channel tables at high rate.
+
+Critical shared-channel Bind timing stays protected. During `SILENCE` /
+`JOIN_ASSIGN` / `JOIN_ACK` phases, GC/MaGC defers non-terminal LoRa bridge
+updates instead of retuning away from the shared channel. Terminal bind events
+and telemetry timing transitions may send a safe snapshot/delta, then retune to
+the shared discovery channel before continuing. During long CAD scans, GC/MaGC
+may pause between channel/profile samples once every `250 ms` to send a compact
+delta and service the bridge uplink slot.
 
 ## Bridge Receiver USB Behavior
 
@@ -210,21 +234,46 @@ Queue defaults:
   mode while inactive and return to beacon mode after session timeout.
 - [x] Service due bridge beacons/snapshots from a safe post-telemetry RX slot so
   a healthy fast assigned drone does not starve the bridge handshake.
-- [x] Service due bridge beacons/snapshots while passively listening on shared
-  Bind/search windows so a zero-assignment or all-lost GC still stays visible
-  to the bridge.
+- [x] Service due bridge beacons/snapshots between complete shared Bind/search
+  listen windows so a zero-assignment or all-lost GC still stays visible to the
+  bridge without fragmenting SF12 discovery RX.
+  - SF12/BW125 discovery JOIN requests take about `925.7 ms`; bridge LoRa
+    maintenance must not retune away from shared inside that receive window.
+  - Zero-assignment passive Bind / MaGC shared listening now uses the longer
+    discovery dwell instead of the old short shared dwell, so bridge beacons do
+    not phase-lock against long JOIN requests.
+- [x] Give shared discovery priority over LoRa bridge fallback when no assigned
+  drones exist, during operator Bind/Search, and during all-lost shared recovery.
+  ESP-NOW bridge updates may continue, but LoRa bridge beacons/deltas are skipped
+  because they retune the single SX1262 away from the shared channel.
+- [x] Avoid sending LoRa bridge beacons from bind-progress callbacks before a
+  bridge LoRa session exists; pre-session bind progress should use ESP-NOW or
+  wait until the shared bind sequence is complete.
 - [x] Add bridge receiver hello-on-beacon and hello-heartbeat behavior.
 - [x] Make GC/MaGC provisioning enable backhaul by default while keeping an
   explicit disable override for bench use.
 - [x] Add command duplicate cache and retry-safe ACK state.
 - [x] Add assignment placeholder records to bridge snapshots.
+- [x] Add compact bind-progress fields to bridge snapshots so bridge-connected
+  SGC can animate Bind phases like direct GC USB.
+- [x] Add compact `BRIDGE_LIVE_DELTA 0xB2/v1` packets for frequent LoRa fallback
+  scene/status updates without sending full 214-byte snapshots every time.
+- [x] Send LoRa compact deltas every `250 ms` only when ESP-NOW is stale and a
+  LoRa bridge session is active.
+- [x] Keep full `BRIDGE_SNAPSHOT 0xB1/v3` packets for session activation,
+  metadata refresh, and cache recovery every about `5000 ms`.
 - [x] Schedule GC/MaGC downlink TX followed by uplink RX slot.
 - [x] Decode `BRIDGE_COMMAND`, map it into existing command handling, and ACK
   accepted/rejected/duplicate.
 - [x] Include bridge ACK/control status in downlink.
 - [x] Send safe bridge progress snapshots from inside the shared-channel Bind
-  flow after assignment creation and after ACK/completion, then retune to shared
-  discovery before continuing Bind.
+  flow at assignment creation, silence, assign, ACK, completion, failure, and
+  telemetry timing transitions, then retune to shared discovery before
+  continuing Bind.
+- [x] Defer non-terminal LoRa bridge updates during the critical shared-channel
+  Bind dialog so bridge traffic does not disturb timing.
+- [x] Service active LoRa bridge sessions during long CAD scans between samples,
+  with compact scan status in the live delta header.
 - [x] Queue browser commands on the bridge receiver, transmit one command in the
   scheduled uplink slot, and retry until ACK.
 - [x] Emit standard USB `command_ack` when ACK arrives.
@@ -282,5 +331,5 @@ Queue defaults:
 - HOME markers remain local/browser/cloud state and are not sent over RF bridge.
 - Full raw USB JSON forwarding over LoRa is intentionally avoided; RF uses
   compact binary state and command packets.
-- Default bridge downlink remains `1000 ms`; compact status/event bursts up to
-  `4 Hz` are allowed only during active Bind/Search/scan.
+- Default LoRa full-snapshot downlink remains slow metadata refresh; compact
+  live deltas provide the normal `4 Hz` LoRa fallback scene update.

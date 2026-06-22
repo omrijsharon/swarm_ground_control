@@ -86,6 +86,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
 
 - [x] Milestone 8: Add GC/radio status display
   - [x] Show GC serial connection state.
+  - [x] Warn when the USB-connected module is MaGC instead of TeleGC or single GC.
   - [x] Show shared frequency.
   - [x] Show active telemetry SF/BW/CR.
   - [x] Show robust discovery/join SF/BW/CR when GC reports it.
@@ -137,7 +138,8 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
     - First implemented as `Start Fresh Session` in the GC/radio panel; later moved to the top USB serial control row as `Reset`.
   - [x] Show a confirmation dialog before sending the fresh-session command.
   - [x] Confirmation copy states that previous channel assignments will be deleted.
-  - [x] Send `clear_all_assignments` with `reason:"start_fresh_session"` after confirmation.
+  - [x] Send MaGC-targeted `clear_all_assignments` with `reason:"start_fresh_session"` after confirmation.
+    - Reset uses `target:"magc"` in dual-GC mode and retries transient forward/timeouts while the inter-GC reliable slot is busy.
   - [x] Disable the button while the command is pending.
   - [x] Show accepted/rejected command feedback in the serial/debug area.
   - [x] Clear live drone cards only after GC confirms assignments were cleared or drones go stale/offline naturally.
@@ -245,6 +247,9 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Do not create a new bind progress row from `drone_link_status state:"locking"` alone; it may update an existing bind row, but automatic recovery status is not proof of a new bind dialog.
   - [x] Complete/clear temporary bind progress when `channel_table` or `assignments` reports the node assignment as `timingAccepted:true` or `periodConfidence:"locked"`.
   - [x] Complete the temporary binding row only when telemetry-period lock is confirmed.
+  - [x] Consume `bind_progress_event` from MaGC through TeleGC so dual-GC bind rows appear before telemetry and use firmware phase timing.
+  - [x] Separate shared-channel bind and manual Re-bind from automatic assigned-drone recovery so lost assigned drones do not flicker between `BINDING` and `OFFLINE`.
+  - [x] Render automatic assigned-drone recovery as secondary card text while keeping the primary badge `OFFLINE`, `OFF`, or `WEAK`.
   - [x] Publish binding placeholders in Cloudflare `drones_state` snapshots so remote viewers see the same read-only bind progress.
   - [x] Rename user-facing lock/re-lock/locking wording in SGC to Bind/Re-bind/BINDING while keeping firmware command and event names compatible.
 
@@ -302,6 +307,8 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Prevent passive `Binding...` from sticking by treating any positive assignment evidence from channel table, live serial drones, or GC status as assigned.
 - [x] Show `Binding...` while firmware reports all-lost shared recovery.
   - `gc_status.allLostRecoveryActive === true` plus `allLostRecoveryPhase === "shared_bind"` means every assigned drone is lost and the GC is already listening on shared discovery for a bind/rejoin. The button is active and disabled during that phase, but it returns to normal during the assigned re-bind phase.
+- [x] Show `Binding...` while MaGC reports active shared-channel bind progress.
+  - Dual-GC `bind_progress_event` rows from MaGC/TeleGC now make the Bind button look pressed during the real join/quiet/assign/ACK/timing flow, even when `searchMode` is not the source of truth.
 - [x] Parse `drone_link_status`.
 - [x] Display `ONLINE`, `BINDING`, `WEAK`, `OFFLINE`, and `OFF`.
 - [x] Make `WEAK` orange, `OFFLINE` red, and `OFF` gray.
@@ -389,6 +396,7 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Route normal SGC command JSON to the bridge receiver when bridge control is fresh; the bridge firmware queues RF uplink commands.
 - [x] Keep bridge controls disabled when the RF downlink is stale or the browser is a remote endpoint viewer.
 - [x] Consume bridge-emitted `command_ack` through the existing pending-command UI path.
+- [x] Keep SGC parser unchanged for compact LoRa bridge deltas because the bridge receiver reconstructs the same `drones_state` and `gc_status` USB JSON.
 - [ ] Browser/RF-verify Bind, Re-bind, Re-scan, profile apply, and clear assignment through the bridge.
 
 ## ESP-NOW Bridge Primary UI
@@ -399,4 +407,5 @@ These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
 - [x] Show secondary bridge transport state such as `ESP-NOW probing`, `ESP-NOW beacon`, or `LoRa standby`.
 - [x] Keep bridge controls governed by `bridgeControl` and fresh packet age.
 - [x] Parse ESP-NOW bridge snapshots without changing drone card/map behavior.
+- [x] Use bridge-fed `bindPhase`, `phaseElapsedMs`, `phaseExpectedMs`, and timing lock fields to animate bridge Bind progress like direct GC USB.
 - [ ] Browser-verify ESP-NOW bridge status, LoRa fallback status, and promotion-back status labels.

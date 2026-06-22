@@ -1,0 +1,1 @@
+{"pcTimeIso":"2026-06-20T19:59:18.691Z","direction":"pc_to_drone_wifi","url":"http://192.168.68.100:8080","json":{"type":"command","command":"get_status","commandId":"wifi-85558691"}}

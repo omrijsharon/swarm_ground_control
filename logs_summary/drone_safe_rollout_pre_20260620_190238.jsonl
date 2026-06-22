@@ -1,0 +1,91 @@
+{"kind":"info","source":"drone","port":"COM11","raw":"opened COM11 at 921600","timestamp":"2026-06-20T19:02:39.030+00:00","lineIndex":1}
+{"kind":"tx","source":"drone","port":"COM11","raw":"{\"type\":\"command\",\"commandId\":\"live-dbg-drone-0001\",\"command\":\"get_status\"}","json":{"type":"command","commandId":"live-dbg-drone-0001","command":"get_status"},"timestamp":"2026-06-20T19:02:39.232+00:00","lineIndex":2}
+{"kind":"tx","source":"drone","port":"COM11","raw":"{\"type\":\"command\",\"commandId\":\"live-dbg-drone-0002\",\"command\":\"get_config\"}","json":{"type":"command","commandId":"live-dbg-drone-0002","command":"get_config"},"timestamp":"2026-06-20T19:02:39.233+00:00","lineIndex":3}
+{"kind":"tx","source":"drone","port":"COM11","raw":"{\"type\":\"command\",\"commandId\":\"live-dbg-drone-0003\",\"command\":\"get_files\"}","json":{"type":"command","commandId":"live-dbg-drone-0003","command":"get_files"},"timestamp":"2026-06-20T19:02:39.233+00:00","lineIndex":4}
+{"kind":"rx","source":"drone","port":"COM11","raw":"ESP-ROM:esp32s3-20210327","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":5}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Build:Mar 27 2021","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":6}
+{"kind":"rx","source":"drone","port":"COM11","raw":"rst:0x15 (USB_UART_CHIP_RESET),boot:0x8 (SPI_FAST_FLASH_BOOT)","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":7}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Saved PC:0x420a20ae","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":8}
+{"kind":"rx","source":"drone","port":"COM11","raw":"SPIWP:0xee","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":9}
+{"kind":"rx","source":"drone","port":"COM11","raw":"mode:DIO, clock div:1","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":10}
+{"kind":"rx","source":"drone","port":"COM11","raw":"load:0x3fce3808,len:0x4bc","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":11}
+{"kind":"rx","source":"drone","port":"COM11","raw":"load:0x403c9700,len:0xbd8","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":12}
+{"kind":"rx","source":"drone","port":"COM11","raw":"load:0x403cc700,len:0x2a0c","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":13}
+{"kind":"rx","source":"drone","port":"COM11","raw":"entry 0x403c98d0","timestamp":"2026-06-20T19:02:39.240+00:00","lineIndex":14}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":15}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=== Drone Follow-Me Test Firmware ===","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":16}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Configuration loaded successfully","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":17}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] Applied live radio profile to runtime config","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":18}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":19}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=== Configuration ===","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":20}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Node ID: 6","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":21}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Node Role: drone","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":22}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":23}
+{"kind":"rx","source":"drone","port":"COM11","raw":"LoRa Settings:","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":24}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Frequency: 915.00 MHz","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":25}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  TX Power: 22 dBm","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":26}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Spreading Factor: 8","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":27}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Bandwidth: 500000 Hz","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":28}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Coding Rate: 4/5","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":29}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Preamble Length: 8","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":30}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Sync Word: 0x12","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":31}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":32}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Mesh Settings:","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":33}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Max Forwards: 0","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":34}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Buffer Size: 50","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":35}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  LBT Threshold: -120 dBm","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":36}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Backoff: 100-1000 ms","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":37}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Test Timeout: 10 sec","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":38}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":39}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Live Position:","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":40}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Simulated FC: no","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":41}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Simulated MSP Batch: 8 ms","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":42}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Inter-GC UART:","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":43}
+{"kind":"rx","source":"drone","port":"COM11","raw":"    Enabled: yes","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":44}
+{"kind":"rx","source":"drone","port":"COM11","raw":"    Baud: 921600","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":45}
+{"kind":"rx","source":"drone","port":"COM11","raw":"    RX Pin: 44","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":46}
+{"kind":"rx","source":"drone","port":"COM11","raw":"    TX Pin: 43","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":47}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=====================","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":48}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":49}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Node ID: 6","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":50}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Node Role: drone","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":51}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Hardware: Seeed XIAO ESP32-S3","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":52}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[OTA] Starting Web OTA service...","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":53}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[OTA] Initializing Web OTA for node 6 (SSID: simple-mesh-6)","timestamp":"2026-06-20T19:02:41.302+00:00","lineIndex":54}
+{"kind":"rx","source":"drone","port":"COM11","raw":"E (4375) wifi_init_default: netstack cb reg failed with 12308","timestamp":"2026-06-20T19:02:41.503+00:00","lineIndex":55}
+{"kind":"rx","source":"drone","port":"COM11","raw":"E (4377) wifi_init_default: esp_wifi_get_mac failed with 12289","timestamp":"2026-06-20T19:02:41.912+00:00","lineIndex":56}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[OTA] AP started: ssid=simple-mesh-6 channel=1 mac=E2:72:A1:F9:EA:FC ip=192.168.4.1","timestamp":"2026-06-20T19:02:41.912+00:00","lineIndex":57}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[OTA] Web OTA ready: http://192.168.4.1:8080 (SSID: simple-mesh-6)","timestamp":"2026-06-20T19:02:41.912+00:00","lineIndex":58}
+{"kind":"rx","source":"drone","port":"COM11","raw":"MSP Serial Initialized","timestamp":"2026-06-20T19:02:41.912+00:00","lineIndex":59}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Boot MSP self-test disabled","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":60}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":61}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=== SimpleMesh Initialization ===","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":62}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Initializing Seeed XIAO ESP32-S3 radio...","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":63}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Frequency: 915.00 MHz","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":64}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  Bandwidth: 500.0 kHz","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":65}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  SF: 8","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":66}
+{"kind":"rx","source":"drone","port":"COM11","raw":"  CR: 4/5","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":67}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Radio initialized successfully","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":68}
+{"kind":"rx","source":"drone","port":"COM11","raw":"SimpleMesh initialized successfully","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":69}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Mesh Network Initialized","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":70}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":71}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=== Auto-Tune Frequency Scan ===","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":72}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Skipping scan, using fixed frequency: 915.00 MHz","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":73}
+{"kind":"rx","source":"drone","port":"COM11","raw":"=== Auto-Tune Complete ===","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":74}
+{"kind":"rx","source":"drone","port":"COM11","raw":"","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":75}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] Protocol v1 enabled","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":76}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] radio_profiles: count=73 default=0 variable_fields=sf,bw,cr,preamble,airtime_buffer fixed_tx_power=22 dBm","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":77}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] packets: join_request=5 silence=4 join_assign=9 join_ack=5 tx_period_proposal=12 tx_period_ack=6 telemetry=20 bytes","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":78}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] radio: profile=0 sf=8 bw=500000 cr=4/5 preamble=8 crc=1 tx_power=22 dBm buffer=74 ms","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":79}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] discovery_radio: profile=255 sf=12 bw=125000 cr=4/8 preamble=8 crc=1 tx_power=22 dBm","timestamp":"2026-06-20T19:02:43.869+00:00","lineIndex":80}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] airtime: silence_4=925.696 ms join_request_5=925.696 ms join_assign_9=1187.840 ms join_ack_5=925.696 ms telemetry_20=25.728 ms tx_period=100 ms","timestamp":"2026-06-20T19:02:44.074+00:00","lineIndex":81}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] channels: shared=915.0 MHz spacing=0.5 MHz bw500_total=51 telemetry_candidates=48","timestamp":"2026-06-20T19:02:44.074+00:00","lineIndex":82}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[LIVE-POSITION] GC boot channel scan skipped for non-GC role","timestamp":"2026-06-20T19:02:44.074+00:00","lineIndex":83}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_start_shared_channel\",\"nodeId\":6,\"state\":\"backoff\",\"radioProfileId\":0,\"gcMillis\":4850}","timestamp":"2026-06-20T19:02:44.074+00:00","json":{"type":"drone_join_event","event":"join_start_shared_channel","nodeId":6,"state":"backoff","radioProfileId":0,"gcMillis":4850},"lineIndex":84}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_backoff\",\"nodeId\":6,\"state\":\"backoff\",\"backoffMs\":2967,\"nextActionMs\":7819,\"reason\":\"boot_or_rejoin\",\"gcMillis\":4852}","timestamp":"2026-06-20T19:02:44.074+00:00","json":{"type":"drone_join_event","event":"join_backoff","nodeId":6,"state":"backoff","backoffMs":2967,"nextActionMs":7819,"reason":"boot_or_rejoin","gcMillis":4852},"lineIndex":85}
+{"kind":"rx","source":"drone","port":"COM11","raw":"Setup complete. Entering main loop...","timestamp":"2026-06-20T19:02:44.074+00:00","lineIndex":86}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_request_sent\",\"nodeId\":6,\"state\":\"wait_assignment\",\"nonce\":14741,\"radioProfileId\":0,\"gcMillis\":8823}","timestamp":"2026-06-20T19:02:47.961+00:00","json":{"type":"drone_join_event","event":"join_request_sent","nodeId":6,"state":"wait_assignment","nonce":14741,"radioProfileId":0,"gcMillis":8823},"lineIndex":87}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_backoff\",\"nodeId\":6,\"state\":\"backoff\",\"backoffMs\":2028,\"nextActionMs\":14351,\"reason\":\"join_assign_timeout\",\"gcMillis\":12323}","timestamp":"2026-06-20T19:02:51.448+00:00","json":{"type":"drone_join_event","event":"join_backoff","nodeId":6,"state":"backoff","backoffMs":2028,"nextActionMs":14351,"reason":"join_assign_timeout","gcMillis":12323},"lineIndex":88}
+{"kind":"rx","source":"drone","port":"COM11","raw":"[OTA] AP running: ssid=simple-mesh-6 url=http://192.168.4.1:8080 stations=0","timestamp":"2026-06-20T19:02:51.860+00:00","lineIndex":89}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_request_sent\",\"nodeId\":6,\"state\":\"wait_assignment\",\"nonce\":49718,\"radioProfileId\":0,\"gcMillis\":15355}","timestamp":"2026-06-20T19:02:54.515+00:00","json":{"type":"drone_join_event","event":"join_request_sent","nodeId":6,"state":"wait_assignment","nonce":49718,"radioProfileId":0,"gcMillis":15355},"lineIndex":90}
+{"kind":"rx","source":"drone","port":"COM11","raw":"{\"type\":\"drone_join_event\",\"event\":\"join_backoff\",\"nodeId\":6,\"state\":\"backoff\",\"backoffMs\":2316,\"nextActionMs\":21171,\"reason\":\"join_assign_timeout\",\"gcMillis\":18855}","timestamp":"2026-06-20T19:02:58.005+00:00","json":{"type":"drone_join_event","event":"join_backoff","nodeId":6,"state":"backoff","backoffMs":2316,"nextActionMs":21171,"reason":"join_assign_timeout","gcMillis":18855},"lineIndex":91}

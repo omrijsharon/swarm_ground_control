@@ -10,7 +10,8 @@ snapshots become fresh.
 
 The current PlatformIO/Arduino ESP32 stack exposes `ESP_NOW_MAX_DATA_LEN = 250`,
 so v1 reuses the compact existing bridge binary packets instead of large JSON
-frames. The current V2 bridge snapshot fits under that limit.
+frames. The current V3 bridge snapshot, including bind-progress metadata, fits
+under that limit.
 
 ## Key Changes
 
@@ -20,6 +21,9 @@ frames. The current V2 bridge snapshot fits under that limit.
   - `BRIDGE_SNAPSHOT`
   - `BRIDGE_COMMAND`
 - Keep LoRa bridge on `902.0 MHz / SF7 / BW500 / CR4/5` as fallback.
+- While LoRa fallback is active, use compact `BRIDGE_LIVE_DELTA` frames every
+  `250 ms`; keep full `BRIDGE_SNAPSHOT` frames for activation and periodic
+  metadata refresh.
 - Add `live_position.bridge_transport` config:
   - `enabled`
   - `primary: "espnow"`
@@ -57,8 +61,11 @@ frames. The current V2 bridge snapshot fits under that limit.
 - [x] Keep LoRa bridge fallback automatic.
 - [x] Keep ESP-NOW probing active while LoRa fallback is carrying the bridge.
 - [x] Promote back to ESP-NOW automatically when ESP-NOW snapshots become fresh.
+- [x] Use compact LoRa live deltas during fallback so LoRa source mode keeps
+  updating near `4 Hz` without sending full snapshots every `250 ms`.
 - [x] Add SGC parsing/display for `espnow_bridge` source and active bridge transport.
 - [x] Add SGC display for `LoRa live | ESP-NOW probing` and `ESP-NOW live | LoRa standby`.
+- [x] Preserve detailed bind-progress phases through ESP-NOW bridge snapshots.
 - [x] Update provisioning helper for ESP-NOW primary and LoRa fallback defaults.
 - [ ] Bench-verify ESP-NOW bridge connects and updates at about 4 Hz.
 - [ ] Bench-verify mutating commands ACK over ESP-NOW.

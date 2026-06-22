@@ -6,7 +6,8 @@ This guide explains the current live-position firmware workflow for:
 - MaGC ESP32: magic ground-control module for Bind/search/scan/allocation.
 - TeleGC ESP32: telemetry ground-control module connected to SGC by USB serial.
 - Bridge receiver ESP32: fixed LoRa backhaul receiver connected to SGC by USB serial.
-- Drone ESP32: drone XIAO ESP32S3, normally updated by Web OTA.
+- Drone ESP32: drone XIAO ESP32S3. For live-radio bench work, update by
+  firmware-only USB flash so Web OTA startup cannot block JOIN or telemetry.
 
 The firmware lives in the companion repo:
 
@@ -37,7 +38,9 @@ cd C:\Users\tamipinhasi\Documents\repos\swarm_ground_control
 - LoRa defaults
 - live-position options such as simulated FC mode
 
-For normal updates, flash firmware only or use Web OTA. Do not upload LittleFS unless you intentionally want to change the board identity or role.
+For normal updates, flash firmware only or use Web OTA on GC/bridge roles. Do
+not upload LittleFS unless you intentionally want to change the board identity
+or role.
 
 Supported live-position roles:
 
@@ -50,12 +53,15 @@ Supported live-position roles:
 
 ## Scripts
 
-The repo includes three PowerShell helpers:
+The repo includes these PowerShell helpers:
 
 ```powershell
 .\tools\build_ota_firmware.ps1
 .\tools\flash_firmware_only.ps1
 .\tools\provision_node.ps1
+.\tools\provision_wifi_ota.ps1
+.\tools\find_ota_device.ps1
+.\tools\ota_upload_firmware.ps1
 ```
 
 Default firmware repo:
@@ -130,9 +136,16 @@ For MaGC or TeleGC, firmware-only flashing also preserves the existing role in L
 
 3. Reconnect SGC to the GC serial port after flashing.
 
-## Step 3B: Update Drone ESP32 By OTA
+## Step 3B: Update GC/Bridge ESP32 By OTA
 
-Use OTA for normal drone firmware updates. OTA preserves existing LittleFS config, so the drone keeps its `node_id` and `node_role`.
+Use OTA for MaGC, TeleGC, single-GC, and bridge firmware updates. OTA preserves
+existing LittleFS config, so the board keeps its `node_id` and `node_role`.
+
+In the current live-position firmware, drone-role Web OTA does not auto-start
+during live radio operation. Wi-Fi OTA startup was measured blocking the first
+assigned telemetry after bind, so Drone 7 live bench updates should use
+firmware-only USB flashing unless you intentionally place the drone in a future
+maintenance OTA mode.
 
 1. Build generic firmware:
 
@@ -140,9 +153,9 @@ Use OTA for normal drone firmware updates. OTA preserves existing LittleFS confi
 .\tools\build_ota_firmware.ps1
 ```
 
-2. Power the drone ESP32.
+2. Power the target ESP32.
 
-3. Connect your computer or phone to the drone OTA Wi-Fi AP:
+3. Connect your computer or phone to the target OTA Wi-Fi AP:
 
 ```text
 simple-mesh-<node_id>
@@ -162,7 +175,7 @@ simple-mesh-MaGC
 simple-mesh-TeleGC
 ```
 
-Example:
+Drone OTA APs are maintenance-only in the current live-radio workflow. Example:
 
 ```text
 simple-mesh-7
@@ -182,13 +195,130 @@ C:\Users\tamipinhasi\Documents\PlatformIO\Projects\simple-mesh\.pio\build\seeed-
 
 6. Wait for the OTA upload to finish and for the board to reboot.
 
-Expected boot lines for node 7:
+Expected live-radio boot lines for node 7:
 
 ```text
 Node ID: 7
 Node Role: drone
-[OTA] Web OTA ready: http://192.168.4.1:8080 (SSID: simple-mesh-7)
+[OTA] Drone Web OTA auto-start disabled during live radio; use USB/maintenance flashing
 ```
+
+### Home Wi-Fi Maintenance OTA
+
+The firmware can also run OTA on your home Wi-Fi. Credentials are stored in a
+separate LittleFS file, `/wifi_ota.json`, so normal firmware updates preserve
+the board identity in `/config.json`.
+
+For the drone role, home Wi-Fi OTA is not started automatically during live radio
+operation. This avoids blocking LoRa JOIN and first telemetry acquisition.
+Continue to use USB firmware-only flashing for Drone 7 during live bench tests
+unless a deliberate maintenance OTA mode is enabled.
+
+1. Edit the ignored local credentials file:
+
+```powershell
+C:\Users\tamipinhasi\Documents\PlatformIO\Projects\simple-mesh\data\wifi_ota.json
+```
+
+Example shape:
+
+```json
+{
+  "wifi_ota": {
+    "enabled": true,
+    "ssid": "YOUR_HOME_WIFI",
+    "password": "YOUR_HOME_WIFI_PASSWORD",
+    "connect_timeout_ms": 15000,
+    "fallback_ap_enabled": true,
+    "ota_port": 8080
+  }
+}
+```
+
+2. Connect the target board by USB and send only the OTA credential file:
+
+```powershell
+.\tools\provision_wifi_ota.ps1 -Port COM18
+```
+
+Use the actual port for each board. This command does not upload LittleFS and
+does not modify `/config.json`.
+
+3. Reboot the board. If the home SSID is found, open the role hostname:
+
+```text
+http://simple-mesh-gc.local:8080
+http://simple-mesh-magc.local:8080
+http://simple-mesh-telegc.local:8080
+http://simple-mesh-bridge.local:8080
+http://simple-mesh-7.local:8080
+```
+
+If Windows or the router does not resolve `.local` reliably, discover the board
+by HTTP probing instead:
+
+```powershell
+.\tools\find_ota_device.ps1 -Hostname simple-mesh-bridge -ScanSubnet
+```
+
+If PowerShell script execution is blocked, use the one-command bypass form:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\find_ota_device.ps1 -Hostname simple-mesh-bridge -ScanSubnet
+```
+
+The script prints the working IP URL, for example:
+
+```text
+http://192.168.68.100:8080
+```
+
+To make `http://simple-mesh-bridge.local:8080` work even when multicast mDNS is
+broken, run PowerShell as Administrator and update the Windows hosts file:
+
+```powershell
+.\tools\find_ota_device.ps1 -Hostname simple-mesh-bridge -ScanSubnet -UpdateHosts
+```
+
+If script execution is blocked in the Administrator shell:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\find_ota_device.ps1 -Hostname simple-mesh-bridge -ScanSubnet -UpdateHosts
+```
+
+For a board that still has older firmware without `/ota_status`, pass the MAC
+address shown by `pio device list` or your router:
+
+```powershell
+.\tools\find_ota_device.ps1 -Hostname simple-mesh-bridge -MacAddress E0-72-A1-F9-F2-B0 -UpdateHosts
+```
+
+If home Wi-Fi is unavailable, the board falls back to its role AP and the
+existing URL:
+
+```text
+http://192.168.4.1:8080
+```
+
+The OTA page does not require a username or password by default. Getting onto
+the correct network and opening the device URL is the intended guard for this
+bench workflow. If you explicitly add both `ota_username` and `ota_password` to
+`wifi_ota.json`, the firmware enables basic auth again for that board.
+
+During an OTA upload, ESP-NOW bridge traffic pauses and OTA has priority. After
+the upload succeeds the board reboots and returns to its normal role.
+
+To upload from the command line instead of using the browser form, first build
+the firmware, then post it to the device OTA endpoint:
+
+```powershell
+.\tools\build_ota_firmware.ps1
+.\tools\ota_upload_firmware.ps1 -Url http://192.168.68.100:8080 -WaitForReboot
+.\tools\ota_upload_firmware.ps1 -Hostname simple-mesh-telegc -WaitForReboot
+```
+
+`ota_upload_firmware.ps1` sends only `firmware.bin` to `/update`. It does not
+upload LittleFS and does not change `/config.json`.
 
 ## Step 3C: Flash Drone Firmware Over USB Without Changing Node ID
 

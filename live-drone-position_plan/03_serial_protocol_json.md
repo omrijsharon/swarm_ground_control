@@ -64,6 +64,7 @@ Candidate:
 - [x] Milestone 2: Define GC status JSON
   - [x] Include `type`.
   - [x] Include GC node ID.
+  - [x] Include configured node role so SGC can distinguish single GC, MaGC, TeleGC, and bridge receiver USB sources.
   - [x] Include shared frequency.
   - [x] Include active radio profile.
   - [x] Include robust discovery radio profile.
@@ -79,10 +80,44 @@ Candidate:
 Candidate:
 
 ```json
-{"type":"gc_status","nodeId":0,"sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"allLostRecoveryActive":false,"allLostAssignedCount":0,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
+{"type":"gc_status","nodeId":0,"nodeRole":"telemetry_ground_control","sharedFrequencyMhz":915.0,"spreadingFactor":8,"bandwidthHz":500000,"codingRate":5,"discoverySpreadingFactor":12,"discoveryBandwidthHz":125000,"discoveryCodingRate":8,"discoveryJoinRequestAirtimeMs":925.7,"discoveryJoinAssignAirtimeMs":1187.8,"discoveryJoinAckAirtimeMs":925.7,"searchSharedDwellMs":3584,"txPowerDbm":22,"telemetryAirtimeMs":25.7,"txPeriodMs":100,"assignedDrones":1,"clearChannels":48,"allLostRecoveryActive":false,"allLostAssignedCount":0,"orphanRecoveryActive":false,"orphanRecoveryCandidates":0,"orphanRecoveredCount":0,"scanMode":"serial_json_smoke","gcMillis":123456}
 ```
 
 All-lost recovery fields are optional. When the GC still has assignments but every active assignment is `OFFLINE` or `OFF`, firmware reports `allLostRecoveryActive:true`, `allLostRecoveryPhase:"shared_bind"` or `"assigned_rebind"`, and `allLostAssignedCount`. SGC uses `shared_bind` as the user-facing signal that the GC is already in shared-channel Bind mode even though assignments still exist.
+
+`nodeRole` is `ground_station`, `magic_ground_control`,
+`telemetry_ground_control`, or `bridge_receiver`. SGC accepts `ground_station`,
+`telemetry_ground_control`, and `bridge_receiver` as valid direct USB sources.
+If SGC sees `magic_ground_control` over USB, it warns the operator to connect
+TeleGC instead.
+
+Dual-GC TeleGC or MaGC mode may also emit `inter_gc_status` for the UART link.
+SGC may infer the connected USB module from `inter_gc_status.source` when normal
+`gc_status` has not arrived yet.
+Clock-sync diagnostics include `clockSyncValid`, `clockOffsetUs`,
+`clockUncertaintyUs`, `clockLastSyncMsAgo`, `clockBurstBestDelayUs`,
+`clockAcceptedSamples`, `clockRejectedSamples`, `clockLastRejectReason`, and
+`clockQuietActive`. `clockLastSyncMsAgo` should climb toward about `5000 ms` and
+then return near zero while MaGC and TeleGC are connected, even if the best
+offset estimate is only updated from the best sample in each sync burst.
+MaGC recovery diagnostics may include `magcRecoveryActive`,
+`magcRecoveryMode:"assigned_rebind"|"shared_rejoin"|"background_oocr"|"idle"`,
+`magcRecoveryNodeId`, `magcRecoveryQueueDepth`, `magcNextOocrInMs`,
+`magcLastRecoveryReason`, `magcSharedRejoinPriorityActive`,
+`magcSharedRejoinNodeId`, `magcAssignedRecoveryAttempts`, and
+`magcAssignedRecoveryBudgetMs`. TeleGC asks MaGC for urgent assisted re-bind
+after one missed expected TST/packet; MaGC gives normal profiles two quick
+assigned-channel chances under `2 s`, or one long-range SF12/BW125/CR4/8 sweep,
+before switching to shared-channel rejoin priority. MaGC background OOCR reports
+progress through
+`orphan_recovery_event` values such as `background_oocr_started`,
+`background_oocr_slice`, `background_oocr_candidate_queued`,
+`background_oocr_confirmation_deferred`, `background_oocr_confirmation_started`,
+`background_oocr_paused`, and `background_oocr_complete`. Optional diagnostics
+include `magcOocrChannelCursor`, `magcOocrProfileCursor`,
+`magcOocrPendingConfirmation`, `magcOocrPendingChannelIndex`,
+`magcOocrPendingRadioProfileId`, `magcOocrPendingAgeMs`,
+`magcOocrNextSliceInMs`, and `magcOocrLastDeferReason`.
 
 Bridge receiver mode uses the same USB serial transport but emits scene snapshots
 instead of per-packet telemetry. A `bridge_receiver` device emits:
@@ -90,10 +125,13 @@ instead of per-packet telemetry. A `bridge_receiver` device emits:
 - `drones_state` with `source:"espnow_bridge"` or `source:"lora_bridge"`,
   `schemaVersion:1`, `sentAt`
   using bridge `millis()`, and a full `drones[]` snapshot decoded from
-  `BRIDGE_SNAPSHOT`.
+  `BRIDGE_SNAPSHOT` or reconstructed from compact `BRIDGE_LIVE_DELTA` packets.
 - `gc_status` with `bridgeMode:true`, `backhaulFrequencyMhz`,
   `backhaulProfile:"SF7/BW500/CR4/5"`, `backhaulLastPacketAgeMs`,
   `backhaulRssi`, `backhaulSnr`, and `assignedDrones`.
+- LoRa fallback bridge status may also include `bridgeLiveDeltaRxCount`,
+  `bridgeFullSnapshotAirtimeMs`, and `txPeriodMs:250` while compact live deltas
+  are the active downlink.
 - ESP-NOW primary bridge status may also include `bridgeTransport`,
   `bridgePrimary`, `bridgeFallback`, `espnowBridgeLive`,
   `espnowBeaconLive`, `espnowProbing`, `espnowLastPacketAgeMs`,
@@ -159,6 +197,14 @@ Examples:
 Current timing note: the GC no longer waits for a separate timing proposal packet. It accepts valid 20-byte telemetry after `JOIN_ACK`, emits a first-packet observation, then locks the period from the next valid packet with a nonzero `sequenceDelta`.
 
 SGC binding UI note: the web app now creates a pre-telemetry drone row from existing bind lifecycle events. `join_request_received` / `search_event.join_detected` starts the blue `BINDING` row, `silence_sent`, `assign_sent`, `join_ack_received`, `assignment_active`, `post_ack_lock_listen`, `assigned_acquire_listen`, and `telemetry_period_observed` advance the progress ring. First `drone_telemetry` moves the row to `Timing 1/2`; only `telemetry_period_locked` or telemetry with `timingAccepted:true` completes the temporary bind state. Firmware event names remain unchanged for compatibility.
+
+Dual-GC binding progress note: MaGC may also emit best-effort `bind_progress_event` lines over the Inter-GC UART, and TeleGC forwards them to SGC over USB. These messages are UI-only and are not ACKed or retried; missing one must not affect binding. SGC uses `phase`, `phaseElapsedMs`, and `phaseExpectedMs` to animate the same pre-telemetry `BINDING` row used by direct GC USB and bridge snapshots.
+
+```json
+{"type":"bind_progress_event","event":"join_request_received","nodeId":6,"phase":"quiet","status":"active","phaseElapsedMs":0,"phaseExpectedMs":2500,"rssi":-72,"snr":9.5,"gcMillis":123456}
+{"type":"bind_progress_event","event":"assign_sent","nodeId":6,"phase":"ack","status":"active","phaseElapsedMs":0,"phaseExpectedMs":1800,"frequencyMhz":916.0,"channelIndex":27,"radioProfileId":0,"txPeriodMs":103,"telemetryAirtimeMs":25,"gcMillis":123900}
+{"type":"bind_progress_event","event":"telemetry_period_locked","nodeId":6,"phase":"complete","status":"complete","phaseElapsedMs":0,"phaseExpectedMs":200,"timingObservationCount":2,"reason":"single_delta","gcMillis":125200}
+```
 
 Protocol note: live-position air control packets now use high-range packet IDs `0xA1-0xA6`. These IDs are not exposed directly in serial JSON, but the change prevents assigned-channel telemetry from node IDs such as `6` from being mistaken for legacy timing-control packets. This is a breaking firmware change; the GC and all drone ESP32s must be reflashed together.
 
@@ -462,7 +508,7 @@ These tasks support `06_gc_lifecycle_spectrum_plan.md`.
 Fresh-session command:
 
 ```json
-{"type":"command","command":"clear_all_assignments","commandId":"sgc-0300","persist":true,"reason":"start_fresh_session"}
+{"type":"command","target":"magc","command":"clear_all_assignments","commandId":"sgc-0300","persist":true,"reason":"start_fresh_session"}
 ```
 
 Expected ACK:
@@ -565,7 +611,8 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Bridge receiver emits optional `bridgeHandshake` status such as `waiting_for_beacon`, `beacon_seen`, `live`, or `stale`.
 - [x] Bridge receiver emits USB `command_ack` when a queued RF command is ACKed, rejected, or duplicate-ACKed by the GC/MaGC.
 - [x] Bridge receiver emits compact `assignments` and `channel_table` summaries from the latest RF snapshot.
-- [ ] Add a compact bridge event-batch USB mapping if we need smoother Bind/Search event mirroring than the 1 Hz snapshot/status path.
+- [x] Bridge receiver reconstructs USB `drones_state` and `gc_status` from compact `BRIDGE_LIVE_DELTA` LoRa fallback packets without requiring new SGC message types.
+- [ ] Add a compact bridge event-batch USB mapping if we need event-level Bind/Search mirroring beyond the 250 ms compact snapshot/status path.
 
 ## ESP-NOW Bridge Primary USB Contract
 

@@ -55,6 +55,7 @@ const LIVE_BINDING_TIMING_LOCK_PERIODS = 3;
 const LIVE_BINDING_TIMING_LOCK_GUARD_MS = 250;
 const LIVE_BINDING_TIMING_LOCK_MAX_MS = 6000;
 const LIVE_BINDING_TIMING_REQUIRED_OBSERVATIONS = 2;
+const LIVE_RECOVERY_STATE_TTL_MS = 30000;
 const LIVE_BINDING_PHASE_ORDER = ["discovery", "quiet", "assign", "ack", "telemetry_bind", "timing"];
 const LIVE_BINDING_PHASES = {
   discovery: { label: "Shared discovery", fallbackMs: 925, start: 0.00, end: 0.12 },
@@ -67,6 +68,7 @@ const LIVE_BINDING_PHASES = {
 const LIVE_LINK_RECOVERY_CONFIRM_PACKETS = 2;
 const LIVE_LINK_RECOVERY_CONFIRM_MS = 2000;
 const LIVE_SCAN_ANIMATION_HOLD_MS = 3000;
+const LIVE_CAD_SUSPECT_TTL_MS = cfg("LIVE_CAD_SUSPECT_TTL_MS", 5000);
 const LIVE_SERIAL_RECONNECT_INTERVAL_MS = 750;
 const LOG_RING_CAPACITY = Math.max(1, Math.floor(Number(cfg("LOG_RING_CAPACITY", 1024)) || 1024));
 const LIVE_DRONE_ALIAS_STORAGE_KEY = "sgc.livePosition.droneAliases.v1";
@@ -77,10 +79,27 @@ const LIVE_RELAY_RECONNECT_MS = 1500;
 const LIVE_RELAY_DRONES_STATE_INTERVAL_MS = 250;
 const LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS = 80;
 const LIVE_RELAY_HOMES_STATE_INTERVAL_MS = 5000;
+const LIVE_DEBUG_STORAGE_KEY = "sgc.livePosition.debugEnabled.v1";
+const LIVE_DRONE_WIFI_HOST_STORAGE_KEY = "sgc.livePosition.droneWifiHost.v1";
+const LIVE_BINDING_STALL_GRACE_MS = 1000;
+const LIVE_BINDING_STALL_REPEAT_MS = 3000;
+const LIVE_FRESH_SESSION_RETRY_MAX = 5;
+const LIVE_FRESH_SESSION_RETRY_DELAY_MS = 350;
 const LIVE_RELAY_MESSAGE_TYPES = new Set([
   "drones_state",
   "homes_state",
 ]);
+
+function getLiveDebugEnabledDefault() {
+  try {
+    const params = new URLSearchParams(window.location.search || "");
+    if (params.get("debug") === "1" || params.get("liveDebug") === "1") return true;
+    if (params.get("debug") === "0" || params.get("liveDebug") === "0") return false;
+    return window.localStorage?.getItem(LIVE_DEBUG_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
 
 class RingLog {
   constructor(capacity = LOG_RING_CAPACITY) {
@@ -209,6 +228,8 @@ const liveState = {
   lastJsonAt: null,
   parseErrors: new RingLog(),
   gcStatus: null,
+  interGcStatus: null,
+  usbDeviceRole: null,
   channelTable: null,
   channelScanEvents: new RingLog(),
   scanInProgress: false,
@@ -227,6 +248,8 @@ const liveState = {
   sessionEvents: new RingLog(),
   freshSessionPending: false,
   freshSessionConfirming: false,
+  freshSessionRetryCount: 0,
+  freshSessionRetryTimer: null,
   searchPending: false,
   searchMode: false,
   profilePickerOpen: false,
@@ -239,6 +262,7 @@ const liveState = {
   orphanRecoveryEvents: new RingLog(),
   linkStatuses: new Map(),
   bindingStates: new Map(),
+  recoveryStates: new Map(),
   bindingAnimationTimer: null,
   relockRequests: new Map(),
   deleteRequests: new Map(),
@@ -258,6 +282,22 @@ const liveState = {
   gcDiagnosticLog: new RingLog(),
   gcDiagnosticLineNumber: 0,
   gcDiagnosticStartedAt: Date.now(),
+  debugEnabled: getLiveDebugEnabledDefault(),
+  debugStateText: "Idle",
+  droneDebugPort: null,
+  droneDebugReader: null,
+  droneDebugKeepReading: false,
+  droneDebugLineBuffer: "",
+  droneDebugConnected: false,
+  droneDebugPortLabel: "None",
+  droneDebugCommandSeq: 0,
+  droneDebugPendingCommands: new Map(),
+  droneDebugStatus: null,
+  droneDebugTelemetryPaused: false,
+  droneWifiHost: loadLiveStorageValue(LIVE_DRONE_WIFI_HOST_STORAGE_KEY, "simple-mesh-7.local"),
+  droneWifiBusy: false,
+  droneWifiStateText: "Idle",
+  bindingStallRecords: new Map(),
   telemetrySourceMode: "auto",
   relayEndpoint: loadLiveStorageValue(LIVE_RELAY_ENDPOINT_STORAGE_KEY, getDefaultLiveRelayEndpoint()),
   relaySessionId: LIVE_RELAY_PUBLIC_SESSION_ID,
@@ -360,6 +400,53 @@ function isLiveRemoteViewerMode() {
 
 function isLiveBridgeMode() {
   return Boolean(liveState.gcStatus?.bridgeMode);
+}
+
+function normalizeLiveUsbDeviceRole(role) {
+  const value = String(role || "").trim().toLowerCase();
+  if (value === "magc" || value === "magic" || value === "magic_ground_control") return "magic_ground_control";
+  if (value === "telegc" || value === "telemetry" || value === "telemetry_ground_control") return "telemetry_ground_control";
+  if (value === "gc" || value === "ground_control" || value === "ground_station") return "ground_station";
+  if (value === "bridge" || value === "lora_bridge" || value === "bridge_receiver") return "bridge_receiver";
+  return value || "";
+}
+
+function labelLiveUsbDeviceRole(role) {
+  const normalized = normalizeLiveUsbDeviceRole(role);
+  if (normalized === "magic_ground_control") return "MaGC";
+  if (normalized === "telemetry_ground_control") return "TeleGC";
+  if (normalized === "ground_station") return "GC";
+  if (normalized === "bridge_receiver") return "Bridge";
+  return normalized ? normalized.replaceAll("_", " ") : "";
+}
+
+function rememberLiveUsbDeviceRole(role) {
+  const normalized = normalizeLiveUsbDeviceRole(role);
+  if (normalized) liveState.usbDeviceRole = normalized;
+  return normalized;
+}
+
+function inferLiveUsbDeviceRole(status = liveState.gcStatus || {}) {
+  const statusRole = normalizeLiveUsbDeviceRole(status.nodeRole || status.node_role);
+  if (statusRole) return statusRole;
+  return normalizeLiveUsbDeviceRole(liveState.usbDeviceRole);
+}
+
+function getLiveUsbRoleWarning(status = liveState.gcStatus || {}) {
+  if (!liveState.connected || isLiveRemoteViewerMode()) return "";
+  const role = inferLiveUsbDeviceRole(status);
+  if (role === "magic_ground_control") {
+    return "MaGC is connected by USB. Connect TeleGC to this computer for SGC.";
+  }
+  return "";
+}
+
+function formatLiveLocalSourceValue(status = liveState.gcStatus || {}) {
+  if (isLiveBridgeMode()) return `${getLiveBridgeTransportLabel(status)} bridge`;
+  if (!liveState.connected) return "USB disconnected";
+  const role = inferLiveUsbDeviceRole(status);
+  const label = labelLiveUsbDeviceRole(role);
+  return label ? `${label} connected` : "USB connected";
 }
 
 function getLiveBridgeDownlinkAgeMs() {
@@ -3275,6 +3362,8 @@ function pickLiveDiagnosticFields(message) {
     "nodeId",
     "command",
     "commandId",
+    "target",
+    "sourceRole",
     "accepted",
     "reason",
     "state",
@@ -3302,6 +3391,31 @@ function pickLiveDiagnosticFields(message) {
     "estimatedTstGcMillis",
     "listenStartGcMillis",
     "listenDeadlineGcMillis",
+    "ackLatencyMs",
+    "joinMode",
+    "joinHeld",
+    "telemetryPaused",
+    "forcedJoinTxCount",
+    "autoSharedRxActive",
+    "autoSharedRxNodeId",
+    "autoSharedRxRemainingMs",
+    "autoSharedRxReason",
+    "emptySharedRxActive",
+    "emptySharedRxStrongRemainingMs",
+    "emptySharedRxPollCount",
+    "emptySharedRxNoPacketCount",
+    "emptySharedRxJoinCount",
+    "emptySharedRxOocrDeferredCount",
+    "emptySharedRxReason",
+    "telemetryCoverageMode",
+    "assignedRxCoveragePct",
+    "assignedPacketsReceived",
+    "assignedSequenceGapEvents",
+    "assignedSequenceGaps",
+    "assignedMaxGap",
+    "assignedSlotMisses",
+    "nonAssignedPreemptions",
+    "nextAssignedSlackMs",
   ];
   return Object.fromEntries(keys.filter((key) => message[key] !== undefined).map((key) => [key, message[key]]));
 }
@@ -3387,6 +3501,12 @@ function makeLiveGcDiagnosticSnapshotEntry() {
     connected: liveState.connected,
     searchPending: liveState.searchPending,
     searchMode: liveState.searchMode,
+    debugEnabled: liveState.debugEnabled,
+    debugStateText: liveState.debugStateText,
+    droneDebugConnected: liveState.droneDebugConnected,
+    droneDebugStatus: liveState.droneDebugStatus,
+    droneWifiHost: liveState.droneWifiHost,
+    droneWifiStateText: liveState.droneWifiStateText,
     relayState: liveState.relayState,
     relayRole: liveState.relayRole,
     relayDebug: { ...liveState.relayDebug },
@@ -3400,6 +3520,8 @@ function makeLiveGcDiagnosticSnapshotEntry() {
     recentOrphanRecoveryEvents: liveState.orphanRecoveryEvents.toArray().slice(-8),
     linkStatuses: [...liveState.linkStatuses.entries()].map(([nodeId, status]) => ({ nodeId, ...status })),
     bindingStates: [...liveState.bindingStates.entries()].map(([nodeId, state]) => ({ nodeId, ...state })),
+    bindingStallRecords: [...liveState.bindingStallRecords.entries()].map(([nodeId, state]) => ({ nodeId, ...state })),
+    recoveryStates: [...liveState.recoveryStates.entries()].map(([nodeId, state]) => ({ nodeId, ...state })),
   };
 }
 
@@ -3601,12 +3723,16 @@ function renderLiveBindingLine(host, bindingState, now = Date.now()) {
   }
 }
 
-function renderLiveBridgeCardLine(host, linkStatus, now = Date.now()) {
+function renderLiveBridgeCardLine(host, linkStatus, now = Date.now(), displayStateOverride = null) {
   host.className = "status-mission live-timing-line";
   host.innerHTML = "";
+  const rawState = normalizeLiveDisplayState(linkStatus?.state || "unknown");
+  const displayState = rawState === "binding" && displayStateOverride
+    ? normalizeLiveDisplayState(displayStateOverride)
+    : rawState;
   const stateEl = document.createElement("span");
   stateEl.className = "live-timing-frequency";
-  stateEl.textContent = formatLiveDisplayState(normalizeLiveDisplayState(linkStatus?.state || "unknown"));
+  stateEl.textContent = formatLiveDisplayState(displayState);
   host.appendChild(stateEl);
 
   const separatorEl = document.createElement("span");
@@ -3636,6 +3762,28 @@ function renderLiveBridgeCardLine(host, linkStatus, now = Date.now()) {
     ageUnitEl.className = "live-timing-age-unit";
     ageUnitEl.textContent = age.unit;
     host.appendChild(ageUnitEl);
+  }
+}
+
+function appendLiveRecoveryDetail(host, recoveryState, now = Date.now()) {
+  if (!host || !recoveryState) return;
+  const separatorEl = document.createElement("span");
+  separatorEl.className = "live-timing-separator";
+  separatorEl.textContent = "|";
+  host.appendChild(separatorEl);
+
+  const recoveryEl = document.createElement("span");
+  recoveryEl.className = "live-recovery-detail";
+  recoveryEl.textContent = recoveryState.label || "Recovery active";
+  host.appendChild(recoveryEl);
+
+  const updatedAt = Number(recoveryState.updatedAt);
+  if (Number.isFinite(updatedAt)) {
+    const age = formatLiveAgeParts(updatedAt, now);
+    const ageEl = document.createElement("span");
+    ageEl.className = "live-timing-ago";
+    ageEl.textContent = `${age.value}${age.unit} ago`;
+    host.appendChild(ageEl);
   }
 }
 
@@ -3938,11 +4086,15 @@ function getLiveFreshnessThresholds(drone) {
 
 function getLiveFreshnessState(drone, now = Date.now()) {
   if (!drone || !drone.lastReceivedAt) return "offline";
-  const ageMs = Math.max(0, now - drone.lastReceivedAt);
-  const thresholds = getLiveFreshnessThresholds(drone);
-  if (ageMs < thresholds.fresh) return "fresh";
-  if (ageMs < thresholds.late) return "late";
-  if (ageMs < thresholds.stale) return "stale";
+  return getLiveFreshnessStateForAgeMs(Math.max(0, now - drone.lastReceivedAt), drone);
+}
+
+function getLiveFreshnessStateForAgeMs(ageMs, drone = null) {
+  const numericAgeMs = Math.max(0, Number(ageMs) || 0);
+  const thresholds = drone ? getLiveFreshnessThresholds(drone) : { ...LIVE_FRESHNESS_MS };
+  if (numericAgeMs < thresholds.fresh) return "fresh";
+  if (numericAgeMs < thresholds.late) return "late";
+  if (numericAgeMs < thresholds.stale) return "stale";
   return "offline";
 }
 
@@ -3967,6 +4119,31 @@ function noteLiveTelemetryForLinkStatus(nodeId, previousReceivedAt = null, now =
   liveState.linkStatuses.delete(id);
 }
 
+function hasRecentLiveTelemetryForNode(nodeId, now = Date.now()) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return false;
+  const drone = drones.find((d) => Number(d.id) === id);
+  if (!drone) return false;
+  return getLiveFreshnessState(drone, now) !== "offline";
+}
+
+function isLiveLocalTelemetrySource(message = {}, source = "serial") {
+  const sourceRole = normalizeLiveUsbDeviceRole(message.sourceRole || message.source_role || message.source || "");
+  if (sourceRole === "magic_ground_control") return false;
+  if (sourceRole === "telemetry_ground_control") return true;
+  return source === "serial";
+}
+
+function clearLiveTerminalLinkStatusForBinding(nodeId) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return;
+  const linkStatus = liveState.linkStatuses.get(id);
+  const state = normalizeLiveDisplayState(linkStatus?.state);
+  if (["weak", "off", "offline"].includes(state)) {
+    liveState.linkStatuses.delete(id);
+  }
+}
+
 function getLiveDisplayState(drone, freshness, now = Date.now()) {
   if (drone && liveState.bindingStates.has(Number(drone.id))) return "binding";
   if (drone && isLiveDroneRelocking(drone.id, now)) return "binding";
@@ -3977,13 +4154,22 @@ function getLiveDisplayState(drone, freshness, now = Date.now()) {
     const latestReceivedAt = Number(latest?.receivedAt);
     const state = normalizeLiveDisplayState(linkStatus?.state);
     if (linkStatus?.holdUntilRecovered && isLiveTerminalLinkState(state)) {
+      if (freshness !== "offline") return freshness;
       return state;
     }
-    if (state === "offline" && Number.isFinite(latestReceivedAt) && ["fresh", "late"].includes(freshness)) {
+    if (state === "binding") {
+      return isLiveDroneRelocking(drone.id, now) ? "binding" : freshness;
+    }
+    if (isLiveTerminalLinkState(state) && Number.isFinite(latestReceivedAt) && freshness !== "offline") {
       return freshness;
     }
     if (linkStatus && (!Number.isFinite(latestReceivedAt) || !Number.isFinite(statusReceivedAt) || statusReceivedAt >= latestReceivedAt)) {
-      if (state === "online" || state === "fresh") return "fresh";
+      if (state === "online" || state === "fresh") {
+        if (Number.isFinite(statusReceivedAt)) {
+          return getLiveFreshnessStateForAgeMs(now - statusReceivedAt, drone);
+        }
+        return freshness;
+      }
       if (["binding", "weak", "off", "offline"].includes(state)) return state;
     }
   }
@@ -4034,44 +4220,88 @@ function getLiveAssignedCountForBindingState() {
   return Math.max(...counts.map((count) => Math.max(0, Number(count) || 0)));
 }
 
-function getLiveBindingState() {
+function getLiveActiveSharedBindProgressState() {
+  let activeState = null;
+  liveState.bindingStates.forEach((state) => {
+    if (activeState) return;
+    const origin = String(state?.origin || "shared_bind");
+    const status = String(state?.status || "active");
+    if (origin === "shared_bind" && status !== "failed") {
+      activeState = state;
+    }
+  });
+  return activeState;
+}
+
+function getLiveSearchButtonBindingState() {
   const status = liveState.gcStatus || {};
   const explicitBinding = Boolean(liveState.searchMode || liveState.searchPending);
+  const sharedBindProgress = getLiveActiveSharedBindProgressState();
+  const progressBinding =
+    !explicitBinding &&
+    !isLiveCommandReadOnlyMode() &&
+    Boolean(sharedBindProgress);
   const allLostSharedBinding =
     !explicitBinding &&
+    !progressBinding &&
     !isLiveCommandReadOnlyMode() &&
     liveState.connected &&
     status.allLostRecoveryActive === true &&
     status.allLostRecoveryPhase === "shared_bind";
-  const assignedCount = getLiveAssignedCountForBindingState();
-  const passiveBinding =
+  const autoSharedBinding =
     !explicitBinding &&
+    !progressBinding &&
     !allLostSharedBinding &&
     !isLiveCommandReadOnlyMode() &&
     liveState.connected &&
+    status.autoSharedRxActive === true;
+  const operatorDiscoveryBinding =
+    !progressBinding &&
+    !allLostSharedBinding &&
+    !autoSharedBinding &&
+    !isLiveCommandReadOnlyMode() &&
+    liveState.connected &&
+    status.operatorDiscoveryActive === true;
+  const assignedCount = getLiveAssignedCountForBindingState();
+  const passiveBinding =
+    !explicitBinding &&
+    !progressBinding &&
+    !allLostSharedBinding &&
+    !autoSharedBinding &&
+    !isLiveCommandReadOnlyMode() &&
+    liveState.connected &&
     assignedCount === 0;
-  return { explicitBinding, passiveBinding, allLostSharedBinding, assignedCount };
+  return { explicitBinding, progressBinding, passiveBinding, allLostSharedBinding, autoSharedBinding, operatorDiscoveryBinding, assignedCount };
 }
 
 function applyLiveSearchButtonState(searchBtn) {
   if (!searchBtn) return;
-  const { explicitBinding, passiveBinding, allLostSharedBinding } = getLiveBindingState();
-  const active = explicitBinding || passiveBinding || allLostSharedBinding;
+  const { explicitBinding, progressBinding, passiveBinding, allLostSharedBinding, autoSharedBinding, operatorDiscoveryBinding } = getLiveSearchButtonBindingState();
+  const active = explicitBinding || progressBinding || passiveBinding || allLostSharedBinding || autoSharedBinding || operatorDiscoveryBinding;
   const readOnlyReason = liveCommandReadOnlyMessage();
-  searchBtn.textContent = active ? "Binding..." : "Bind";
+  searchBtn.textContent = operatorDiscoveryBinding ? "Discovering..." : active ? "Binding..." : "Bind";
   searchBtn.disabled =
     isLiveCommandReadOnlyMode() ||
     !liveState.connected ||
     explicitBinding ||
+    progressBinding ||
     passiveBinding ||
-    allLostSharedBinding;
+    allLostSharedBinding ||
+    autoSharedBinding ||
+    operatorDiscoveryBinding;
   searchBtn.classList.toggle("is-active", active);
   searchBtn.title = readOnlyReason
     ? readOnlyReason
+    : progressBinding
+      ? "MaGC is binding a drone on the shared channel."
     : passiveBinding
       ? "GC has no assigned drones and is already listening for drones to bind."
       : allLostSharedBinding
         ? "All assigned drones are lost; GC is listening on the shared channel for drones to bind."
+      : autoSharedBinding
+        ? "MaGC is automatically listening on the shared channel for a lost drone to rejoin."
+      : operatorDiscoveryBinding
+        ? "MaGC is safely listening for new or rejoining drones without interrupting online drones."
       : explicitBinding
         ? "GC is binding/searching for drones."
         : "";
@@ -4709,6 +4939,11 @@ function renderLiveControls() {
   const relayConnectBtn = document.getElementById("liveRelayConnectBtn");
   const relayDisconnectBtn = document.getElementById("liveRelayDisconnectBtn");
   const relayTokenField = document.getElementById("liveRelayTokenField");
+  const debugPanel = document.getElementById("liveDebugPanel");
+  const debugStateEl = document.getElementById("liveDebugState");
+  const debugDroneStateEl = document.getElementById("liveDebugDroneState");
+  const debugDroneWifiStateEl = document.getElementById("liveDebugDroneWifiState");
+  const debugDroneWifiHostEl = document.getElementById("liveDebugDroneWifiHost");
   updateLiveGcDiagnosticControls();
   if (openBtn) openBtn.disabled = liveState.connected;
   if (closeBtn) closeBtn.disabled = !liveState.connected;
@@ -4738,6 +4973,63 @@ function renderLiveControls() {
     relayConnectBtn.disabled = !isLiveRelayMode() || liveState.relayConnected || liveState.relayState === "connecting" || liveState.relayState === "reconnecting";
   }
   if (relayDisconnectBtn) relayDisconnectBtn.disabled = !isLiveRelayMode() || (!liveState.relayConnected && liveState.relayState !== "reconnecting");
+  if (debugPanel) debugPanel.hidden = !liveState.debugEnabled;
+  if (debugStateEl) debugStateEl.textContent = liveState.debugStateText || "Idle";
+  if (debugDroneStateEl) {
+    debugDroneStateEl.textContent = liveState.droneDebugConnected
+      ? `Connected ${liveState.droneDebugStatus?.joinMode || ""}`.trim()
+      : "Disconnected";
+  }
+  if (debugDroneWifiStateEl) debugDroneWifiStateEl.textContent = liveState.droneWifiStateText || "Idle";
+  if (debugDroneWifiHostEl && document.activeElement !== debugDroneWifiHostEl) {
+    debugDroneWifiHostEl.value = liveState.droneWifiHost || "simple-mesh-7.local";
+  }
+  const telegcDebugBtns = [
+    "liveDebugTeleGcStatusBtn",
+    "liveDebugMaGcStatusBtn",
+    "liveDebugMaGcBindBtn",
+    "liveDebugMaGcCancelBtn",
+  ];
+  telegcDebugBtns.forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !liveState.debugEnabled || isLiveCommandReadOnlyMode() || !liveState.connected;
+  });
+  const droneOpenBtn = document.getElementById("liveDebugDroneOpenBtn");
+  const droneCloseBtn = document.getElementById("liveDebugDroneCloseBtn");
+  const droneCommandBtns = [
+    "liveDebugDroneHoldBtn",
+    "liveDebugDroneJoinBtn",
+    "liveDebugDroneRestartHoldBtn",
+    "liveDebugDronePauseBtn",
+    "liveDebugDroneRfLoss2Btn",
+    "liveDebugDroneDelay20Btn",
+    "liveDebugDroneDrop2Btn",
+    "liveDebugDroneRebootHoldBtn",
+  ];
+  if (droneOpenBtn) droneOpenBtn.disabled = !liveState.debugEnabled || liveState.droneDebugConnected;
+  if (droneCloseBtn) droneCloseBtn.disabled = !liveState.debugEnabled || !liveState.droneDebugConnected;
+  droneCommandBtns.forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !liveState.debugEnabled || !liveState.droneDebugConnected;
+  });
+  const pauseBtn = document.getElementById("liveDebugDronePauseBtn");
+  if (pauseBtn) pauseBtn.textContent = liveState.droneDebugTelemetryPaused ? "Resume Telemetry" : "Pause Telemetry";
+  [
+    "liveDebugDroneWifiStatusBtn",
+    "liveDebugDroneWifiHoldBtn",
+    "liveDebugDroneWifiJoinBtn",
+    "liveDebugDroneWifiRestartHoldBtn",
+    "liveDebugDroneWifiPauseBtn",
+    "liveDebugDroneWifiRfLoss2Btn",
+    "liveDebugDroneWifiDelay20Btn",
+    "liveDebugDroneWifiDrop2Btn",
+    "liveDebugDroneWifiRebootHoldBtn",
+  ].forEach((id) => {
+    const btn = document.getElementById(id);
+    if (btn) btn.disabled = !liveState.debugEnabled || liveState.droneWifiBusy;
+  });
+  const wifiPauseBtn = document.getElementById("liveDebugDroneWifiPauseBtn");
+  if (wifiPauseBtn) wifiPauseBtn.textContent = liveState.droneDebugTelemetryPaused ? "Resume Telemetry" : "Pause Telemetry";
 }
 
 function describeLiveSerialPort(port) {
@@ -4933,13 +5225,23 @@ function normalizeLiveChannelState(channel = {}, assigned = false) {
   const confidence = normalizeLiveActivityConfidence(channel.activityConfidence);
   if (Boolean(channel.cadError) && !Boolean(channel.activityDetected) && confidence !== "confirmed_drone") return "unknown";
   if (Boolean(channel.confirmedDrone) || confidence === "confirmed_drone") return "occupied";
-  if (confidence === "cad_suspect" || String(channel.activitySource || "").toLowerCase() === "cad") return "occupied";
+  const cadExpired = isLiveCadSuspectExpired(channel);
+  if (!cadExpired && (confidence === "cad_suspect" || String(channel.activitySource || "").toLowerCase() === "cad")) return "cad-suspect";
   const raw = channel.state !== undefined ? String(channel.state).toLowerCase() : "";
   if (raw === "free" || raw === "clear") return "free";
-  if (raw === "occupied" || raw === "noisy" || raw === "busy") return "occupied";
+  if (raw === "cad-suspect" || raw === "cad_suspect") return cadExpired ? "free" : "cad-suspect";
+  if (raw === "occupied" || raw === "noisy" || raw === "busy") {
+    return !cadExpired && (confidence === "cad_suspect" || String(channel.activitySource || "").toLowerCase() === "cad")
+      ? "cad-suspect"
+      : "occupied";
+  }
   if (raw === "assigned") return "assigned";
   if (raw === "reserved" || raw === "guard" || raw === "shared") return "reserved";
-  if (Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected)) return "occupied";
+  if (Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected)) {
+    return !cadExpired && (confidence === "cad_suspect" || String(channel.activitySource || "").toLowerCase() === "cad")
+      ? "cad-suspect"
+      : "occupied";
+  }
   if (Boolean(channel.clear)) return "free";
   return raw || "unknown";
 }
@@ -4956,6 +5258,22 @@ function normalizeLiveActivityConfidence(value) {
   if (raw === "scan_error" || raw === "error") return "scan_error";
   if (raw === "free" || raw === "none" || raw === "clear") return "free";
   return "";
+}
+
+function liveCadAgeMs(channel = {}, now = Date.now()) {
+  const wireAge = Number(channel.cadAgeMs);
+  if (Number.isFinite(wireAge) && wireAge >= 0) return wireAge;
+  const updatedAt = Number(channel.cadUpdatedAt);
+  if (Number.isFinite(updatedAt) && updatedAt > 0) return Math.max(0, now - updatedAt);
+  return NaN;
+}
+
+function isLiveCadSuspectExpired(channel = {}, now = Date.now()) {
+  if (Boolean(channel.confirmedDrone) || normalizeLiveActivityConfidence(channel.activityConfidence) === "confirmed_drone") return false;
+  const confidence = normalizeLiveActivityConfidence(channel.activityConfidence);
+  if (confidence !== "cad_suspect" && String(channel.activitySource || "").toLowerCase() !== "cad") return false;
+  const age = liveCadAgeMs(channel, now);
+  return Number.isFinite(age) && age > LIVE_CAD_SUSPECT_TTL_MS;
 }
 
 function liveActivityConfidenceRank(value) {
@@ -4992,6 +5310,8 @@ function getLiveChannelRows(table = {}) {
         const key = liveFrequencyKey(channel.frequencyMhz);
         const assignment = assignmentByKey.get(key);
         const assigned = Boolean(channel.assigned) || Boolean(assignment);
+        const confidence = normalizeLiveActivityConfidence(channel.activityConfidence);
+        const cadExpired = isLiveCadSuspectExpired(channel);
         const state = normalizeLiveChannelState(channel, assigned);
         const displayRssi = assigned
           ? firstFiniteNumber(assignment?.rssi, channel.displayRssi, channel.rssi, channel.maxRssi, channel.medianRssi)
@@ -5002,11 +5322,17 @@ function getLiveChannelRows(table = {}) {
           role: channel.role || "telemetry_candidate",
           clear: state === "free",
           assigned,
-          activityDetected: Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected) || state === "occupied",
-          activitySource: channel.activitySource || "",
-          activityConfidence: normalizeLiveActivityConfidence(channel.activityConfidence),
+          activityDetected: !cadExpired && (Boolean(channel.activityDetected) || Boolean(channel.channelActivityDetected) || state === "occupied" || state === "cad-suspect"),
+          activitySource: cadExpired ? "none" : channel.activitySource || "",
+          activityConfidence: cadExpired ? "free" : confidence,
           cadStatus: channel.cadStatus || "",
           cadError: Boolean(channel.cadError),
+          cadSampleCount: Number(channel.cadSampleCount),
+          cadHitCount: Number(channel.cadHitCount),
+          cadValidated: Boolean(channel.cadValidated),
+          cadRejected: Boolean(channel.cadRejected),
+          cadAgeMs: Number(channel.cadAgeMs),
+          cadUpdatedAt: Date.now() - (Number.isFinite(Number(channel.cadAgeMs)) ? Math.max(0, Number(channel.cadAgeMs)) : 0),
           listenAttempted: Boolean(channel.listenAttempted),
           confirmedDrone: Boolean(channel.confirmedDrone),
           decodedNodeId: Number(channel.decodedNodeId),
@@ -5029,18 +5355,24 @@ function getLiveChannelRows(table = {}) {
     const key = liveFrequencyKey(freq);
     const assignment = assignmentByKey.get(key);
     const assigned = Boolean(assignment);
-    const normalizedState = assigned ? "assigned" : state || (noisyKeys.has(key) ? "occupied" : clear ? "free" : "unknown");
+    const normalizedState = assigned ? "assigned" : state || (noisyKeys.has(key) ? "cad-suspect" : clear ? "free" : "unknown");
     rows.push({
       channelIndex: Math.round((freq - 902.5) / 0.5),
       frequencyMhz: freq,
       role,
       clear: normalizedState === "free",
       assigned,
-      activityDetected: normalizedState === "occupied",
-      activitySource: normalizedState === "occupied" ? "cad" : "none",
-      activityConfidence: normalizedState === "occupied" ? "cad_suspect" : normalizedState === "free" ? "free" : "",
-      cadStatus: normalizedState === "occupied" ? "detected" : normalizedState === "free" ? "free" : "",
+      activityDetected: normalizedState === "cad-suspect" || normalizedState === "occupied",
+      activitySource: normalizedState === "cad-suspect" ? "cad" : "none",
+      activityConfidence: normalizedState === "cad-suspect" ? "cad_suspect" : normalizedState === "free" ? "free" : "",
+      cadStatus: normalizedState === "cad-suspect" ? "detected" : normalizedState === "free" ? "free" : "",
       cadError: false,
+      cadSampleCount: NaN,
+      cadHitCount: NaN,
+      cadValidated: false,
+      cadRejected: false,
+      cadAgeMs: NaN,
+      cadUpdatedAt: normalizedState === "cad-suspect" ? Date.now() : 0,
       listenAttempted: false,
       confirmedDrone: false,
       decodedNodeId: NaN,
@@ -5083,6 +5415,12 @@ function getDefaultLiveScanChannels() {
       activityConfidence: "",
       cadStatus: "",
       cadError: false,
+      cadSampleCount: NaN,
+      cadHitCount: NaN,
+      cadValidated: false,
+      cadRejected: false,
+      cadAgeMs: NaN,
+      cadUpdatedAt: 0,
       listenAttempted: false,
       confirmedDrone: false,
       decodedNodeId: NaN,
@@ -5106,7 +5444,25 @@ function getLiveScanDisplayTable(table = {}, includeScanRows = false) {
     rowsByKey.set(liveFrequencyKey(channel.frequencyMhz), channel);
   });
 
-  liveState.scanRows.forEach((channel) => {
+  liveState.scanRows.forEach((channel, key) => {
+    if (isLiveCadSuspectExpired(channel)) {
+      const expired = {
+        ...channel,
+        activityDetected: false,
+        activitySource: "none",
+        activityConfidence: "free",
+        cadStatus: "free",
+        clear: true,
+        state: "free",
+        detectedProfileIds: [],
+        displayRssi: NaN,
+        medianRssi: NaN,
+        maxRssi: NaN,
+      };
+      liveState.scanRows.set(key, expired);
+      rowsByKey.set(liveFrequencyKey(expired.frequencyMhz), expired);
+      return;
+    }
     rowsByKey.set(liveFrequencyKey(channel.frequencyMhz), channel);
   });
 
@@ -5114,26 +5470,78 @@ function getLiveScanDisplayTable(table = {}, includeScanRows = false) {
     const key = liveFrequencyKey(channel.frequencyMhz);
     const existing = rowsByKey.get(key);
     if (existing) {
+      const now = Date.now();
+      const incomingConfidence = normalizeLiveActivityConfidence(channel.activityConfidence);
+      const incomingCad = incomingConfidence === "cad_suspect" || channel.state === "cad-suspect";
+      const incomingConfirmed = Boolean(channel.confirmedDrone) || incomingConfidence === "confirmed_drone";
+      const incomingFree = !channel.assigned && !incomingConfirmed && (
+        channel.state === "free" ||
+        Boolean(channel.clear) ||
+        (incomingConfidence === "free" && !Boolean(channel.activityDetected))
+      );
       existing.assigned = existing.assigned || channel.assigned;
-      existing.activityDetected = existing.activityDetected || channel.activityDetected;
-      existing.activityConfidence = strongerLiveActivityConfidence(existing.activityConfidence, channel.activityConfidence);
-      if (!existing.activitySource || existing.activitySource === "none") existing.activitySource = channel.activitySource || existing.activitySource;
-      existing.cadStatus = channel.cadStatus || existing.cadStatus;
-      existing.cadError = existing.cadError || channel.cadError;
-      existing.listenAttempted = existing.listenAttempted || channel.listenAttempted;
-      existing.confirmedDrone = existing.confirmedDrone || channel.confirmedDrone;
+      if (incomingConfirmed) {
+        existing.activityDetected = true;
+        existing.activityConfidence = "confirmed_drone";
+        existing.activitySource = channel.activitySource || "decoded_telemetry";
+        existing.confirmedDrone = true;
+        existing.state = "occupied";
+        existing.clear = false;
+      } else if (incomingFree) {
+        existing.activityDetected = false;
+        existing.activityConfidence = "free";
+        existing.activitySource = "none";
+        existing.cadStatus = "free";
+        existing.cadError = false;
+        existing.cadValidated = false;
+        existing.cadRejected = Boolean(channel.cadRejected);
+        existing.confirmedDrone = false;
+        existing.decodedNodeId = NaN;
+        existing.detectedProfileIds = [];
+        existing.state = "free";
+        existing.clear = true;
+      } else if (incomingCad && !isLiveCadSuspectExpired(channel, now)) {
+        existing.activityDetected = true;
+        existing.activityConfidence = "cad_suspect";
+        existing.activitySource = channel.activitySource || "cad";
+        existing.cadStatus = channel.cadStatus || "detected";
+        existing.cadError = false;
+        existing.cadValidated = Boolean(channel.cadValidated);
+        existing.cadRejected = Boolean(channel.cadRejected);
+        existing.cadUpdatedAt = now - (Number.isFinite(Number(channel.cadAgeMs)) ? Math.max(0, Number(channel.cadAgeMs)) : 0);
+        existing.state = "cad-suspect";
+        existing.clear = false;
+      } else if (channel.cadError) {
+        existing.cadError = true;
+        existing.state = "unknown";
+        existing.clear = false;
+      }
+      existing.listenAttempted = Boolean(existing.listenAttempted) || Boolean(channel.listenAttempted);
       if (Number.isFinite(channel.decodedNodeId)) existing.decodedNodeId = channel.decodedNodeId;
-      existing.detectedProfileIds = normalizeLiveDetectedProfileIds([
-        ...(existing.detectedProfileIds || []),
-        ...(channel.detectedProfileIds || []),
-      ]);
+      existing.detectedProfileIds = incomingFree
+        ? []
+        : normalizeLiveDetectedProfileIds([
+            ...(existing.detectedProfileIds || []),
+            ...(channel.detectedProfileIds || []),
+          ]);
+      if (Number.isFinite(channel.cadSampleCount)) existing.cadSampleCount = channel.cadSampleCount;
+      if (Number.isFinite(channel.cadHitCount)) existing.cadHitCount = channel.cadHitCount;
+      if (Number.isFinite(channel.cadAgeMs)) existing.cadAgeMs = channel.cadAgeMs;
       if (Number.isFinite(channel.displayRssi)) existing.displayRssi = channel.displayRssi;
       if (Number.isFinite(channel.medianRssi)) existing.medianRssi = channel.medianRssi;
       if (Number.isFinite(channel.maxRssi)) existing.maxRssi = channel.maxRssi;
       if (channel.assigned) {
         existing.state = "assigned";
+      } else if (isLiveCadSuspectExpired(existing, now)) {
+        existing.activityDetected = false;
+        existing.activityConfidence = "free";
+        existing.activitySource = "none";
+        existing.cadStatus = "free";
+        existing.state = "free";
       } else if (existing.cadError && !existing.activityDetected) {
         existing.state = "unknown";
+      } else if (existing.activityConfidence === "cad_suspect") {
+        existing.state = "cad-suspect";
       } else if (existing.activityDetected || channel.state === "occupied") {
         existing.state = "occupied";
       } else if (channel.state === "free") {
@@ -5186,21 +5594,44 @@ function updateLiveScanRow(message) {
   const previousProfiles = normalizeLiveDetectedProfileIds(existing.detectedProfileIds);
   const profileIds = normalizeLiveDetectedProfileIds(message.detectedProfileIds);
   const radioProfileId = Number(message.radioProfileId);
-  if (Boolean(message.activityDetected) && Number.isFinite(radioProfileId)) {
+  const messageConfidence = normalizeLiveActivityConfidence(
+    message.activityConfidence || (Boolean(message.confirmedDrone) ? "confirmed_drone" : Boolean(message.activityDetected) ? "cad_suspect" : Boolean(message.cadError) ? "scan_error" : "free")
+  );
+  const now = Date.now();
+  const incomingConfirmed = Boolean(message.confirmedDrone) || messageConfidence === "confirmed_drone";
+  const incomingCad = messageConfidence === "cad_suspect";
+  const incomingFree = !incomingConfirmed && (
+    messageConfidence === "free" ||
+    message.state === "free" ||
+    Boolean(message.clear) ||
+    Boolean(message.cadRejected)
+  );
+  if (incomingCad && Number.isFinite(radioProfileId)) {
     profileIds.push(radioProfileId);
   }
-  const detectedProfileIds = normalizeLiveDetectedProfileIds([...previousProfiles, ...profileIds]);
-  const activityDetected = Boolean(existing.activityDetected) || Boolean(message.activityDetected) || detectedProfileIds.length > 0;
-  const activityConfidence = strongerLiveActivityConfidence(
-    existing.activityConfidence,
-    message.activityConfidence || (Boolean(message.confirmedDrone) ? "confirmed_drone" : activityDetected ? "cad_suspect" : Boolean(message.cadError) ? "scan_error" : "free")
-  );
-  const cadError = Boolean(existing.cadError) || Boolean(message.cadError);
-  const state = cadError && !activityDetected
-    ? "unknown"
-    : activityDetected || activityConfidence === "cad_suspect" || activityConfidence === "confirmed_drone"
-      ? "occupied"
-      : normalizeLiveChannelState(message, false);
+  const cadUpdatedAt = incomingCad
+    ? now - (Number.isFinite(Number(message.cadAgeMs)) ? Math.max(0, Number(message.cadAgeMs)) : 0)
+    : Number(existing.cadUpdatedAt) || 0;
+  const cadExpired = incomingCad && isLiveCadSuspectExpired({ ...message, cadUpdatedAt }, now);
+  const detectedProfileIds = incomingFree || cadExpired
+    ? []
+    : normalizeLiveDetectedProfileIds([...previousProfiles, ...profileIds]);
+  const cadError = Boolean(message.cadError);
+  const activityConfidence = incomingConfirmed
+    ? "confirmed_drone"
+    : incomingCad && !cadExpired
+      ? "cad_suspect"
+      : cadError
+        ? "scan_error"
+        : "free";
+  const activityDetected = incomingConfirmed || (incomingCad && !cadExpired);
+  const state = incomingConfirmed
+    ? "occupied"
+    : incomingCad && !cadExpired
+      ? "cad-suspect"
+      : cadError
+        ? "unknown"
+        : "free";
   liveState.scanRows.set(key, {
     channelIndex: Number(message.channelIndex),
     frequencyMhz,
@@ -5208,17 +5639,23 @@ function updateLiveScanRow(message) {
     clear: state === "free",
     assigned: false,
     activityDetected,
-    activitySource: message.activitySource || existing.activitySource || (activityDetected ? "cad" : "none"),
+    activitySource: activityDetected ? (message.activitySource || (incomingConfirmed ? "decoded_telemetry" : "cad")) : "none",
     activityConfidence,
-    cadStatus: message.cadStatus || existing.cadStatus || (activityDetected ? "detected" : cadError ? "error" : "free"),
+    cadStatus: activityDetected ? (message.cadStatus || "detected") : cadError ? "error" : "free",
     cadError,
-    listenAttempted: Boolean(existing.listenAttempted) || Boolean(message.listenAttempted),
-    confirmedDrone: Boolean(existing.confirmedDrone) || Boolean(message.confirmedDrone),
-    decodedNodeId: firstFiniteNumber(message.decodedNodeId, existing.decodedNodeId),
+    cadSampleCount: firstFiniteNumber(message.cadSampleCount, existing.cadSampleCount),
+    cadHitCount: firstFiniteNumber(message.cadHitCount, existing.cadHitCount),
+    cadValidated: Boolean(message.cadValidated),
+    cadRejected: Boolean(message.cadRejected),
+    cadAgeMs: firstFiniteNumber(message.cadAgeMs, incomingCad ? 0 : NaN),
+    cadUpdatedAt,
+    listenAttempted: Boolean(message.listenAttempted) || (!incomingFree && Boolean(existing.listenAttempted)),
+    confirmedDrone: incomingConfirmed,
+    decodedNodeId: incomingFree ? NaN : firstFiniteNumber(message.decodedNodeId, existing.decodedNodeId),
     detectedProfileIds,
-    medianRssi: firstFiniteNumber(message.medianRssi, existing.medianRssi),
-    maxRssi: firstFiniteNumber(message.maxRssi, existing.maxRssi),
-    displayRssi: firstFiniteNumber(message.displayRssi, message.rssi, message.maxRssi, message.medianRssi, existing.displayRssi),
+    medianRssi: incomingFree ? NaN : firstFiniteNumber(message.medianRssi, existing.medianRssi),
+    maxRssi: incomingFree ? NaN : firstFiniteNumber(message.maxRssi, existing.maxRssi),
+    displayRssi: incomingFree ? NaN : firstFiniteNumber(message.displayRssi, message.rssi, message.maxRssi, message.medianRssi, existing.displayRssi),
     state,
   });
 }
@@ -5376,6 +5813,8 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
               ? "confirmed"
           : channel.state === "free" || channel.clear
             ? "clear"
+            : channel.state === "cad-suspect" || channel.activityConfidence === "cad_suspect"
+              ? "cad-suspect"
             : channel.state === "occupied" || channel.activityDetected || channel.state === "noisy"
               ? "cad-suspect"
               : "unknown";
@@ -5392,10 +5831,19 @@ function renderLiveSpectrum(host, table = {}, { manual = false } = {}) {
     bar.style.height = `${height.toFixed(0)}px`;
     const rssiText = Number.isFinite(displayRssi) ? ` RSSI ${displayRssi} dBm` : "";
     const profileText = channel.detectedProfileIds?.length ? ` profiles ${channel.detectedProfileIds.join(",")}` : "";
+    const cadSampleCount = Number(channel.cadSampleCount);
+    const cadHitCount = Number(channel.cadHitCount);
+    const cadText = Number.isFinite(cadSampleCount) && cadSampleCount > 0 && Number.isFinite(cadHitCount)
+      ? ` CAD ${cadHitCount}/${cadSampleCount}${channel.cadRejected ? " rejected" : channel.cadValidated ? " validated" : ""}`
+      : "";
+    const cadAge = liveCadAgeMs(channel);
+    const cadAgeText = Number.isFinite(cadAge) && channel.activityConfidence === "cad_suspect"
+      ? ` age ${(cadAge / 1000).toFixed(1)}s`
+      : "";
     const confidenceText = channel.activityConfidence ? ` ${channel.activityConfidence}` : "";
     const listenText = channel.listenAttempted ? " listened" : "";
     const nodeText = Number.isFinite(channel.decodedNodeId) ? ` node ${channel.decodedNodeId}` : "";
-    bar.title = `${channel.frequencyMhz.toFixed(1)} MHz ${channel.role} ${channel.state}${confidenceText}${channel.assigned ? " assigned" : ""}${listenText}${nodeText}${profileText}${rssiText}`;
+    bar.title = `${channel.frequencyMhz.toFixed(1)} MHz ${channel.role} ${channel.state}${confidenceText}${channel.assigned ? " assigned" : ""}${listenText}${nodeText}${profileText}${cadText}${cadAgeText}${rssiText}`;
     bars.appendChild(bar);
   });
   wrap.appendChild(bars);
@@ -5486,12 +5934,24 @@ async function requestLiveDroneRelock(nodeId) {
 
   const expiresAt = Date.now() + LIVE_RELOCK_TIMEOUT_MS;
   liveState.relockRequests.set(id, { expiresAt, commandId: null });
+  upsertLiveBindingState(
+    id,
+    "telemetry_bind",
+    {
+      event: "manual_rebind_requested",
+      phaseExpectedMs: LIVE_RELOCK_TIMEOUT_MS,
+      reason: "operator_requested",
+    },
+    { origin: "manual_rebind" }
+  );
+  clearLiveRecoveryState(id);
   updateStatusList();
 
   const commandId = await sendLiveSerialCommand("relock_drone", { nodeId: id });
   const request = liveState.relockRequests.get(id);
   if (!commandId) {
     liveState.relockRequests.delete(id);
+    clearLiveBindingState(id);
     updateStatusList();
     return;
   }
@@ -5503,6 +5963,11 @@ async function requestLiveDroneRelock(nodeId) {
     const current = liveState.relockRequests.get(id);
     if (!current || current.commandId !== commandId) return;
     liveState.relockRequests.delete(id);
+    const bindingState = getLiveBindingState(id);
+    if (bindingState?.origin === "manual_rebind") {
+      clearLiveBindingState(id);
+      upsertLiveRecoveryState(id, { event: "manual_relock_expired", reason: "command_timeout" });
+    }
     if (liveState.pendingCommands.has(commandId)) {
       liveState.pendingCommands.delete(commandId);
       recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "relock_drone", commandId, nodeId: id });
@@ -5816,13 +6281,43 @@ function renderLiveGcStatus() {
   const channelSummary = getLiveChannelSummary(table);
   const occupied = Number.isFinite(channelSummary.occupied) ? channelSummary.occupied : 0;
   const free = Number.isFinite(channelSummary.free) ? channelSummary.free : null;
+  const usbRoleWarning = getLiveUsbRoleWarning(status);
+  const autoSharedRemainingMs = Number(status.autoSharedRxRemainingMs);
+  const autoSharedValue = status.autoSharedRxActive
+    ? `node ${status.autoSharedRxNodeId || "any"} / ${Number.isFinite(autoSharedRemainingMs) ? Math.ceil(autoSharedRemainingMs / 1000) : "?"}s`
+    : "Idle";
+  const operatorDiscoveryRemainingMs = Number(status.operatorDiscoveryRemainingMs);
+  const operatorDiscoveryValue = status.operatorDiscoveryActive
+    ? `${Number.isFinite(operatorDiscoveryRemainingMs) ? Math.ceil(operatorDiscoveryRemainingMs / 1000) : "?"}s / joins ${status.operatorDiscoveryJoinCount ?? 0}`
+    : "Idle";
+  const operatorDiscoveryTitle = `reason ${status.operatorDiscoveryReason || "-"}, polls ${status.operatorDiscoveryPollCount ?? 0}, no-packet ${status.operatorDiscoveryNoPacketCount ?? 0}`;
+  const emptySharedRemainingMs = Number(status.emptySharedRxStrongRemainingMs);
+  const emptySharedValue = status.emptySharedRxActive
+    ? `${Number.isFinite(emptySharedRemainingMs) ? Math.ceil(emptySharedRemainingMs / 1000) : "?"}s strong / joins ${status.emptySharedRxJoinCount ?? 0}`
+    : "Idle";
+  const emptySharedTitle = `reason ${status.emptySharedRxReason || "-"}, polls ${status.emptySharedRxPollCount ?? 0}, no-packet ${status.emptySharedRxNoPacketCount ?? 0}, OOCR defers ${status.emptySharedRxOocrDeferredCount ?? 0}`;
+  const shortLossRemainingMs = Number(status.shortLossGuardRemainingMs);
+  const shortLossValue = status.shortLossGuardActive
+    ? `node ${status.shortLossGuardNodeId || "?"} / miss ${status.shortLossGuardMissCount || 0} / ${Number.isFinite(shortLossRemainingMs) ? Math.ceil(shortLossRemainingMs / 1000) : "?"}s`
+    : "Idle";
+  const coveragePct = Number(status.assignedRxCoveragePct);
+  const coverageValue = status.telemetryCoverageMode
+    ? `${status.telemetryCoverageMode} / ${Number.isFinite(coveragePct) ? `${coveragePct}%` : "n/a"} / gaps ${status.assignedSequenceGaps ?? 0}`
+    : "N/A";
+  const latestPostBindEvent = liveState.scannerEvents
+    .toArray()
+    .reverse()
+    .find((event) => String(event?.event || "").startsWith("post_bind_"));
+  const latestPostBindAgeMs = latestPostBindEvent ? Math.max(0, Date.now() - Number(latestPostBindEvent.loggedAt || Date.now())) : null;
+  const postBindValue = latestPostBindEvent
+    ? `node ${latestPostBindEvent.nodeId || "?"} / ${String(latestPostBindEvent.event || "").replace("post_bind_", "").replaceAll("_", " ")}`
+    : "Idle";
   const sourceValue = isLiveRemoteViewerMode()
     ? formatLiveRemotePublisherSource()
-    : isLiveBridgeMode()
-      ? `${getLiveBridgeTransportLabel(status)} bridge`
-      : liveState.connected ? "USB connected" : "USB disconnected";
+    : formatLiveLocalSourceValue(status);
   const items = [
     { label: "Source", value: sourceValue },
+    ...(usbRoleWarning ? [{ label: "Warning", value: usbRoleWarning, severity: "warning" }] : []),
     { label: "Relay", value: formatLiveRelayDebugSummary() },
     ...(isLiveRemoteViewerMode() && liveState.remotePublisherStatus?.publisherSource === "bridge"
       ? [{
@@ -5836,14 +6331,37 @@ function renderLiveGcStatus() {
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
     { label: "Channels", value: free !== null ? `${free} free / ${occupied} occupied` : "N/A", action: "channels" },
+    ...(liveState.debugEnabled || status.autoSharedRxActive
+      ? [{ label: "Auto RX", value: autoSharedValue, title: status.autoSharedRxReason || "" }]
+      : []),
+    ...(liveState.debugEnabled || status.operatorDiscoveryActive
+      ? [{ label: "Safe bind", value: operatorDiscoveryValue, title: operatorDiscoveryTitle }]
+      : []),
+    ...(liveState.debugEnabled || status.emptySharedRxActive
+      ? [{ label: "Empty RX", value: emptySharedValue, title: emptySharedTitle }]
+      : []),
+    ...(liveState.debugEnabled || status.shortLossGuardActive
+      ? [{ label: "Short loss", value: shortLossValue, title: "Assigned-channel continuity guard for short packet-loss bursts" }]
+      : []),
+    ...(liveState.debugEnabled || status.assignedSequenceGaps > 0 || status.nonAssignedPreemptions > 0
+      ? [{
+          label: "Coverage",
+          value: coverageValue,
+          title: `packets ${status.assignedPacketsReceived ?? 0}, gap events ${status.assignedSequenceGapEvents ?? 0}, max gap ${status.assignedMaxGap ?? 0}, slot misses ${status.assignedSlotMisses ?? 0}, preemptions ${status.nonAssignedPreemptions ?? 0}, slack ${status.nextAssignedSlackMs ?? "?"} ms`,
+        }]
+      : []),
+    ...(liveState.debugEnabled && latestPostBindEvent
+      ? [{ label: "Post-bind", value: postBindValue, title: `Source ${latestPostBindEvent.sourceRole || "unknown"} / age ${latestPostBindAgeMs} ms` }]
+      : []),
     { label: "Bind", value: "", action: "search" },
   ];
 
   const grid = document.createElement("div");
   grid.className = "live-gc-grid";
-  items.forEach(({ label, value, action, title }) => {
+  items.forEach(({ label, value, action, title, severity }) => {
     const item = document.createElement("div");
     item.className = "live-gc-item";
+    if (severity === "warning") item.classList.add("live-gc-item-warning");
     if (title) item.title = title;
     if (action === "profile" || action === "channels") {
       item.classList.add("live-gc-item-action");
@@ -5992,11 +6510,54 @@ const liveProtocolSchemas = {
     assignedDrones: "integer",
     clearChannels: "integer",
     scanMode: "string",
+    autoSharedRxActive: "boolean",
+    autoSharedRxNodeId: "integer",
+    autoSharedRxRemainingMs: "integer",
+    autoSharedRxReason: "string",
+    emptySharedRxActive: "boolean",
+    emptySharedRxStrongRemainingMs: "integer",
+    emptySharedRxPollCount: "integer",
+    emptySharedRxNoPacketCount: "integer",
+    emptySharedRxJoinCount: "integer",
+    emptySharedRxOocrDeferredCount: "integer",
+    emptySharedRxReason: "string",
+    shortLossGuardActive: "boolean",
+    shortLossGuardNodeId: "integer",
+    shortLossGuardMissCount: "integer",
+    shortLossGuardRemainingMs: "integer",
+    telemetryCoverageMode: "string",
+    assignedRxCoveragePct: "integer",
+    assignedPacketsReceived: "integer",
+    assignedSequenceGapEvents: "integer",
+    assignedSequenceGaps: "integer",
+    assignedMaxGap: "integer",
+    assignedSlotMisses: "integer",
+    nonAssignedPreemptions: "integer",
+    nextAssignedSlackMs: "integer",
+    operatorSharedRxActive: "boolean",
+    operatorDiscoveryActive: "boolean",
+    operatorDiscoveryRemainingMs: "integer",
+    operatorDiscoveryPollCount: "integer",
+    operatorDiscoveryNoPacketCount: "integer",
+    operatorDiscoveryJoinCount: "integer",
+    operatorDiscoveryReason: "string",
+    sharedJoinRequestCount: "integer",
+    lastSharedJoinNodeId: "integer",
     gcMillis: "integer",
   },
   assignment_event: {
     type: "string",
     event: "string",
+    gcMillis: "integer",
+  },
+  bind_progress_event: {
+    type: "string",
+    event: "string",
+    nodeId: "integer",
+    phase: "string",
+    status: "string",
+    phaseElapsedMs: "integer",
+    phaseExpectedMs: "integer",
     gcMillis: "integer",
   },
   command_ack: {
@@ -6027,6 +6588,11 @@ const liveProtocolSchemas = {
     gcMillis: "integer",
   },
   orphan_recovery_event: {
+    type: "string",
+    event: "string",
+    gcMillis: "integer",
+  },
+  telemetry_rebind_event: {
     type: "string",
     event: "string",
     gcMillis: "integer",
@@ -6255,8 +6821,46 @@ function isLiveDroneFreshForBindingCompletion(nodeId, now = Date.now()) {
   return getLiveFreshnessState(drone, now) === "fresh";
 }
 
+function checkLiveBindingStalls(now = Date.now()) {
+  liveState.bindingStates.forEach((state, nodeId) => {
+    if (!state || state.status === "failed" || state.status === "completing") return;
+    const phase = String(state.phase || "discovery");
+    const phaseStartedAt = Number(state.phaseStartedAt) || now;
+    const expectedMs = Math.max(1, Number(state.phaseExpectedMs) || getLiveBindingPhaseExpectedMs(phase, state, nodeId));
+    const elapsedMs = Math.max(0, now - phaseStartedAt);
+    if (elapsedMs <= expectedMs + LIVE_BINDING_STALL_GRACE_MS) {
+      const previous = liveState.bindingStallRecords.get(nodeId);
+      if (previous && previous.phase !== phase) liveState.bindingStallRecords.delete(nodeId);
+      return;
+    }
+    const previous = liveState.bindingStallRecords.get(nodeId);
+    if (
+      previous &&
+      previous.phase === phase &&
+      now - Number(previous.loggedAt || 0) < LIVE_BINDING_STALL_REPEAT_MS
+    ) {
+      return;
+    }
+    const progress = getLiveBindingProgress(state, now);
+    const percent = Math.round(progress * 100);
+    const detail = {
+      nodeId,
+      phase,
+      progress,
+      percent,
+      elapsedMs,
+      expectedMs,
+      reason: phase === "telemetry_bind" && percent >= 82 ? "telemetry_bind_84_percent_region" : "phase_timeout",
+    };
+    liveState.bindingStallRecords.set(nodeId, { ...detail, loggedAt: now });
+    recordLiveGcDiagnosticEvent("bind_progress_stalled", detail);
+    appendLiveDebug(`bind stalled: node ${nodeId} ${phase} ${percent}%`);
+  });
+}
+
 function updateLiveBindingProgressDom(now = Date.now()) {
   const completedNodeIds = [];
+  checkLiveBindingStalls(now);
   document.querySelectorAll(".live-bind-progress-overlay[data-node-id]").forEach((overlay) => {
     const nodeId = Number(overlay.dataset.nodeId);
     const state = liveState.bindingStates.get(nodeId);
@@ -6305,7 +6909,12 @@ function syncLiveBindingAnimationTimer() {
   }
 }
 
-function upsertLiveBindingState(nodeId, phase, message = {}, { status = "active", reason = null, progress = null } = {}) {
+function upsertLiveBindingState(
+  nodeId,
+  phase,
+  message = {},
+  { status = "active", reason = null, progress = null, origin = null } = {}
+) {
   const id = Number(nodeId);
   if (!Number.isFinite(id) || id <= 0) return null;
   const now = Date.now();
@@ -6318,6 +6927,10 @@ function upsertLiveBindingState(nodeId, phase, message = {}, { status = "active"
   const nextStatus = status || current.status || "active";
   const samePhase = current.phase === nextPhase && current.status === nextStatus;
   const phaseExpectedMs = getLiveBindingPhaseExpectedMs(nextPhase, message, id);
+  const rawPhaseElapsedMs = Number(message.phaseElapsedMs);
+  const phaseElapsedMs = Number.isFinite(rawPhaseElapsedMs) && rawPhaseElapsedMs >= 0
+    ? Math.min(rawPhaseElapsedMs, phaseExpectedMs || LIVE_BINDING_DEFAULT_PHASE_MS)
+    : null;
   const currentProgress = current.phase ? getLiveBindingProgress(current, now) : 0;
   const computedProgress = progress !== null && progress !== undefined
     ? clampLiveBindingProgress(progress)
@@ -6328,10 +6941,13 @@ function upsertLiveBindingState(nodeId, phase, message = {}, { status = "active"
     ...current,
     nodeId: id,
     phase: nextPhase,
-    phaseStartedAt: samePhase && Number.isFinite(Number(current.phaseStartedAt)) ? current.phaseStartedAt : now,
+    phaseStartedAt: phaseElapsedMs !== null
+      ? now - phaseElapsedMs
+      : samePhase && Number.isFinite(Number(current.phaseStartedAt)) ? current.phaseStartedAt : now,
     phaseExpectedMs,
     progress: computedProgress,
     status: nextStatus,
+    origin: origin || current.origin || "shared_bind",
     reason: reason ?? message.reason ?? current.reason ?? null,
     frequencyMhz: message.frequencyMhz ?? current.frequencyMhz ?? null,
     channelIndex: message.channelIndex ?? current.channelIndex ?? null,
@@ -6343,6 +6959,7 @@ function upsertLiveBindingState(nodeId, phase, message = {}, { status = "active"
     sourceEvent: message.event || current.sourceEvent || null,
   };
   liveState.bindingStates.set(id, next);
+  liveState.recoveryStates.delete(id);
   syncLiveBindingAnimationTimer();
   return next;
 }
@@ -6352,6 +6969,78 @@ function clearLiveBindingState(nodeId) {
   if (!Number.isFinite(id)) return;
   liveState.bindingStates.delete(id);
   syncLiveBindingAnimationTimer();
+}
+
+function getLiveBindingState(nodeId) {
+  return liveState.bindingStates.get(Number(nodeId)) || null;
+}
+
+function hasLiveBindingState(nodeId) {
+  return Boolean(getLiveBindingState(nodeId));
+}
+
+function getLiveRecoveryLabel(message = {}) {
+  const event = String(message.event || "").toLowerCase();
+  if (event === "assigned_acquire_listen") return "Acquiring assigned telemetry";
+  if (event === "auto_relock_scheduled") return "Auto recovery scheduled";
+  if (event === "auto_relock_listen") return "Auto recovery listening";
+  if (event === "auto_relock_backoff") return "Auto recovery waiting";
+  if (event === "auto_relock_exhausted") return "Auto recovery exhausted";
+  if (event === "cad_recovery_probe") return "Checking assigned channel";
+  if (event === "cad_recovery_queued") return "Recovery queued";
+  if (event === "telemetry_rebind_request") return "MaGC assisted re-bind requested";
+  if (event === "accepted") return "MaGC assisted re-bind accepted";
+  if (event === "listen_started") return "MaGC listening for telemetry";
+  if (event === "packet_seen") return "Recovery packet seen";
+  if (event === "timing_hint_sent") return "Recovery timing hint sent";
+  if (event === "failed") return "Recovery failed";
+  if (event === "cancelled") return "Recovery cancelled";
+  if (event === "binding") return "Re-bind active";
+  if (event === "offline") return "Waiting for signal";
+  if (event === "off") return "No signal detected";
+  if (event === "weak") return "Weak link recovery";
+  return event ? event.replaceAll("_", " ") : "Recovery active";
+}
+
+function upsertLiveRecoveryState(nodeId, message = {}, { label = null, reason = null } = {}) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id) || id <= 0) return null;
+  const now = Date.now();
+  getOrCreateLiveDrone(id);
+  const current = liveState.recoveryStates.get(id) || {};
+  const next = {
+    ...current,
+    nodeId: id,
+    event: message.event || current.event || null,
+    label: label || getLiveRecoveryLabel(message),
+    reason: reason ?? message.reason ?? message.resultReason ?? current.reason ?? null,
+    frequencyMhz: message.frequencyMhz ?? current.frequencyMhz ?? null,
+    channelIndex: message.channelIndex ?? current.channelIndex ?? null,
+    radioProfileId: message.radioProfileId ?? current.radioProfileId ?? null,
+    rssi: message.rssi ?? current.rssi ?? null,
+    snr: message.snr ?? current.snr ?? null,
+    updatedAt: now,
+  };
+  liveState.recoveryStates.set(id, next);
+  return next;
+}
+
+function clearLiveRecoveryState(nodeId) {
+  const id = Number(nodeId);
+  if (!Number.isFinite(id)) return;
+  liveState.recoveryStates.delete(id);
+}
+
+function pruneLiveRecoveryStates(now = Date.now()) {
+  let changed = false;
+  liveState.recoveryStates.forEach((state, nodeId) => {
+    const updatedAt = Number(state.updatedAt);
+    if (!Number.isFinite(updatedAt) || now - updatedAt > LIVE_RECOVERY_STATE_TTL_MS) {
+      liveState.recoveryStates.delete(nodeId);
+      changed = true;
+    }
+  });
+  return changed;
 }
 
 function isLiveAssignmentTimingLocked(assignment) {
@@ -6430,17 +7119,43 @@ function applyLiveBindingPhaseFromMessage(message, phase, source = "serial", opt
   refreshLiveBindingUi(source);
 }
 
+function updateExistingLiveBindingPhase(message, phase, source = "serial", options = {}) {
+  const nodeId = getLiveBindingNodeIdFromMessage(message);
+  if (!Number.isFinite(Number(nodeId)) || !hasLiveBindingState(nodeId)) return false;
+  upsertLiveBindingState(nodeId, phase, message, options);
+  refreshLiveBindingUi(source);
+  return true;
+}
+
 function handleLiveAssignmentEventForBinding(message, source = "serial") {
   const event = String(message.event || "");
   const phaseByEvent = {
     join_request_received: "quiet",
+    assign_created: "quiet",
+    assign_reused: "quiet",
     silence_sent: "assign",
     assign_sent: "ack",
     join_ack_received: "telemetry_bind",
     late_join_ack_received: "telemetry_bind",
     assignment_active: "telemetry_bind",
+    assignment_completed: "telemetry_bind",
+    post_bind_acquire_started: "telemetry_bind",
+    post_bind_first_telemetry: "timing",
+    post_bind_acquire_timeout: "telemetry_bind",
     telemetry_period_observed: "timing",
   };
+  const createBindingEvents = new Set([
+    "join_request_received",
+    "assign_created",
+    "assign_reused",
+    "silence_sent",
+    "assign_sent",
+    "join_ack_received",
+    "assignment_completed",
+    "post_bind_acquire_started",
+    "post_bind_first_telemetry",
+    "telemetry_period_observed",
+  ]);
   const failureEvents = new Set([
     "join_request_malformed",
     "join_assign_build_failed",
@@ -6460,17 +7175,41 @@ function handleLiveAssignmentEventForBinding(message, source = "serial") {
     }
     return;
   }
+  const terminalClearEvents = new Set([
+    "join_request_received",
+    "assign_created",
+    "assign_reused",
+    "silence_sent",
+    "assign_sent",
+    "join_ack_received",
+    "late_join_ack_received",
+    "assignment_completed",
+    "post_bind_acquire_started",
+    "post_bind_first_telemetry",
+  ]);
+  if (terminalClearEvents.has(event)) {
+    const nodeId = getLiveBindingNodeIdFromMessage(message);
+    if (Number.isFinite(Number(nodeId))) {
+      clearLiveRecoveryState(nodeId);
+      clearLiveTerminalLinkStatusForBinding(nodeId);
+    }
+  }
   if (event === "telemetry_period_locked") {
     const nodeId = getLiveBindingNodeIdFromMessage(message);
     if (Number.isFinite(Number(nodeId))) {
-      completeLiveBindingState(nodeId);
+      clearLiveRecoveryState(nodeId);
+      clearLiveTerminalLinkStatusForBinding(nodeId);
+      upsertLiveBindingState(nodeId, "timing", message, {
+        status: "active",
+        reason: "waiting_for_telegc_telemetry",
+      });
       refreshLiveBindingUi(source);
     }
     return;
   }
   if (failureEvents.has(event)) {
     const nodeId = getLiveBindingNodeIdFromMessage(message);
-    if (Number.isFinite(Number(nodeId))) {
+    if (Number.isFinite(Number(nodeId)) && hasLiveBindingState(nodeId)) {
       upsertLiveBindingState(nodeId, liveState.bindingStates.get(nodeId)?.phase || "ack", message, {
         status: "failed",
         reason: message.reason || event,
@@ -6480,30 +7219,131 @@ function handleLiveAssignmentEventForBinding(message, source = "serial") {
     return;
   }
   const phase = phaseByEvent[event];
-  if (phase) applyLiveBindingPhaseFromMessage(message, phase, source);
+  if (!phase) return;
+  if (createBindingEvents.has(event)) {
+    applyLiveBindingPhaseFromMessage(message, phase, source, { origin: "shared_bind" });
+  } else {
+    updateExistingLiveBindingPhase(message, phase, source);
+  }
+}
+
+function handleLiveBindProgressEvent(message, source = "serial") {
+  const nodeId = getLiveBindingNodeIdFromMessage(message);
+  if (!Number.isFinite(Number(nodeId))) return;
+  const phase = String(message.phase || "").trim().toLowerCase() || "telemetry_bind";
+  const status = String(message.status || "").trim().toLowerCase();
+  const event = String(message.event || "").trim().toLowerCase();
+
+  if ((status === "complete" || phase === "complete") && event === "telemetry_live" && isLiveLocalTelemetrySource(message, source)) {
+    completeLiveBindingState(nodeId);
+    clearLiveRecoveryState(nodeId);
+    clearLiveTerminalLinkStatusForBinding(nodeId);
+    refreshLiveBindingUi(source);
+    return;
+  }
+  if (status === "complete" || phase === "complete") {
+    upsertLiveBindingState(nodeId, "timing", message, {
+      status: "active",
+      reason: "waiting_for_telegc_telemetry",
+    });
+    refreshLiveBindingUi(source);
+    return;
+  }
+
+  if (status === "failed") {
+    upsertLiveBindingState(nodeId, liveState.bindingStates.get(nodeId)?.phase || phase || "ack", message, {
+      status: "failed",
+      reason: message.reason || message.event || "bind_failed",
+    });
+    refreshLiveBindingUi(source);
+    return;
+  }
+
+  upsertLiveBindingState(nodeId, phase, message, { status: "active", origin: "shared_bind" });
+  refreshLiveBindingUi(source);
 }
 
 function handleLiveSearchEventForBinding(message, source = "serial") {
-  if (message.event === "join_detected") {
-    applyLiveBindingPhaseFromMessage(message, "quiet", source);
+  if (message.event === "join_detected" || message.event === "auto_shared_rx_join_detected") {
+    const origin = liveState.gcStatus?.autoSharedRxActive || String(message.event || "").startsWith("auto_")
+      ? "auto_shared_rebind"
+      : "shared_bind";
+    applyLiveBindingPhaseFromMessage(message, "quiet", source, { origin });
   } else if (message.event === "assignment_completed") {
-    applyLiveBindingPhaseFromMessage(message, "telemetry_bind", source);
+    updateExistingLiveBindingPhase(message, "telemetry_bind", source);
+  } else if (message.event === "auto_shared_rx_started" || message.event === "auto_shared_rx_active") {
+    const nodeId = Number(message.nodeId);
+    if (Number.isFinite(nodeId) && nodeId > 0) {
+      upsertLiveRecoveryState(nodeId, message, {
+        label: "Automatic shared re-bind listening",
+        reason: message.reason || "auto_shared_rx",
+      });
+    }
+  } else if (message.event === "auto_shared_rx_complete") {
+    const nodeId = Number(message.nodeId);
+    if (Number.isFinite(nodeId) && nodeId > 0 && message.reason !== "join_handled") {
+      upsertLiveRecoveryState(nodeId, message, {
+        label: "Automatic shared re-bind complete",
+        reason: message.reason || "auto_shared_rx_complete",
+      });
+    }
   }
 }
 
 function handleLiveScannerEventForBinding(message, source = "serial") {
-  if (message.event === "post_ack_lock_listen" || message.event === "assigned_acquire_listen") {
-    applyLiveBindingPhaseFromMessage(message, "telemetry_bind", source);
-  } else if (message.event === "manual_relock_listen" || message.event === "auto_relock_listen") {
-    applyLiveBindingPhaseFromMessage(message, "telemetry_bind", source);
-  } else if (message.event === "post_ack_lock_expired" || message.event === "manual_relock_expired") {
+  if (message.event === "post_bind_acquire_started" || message.event === "post_bind_first_telemetry") {
     const nodeId = getLiveBindingNodeIdFromMessage(message);
     if (Number.isFinite(Number(nodeId))) {
+      clearLiveTerminalLinkStatusForBinding(nodeId);
+      clearLiveRecoveryState(nodeId);
+    }
+    updateExistingLiveBindingPhase(message, message.event === "post_bind_first_telemetry" ? "timing" : "telemetry_bind", source);
+  } else if (message.event === "post_ack_lock_listen" || message.event === "assigned_acquire_listen") {
+    if (!updateExistingLiveBindingPhase(message, "telemetry_bind", source)) {
+      const nodeId = getLiveBindingNodeIdFromMessage(message);
+      if (Number.isFinite(Number(nodeId))) upsertLiveRecoveryState(nodeId, message);
+    }
+  } else if (message.event === "manual_relock_listen" || message.event === "auto_relock_listen") {
+    const nodeId = getLiveBindingNodeIdFromMessage(message);
+    if (!updateExistingLiveBindingPhase(message, "telemetry_bind", source) && Number.isFinite(Number(nodeId))) {
+      upsertLiveRecoveryState(nodeId, message);
+    }
+  } else if (
+    message.event === "cad_recovery_queued" ||
+    message.event === "cad_recovery_probe" ||
+    message.event === "auto_relock_scheduled" ||
+    message.event === "auto_relock_backoff" ||
+    message.event === "auto_relock_exhausted" ||
+    message.event === "stale_slot_skipped" ||
+    message.event === "telemetry_missed"
+  ) {
+    const nodeId = getLiveBindingNodeIdFromMessage(message);
+    if (Number.isFinite(Number(nodeId))) upsertLiveRecoveryState(nodeId, message);
+  } else if (message.event === "post_bind_acquire_timeout") {
+    const nodeId = getLiveBindingNodeIdFromMessage(message);
+    if (Number.isFinite(Number(nodeId)) && hasLiveBindingState(nodeId)) {
+      upsertLiveBindingState(nodeId, liveState.bindingStates.get(nodeId)?.phase || "telemetry_bind", message, {
+        status: "active",
+        reason: message.reason || "post_bind_acquire_timeout",
+      });
+      upsertLiveRecoveryState(nodeId, message, {
+        label: "Post-bind acquire timed out",
+        reason: message.reason || "post_bind_acquire_timeout",
+      });
+      refreshLiveBindingUi(source);
+    } else if (Number.isFinite(Number(nodeId))) {
+      upsertLiveRecoveryState(nodeId, message, { reason: message.reason || message.event });
+    }
+  } else if (message.event === "post_ack_lock_expired" || message.event === "manual_relock_expired") {
+    const nodeId = getLiveBindingNodeIdFromMessage(message);
+    if (Number.isFinite(Number(nodeId)) && hasLiveBindingState(nodeId)) {
       upsertLiveBindingState(nodeId, liveState.bindingStates.get(nodeId)?.phase || "telemetry_bind", message, {
         status: "failed",
         reason: message.reason || message.event,
       });
       refreshLiveBindingUi(source);
+    } else if (Number.isFinite(Number(nodeId))) {
+      upsertLiveRecoveryState(nodeId, message, { reason: message.reason || message.event });
     }
   }
 }
@@ -6516,9 +7356,21 @@ function handleLiveLinkStatusForBinding(message, source = "serial") {
     if (liveState.bindingStates.has(nodeId)) {
       upsertLiveBindingState(nodeId, "telemetry_bind", message);
       refreshLiveBindingUi(source);
+    } else {
+      upsertLiveRecoveryState(nodeId, { ...message, event: "binding" });
     }
   } else if (["weak", "off", "offline"].includes(state)) {
-    clearLiveBindingState(nodeId);
+    const bindingState = getLiveBindingState(nodeId);
+    if (bindingState && bindingState.status !== "failed") {
+      upsertLiveRecoveryState(nodeId, { ...message, event: state }, {
+        reason: message.reason || "link_status_during_bind",
+      });
+      return;
+    }
+    if (!(bindingState?.origin === "manual_rebind" && isLiveDroneRelocking(nodeId))) clearLiveBindingState(nodeId);
+    upsertLiveRecoveryState(nodeId, { ...message, event: state });
+  } else if (state === "online" || state === "fresh") {
+    clearLiveRecoveryState(nodeId);
   }
 }
 
@@ -6554,8 +7406,24 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     const lng = Number(entry?.lng);
     if (!Number.isFinite(nodeId)) return;
     const displayState = normalizeLiveDisplayState(entry.displayState);
+    const bindPhaseName = String(entry.bindPhase || "").trim().toLowerCase();
     const hasPosition = Number.isFinite(lat) && Number.isFinite(lng);
-    const isBindingSnapshot = isLiveBindingStateName(displayState) || entry.bindPhase;
+    const ageMs = Number(entry.ageMs);
+    const hasSequence = entry.sequenceId !== undefined && entry.sequenceId !== null;
+    const freshBridgeTelemetrySnapshot =
+      isBridgeSerialScene &&
+      hasPosition &&
+      hasSequence &&
+      displayState === "binding" &&
+      !entry.bindPhase &&
+      Number.isFinite(ageMs) &&
+      ageMs < LIVE_FRESHNESS_MS.fresh;
+    const isBindCompleteSnapshot =
+      bindPhaseName === "complete" ||
+      entry.timingAccepted === true ||
+      freshBridgeTelemetrySnapshot ||
+      (hasPosition && ["online", "fresh"].includes(displayState));
+    const isBindingSnapshot = !isBindCompleteSnapshot && (isLiveBindingStateName(displayState) || entry.bindPhase);
     const isBridgeCardSnapshot =
       isBridgeSerialScene &&
       !hasPosition &&
@@ -6567,9 +7435,12 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     seenNodeIds.add(nodeId);
 
     const drone = getOrCreateLiveDrone(nodeId);
-    const ageMs = Number(entry.ageMs);
     const receivedAt = Number.isFinite(ageMs) ? now - Math.max(0, ageMs) : now;
-    if (isBindingSnapshot) {
+    if (isBindCompleteSnapshot) {
+      if (liveState.bindingStates.has(nodeId)) {
+        completeLiveBindingState(nodeId);
+      }
+    } else if (isBindingSnapshot) {
       upsertLiveBindingState(
         nodeId,
         entry.bindPhase || "telemetry_bind",
@@ -6662,6 +7533,7 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     if (drone.type === "live" && !seenNodeIds.has(Number(drone.id))) {
       liveState.linkStatuses.delete(Number(drone.id));
       liveState.bindingStates.delete(Number(drone.id));
+      liveState.recoveryStates.delete(Number(drone.id));
       liveState.relockRequests.delete(Number(drone.id));
       liveState.deleteRequests.delete(Number(drone.id));
       return false;
@@ -6740,8 +7612,23 @@ function applyLiveTelemetry(message, source = "serial") {
     String(message.periodConfidence || "").toLowerCase() === "locked";
   clearLiveAssignmentTelemetryWatchdog(message.nodeId);
   if (liveState.bindingStates.has(nodeId)) {
-    if (telemetryTimingAccepted) {
+    if (isLiveLocalTelemetrySource(message, source)) {
       completeLiveBindingState(nodeId);
+      recordLiveGcDiagnosticEvent("post_bind_first_telegc_telemetry", {
+        nodeId,
+        sourceRole: message.sourceRole || "",
+        sequenceId: message.sequenceId ?? null,
+        gcMillis: message.gcMillis ?? null,
+      });
+    } else if (telemetryTimingAccepted) {
+      upsertLiveBindingState(nodeId, "timing", {
+        ...message,
+        event: "drone_telemetry_remote",
+        timingObservationCount: firstPositiveNumber(message.timingObservationCount, 1),
+      }, {
+        status: "active",
+        reason: "waiting_for_telegc_telemetry",
+      });
     } else {
       upsertLiveBindingState(nodeId, "timing", {
         ...message,
@@ -6751,6 +7638,7 @@ function applyLiveTelemetry(message, source = "serial") {
     }
   }
   liveState.relockRequests.delete(nodeId);
+  clearLiveRecoveryState(nodeId);
   noteLiveTelemetryForLinkStatus(message.nodeId, previousReceivedAt, now);
   drone.updateTelemetry(
     {
@@ -6804,6 +7692,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   liveState.serialTelemetrySeen = false;
   liveState.relockRequests.clear();
   liveState.linkStatuses.clear();
+  liveState.recoveryStates.clear();
   clearAllLiveBindingStates();
   liveState.deleteRequests.clear();
   clearAllLiveAssignmentTelemetryWatchdogs();
@@ -6830,6 +7719,7 @@ function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
   liveState.relockRequests.delete(id);
   liveState.linkStatuses.delete(id);
   liveState.bindingStates.delete(id);
+  liveState.recoveryStates.delete(id);
   liveState.deleteRequests.delete(id);
   if (clearAssignment && liveState.channelTable && Array.isArray(liveState.channelTable.assignments)) {
     liveState.channelTable = {
@@ -6897,15 +7787,25 @@ function handleLiveProtocolMessage(message, source = "serial") {
     applyLiveTelemetry(message, source);
   } else if (message.type === "gc_status") {
     liveState.gcStatus = message;
+    rememberLiveUsbDeviceRole(message.nodeRole || message.node_role);
     syncLiveProfileDraftFromGcStatus();
     liveState.searchMode = !!message.searchMode;
-    if (!liveState.searchMode) liveState.searchPending = false;
+    if (!liveState.searchMode || !!message.operatorDiscoveryActive) liveState.searchPending = false;
     if (message.bridgeMode) {
       liveState.pendingCommands.forEach((pending, commandId) => {
         if (["get_status", "get_channel_table", "get_assignments", "ping"].includes(pending?.command)) {
           liveState.pendingCommands.delete(commandId);
         }
       });
+    }
+    renderLiveControls();
+    renderLiveGcStatus();
+  } else if (message.type === "inter_gc_status") {
+    liveState.interGcStatus = { ...message, receivedAt: Date.now() };
+    const previousRole = liveState.usbDeviceRole;
+    rememberLiveUsbDeviceRole(message.nodeRole || message.role || message.source);
+    if (liveState.usbDeviceRole === "magic_ground_control" && previousRole !== liveState.usbDeviceRole) {
+      appendLiveDebug("USB role warning: MaGC is connected; connect TeleGC to this computer for SGC.");
     }
     renderLiveControls();
     renderLiveGcStatus();
@@ -6916,15 +7816,33 @@ function handleLiveProtocolMessage(message, source = "serial") {
       scheduleLiveAssignmentTelemetryWatchdog(message);
     }
     renderLiveGcStatus();
+  } else if (message.type === "bind_progress_event") {
+    handleLiveBindProgressEvent(message, source);
+    renderLiveGcStatus();
   } else if (message.type === "command_ack") {
     liveState.lastCommandAck = message;
     if (message.commandId && liveState.pendingCommands.has(message.commandId)) {
       const pending = liveState.pendingCommands.get(message.commandId);
+      const ackLatencyMs = Math.max(0, Date.now() - Number(pending.sentAt || Date.now()));
+      message.ackLatencyMs = ackLatencyMs;
+      recordLiveGcDiagnosticEvent("command_ack_matched", {
+        commandId: message.commandId,
+        command: message.command,
+        target: message.target || pending.target || "",
+        sourceRole: message.sourceRole || "",
+        accepted: message.accepted === true,
+        ackLatencyMs,
+      });
       liveState.pendingCommands.delete(message.commandId);
       if (pending.command === "clear_all_assignments") {
-        liveState.freshSessionPending = false;
         if (message.accepted) {
+          liveState.freshSessionPending = false;
+          liveState.freshSessionRetryCount = 0;
+          clearLiveFreshSessionRetryTimer();
           clearLiveSerialDrones({ clearAssignments: true });
+        } else if (!scheduleFreshSessionRetry(message)) {
+          liveState.freshSessionPending = false;
+          clearLiveFreshSessionRetryTimer();
         }
       } else if (pending.command === "rescan_channels") {
         liveState.spectrumRescanPending = false;
@@ -6949,11 +7867,23 @@ function handleLiveProtocolMessage(message, source = "serial") {
             });
           } else {
             liveState.relockRequests.delete(nodeId);
+            const bindingState = getLiveBindingState(nodeId);
+            if (bindingState?.origin === "manual_rebind") {
+              clearLiveBindingState(nodeId);
+              upsertLiveRecoveryState(nodeId, {
+                event: "manual_relock_rejected",
+                reason: message.reason || message.message || "command_rejected",
+              });
+            }
           }
         }
       } else if (pending.command === "start_search") {
         liveState.searchPending = false;
-        if (message.accepted) liveState.searchMode = true;
+        const ackText = `${message.message || ""} ${message.reason || ""}`.toLowerCase();
+        if (message.accepted && !ackText.includes("operator discovery")) liveState.searchMode = true;
+      } else if (pending.command === "cancel_search") {
+        liveState.searchPending = false;
+        if (message.accepted) liveState.searchMode = false;
       } else if (pending.command === "set_radio_profile") {
         liveState.profileApplyPending = false;
         if (message.accepted) {
@@ -6985,6 +7915,7 @@ function handleLiveProtocolMessage(message, source = "serial") {
     const commandLabel =
       message.command === "relock_drone" ? "re-bind" :
       message.command === "start_search" ? "bind" :
+      message.command === "cancel_search" ? "cancel bind" :
       (message.command || "command");
     appendLiveDebug(`${message.accepted ? "command ok" : "command rejected"}: ${commandLabel} ${message.message || message.reason || ""}`);
     renderLiveControls();
@@ -6996,6 +7927,8 @@ function handleLiveProtocolMessage(message, source = "serial") {
     }
     if (message.event === "fresh_session_complete" || message.event === "fresh_session_failed") {
       liveState.freshSessionPending = false;
+      liveState.freshSessionRetryCount = 0;
+      clearLiveFreshSessionRetryTimer();
     }
     appendLiveDebug(`session: ${message.event}${message.reason ? ` (${message.reason})` : ""}`);
     renderLiveControls();
@@ -7048,10 +7981,23 @@ function handleLiveProtocolMessage(message, source = "serial") {
   } else if (message.type === "scanner_event") {
     liveState.scannerEvents.push(message);
     handleLiveScannerEventForBinding(message, source);
+    if (String(message.event || "").startsWith("post_bind_")) {
+      recordLiveGcDiagnosticEvent(message.event, {
+        nodeId: message.nodeId ?? null,
+        sourceRole: message.sourceRole || "",
+        reason: message.reason || "",
+        postBindAcquireElapsedMs: message.postBindAcquireElapsedMs ?? null,
+        gcMillis: message.gcMillis ?? null,
+      });
+    }
     if (
       message.event === "telemetry_missed" ||
       message.event === "stale_slot_skipped" ||
       message.event === "assigned_acquire_listen" ||
+      message.event === "rx_candidate_skipped" ||
+      message.event === "owed_rx_selected" ||
+      message.event === "owed_rx_cleared" ||
+      message.event === "owed_rx_missed" ||
       message.event === "cad_recovery_queued" ||
       message.event === "cad_recovery_probe" ||
       message.event === "auto_relock_scheduled" ||
@@ -7066,6 +8012,21 @@ function handleLiveProtocolMessage(message, source = "serial") {
   } else if (message.type === "search_event") {
     liveState.searchEvents.push(message);
     handleLiveSearchEventForBinding(message, source);
+    if (String(message.event || "").startsWith("auto_shared_rx_")) {
+      const autoActive = message.event !== "auto_shared_rx_complete";
+      liveState.gcStatus = {
+        ...(liveState.gcStatus || {}),
+        autoSharedRxActive: autoActive,
+        autoSharedRxNodeId: autoActive ? (message.nodeId ?? liveState.gcStatus?.autoSharedRxNodeId ?? 0) : 0,
+        autoSharedRxReason: autoActive ? (message.reason || liveState.gcStatus?.autoSharedRxReason || "") : "",
+      };
+      recordLiveGcDiagnosticEvent(message.event, {
+        nodeId: message.nodeId ?? null,
+        reason: message.reason || "",
+        autoSharedRxActive: autoActive,
+        gcMillis: message.gcMillis ?? null,
+      });
+    }
     liveState.searchPending = false;
     if (typeof message.searchMode === "boolean") {
       liveState.searchMode = message.searchMode;
@@ -7087,19 +8048,61 @@ function handleLiveProtocolMessage(message, source = "serial") {
       liveState.spectrumStatus = `Listening on channel ${message.channelIndex ?? "?"} for drone telemetry...`;
     } else if (message.event === "confirmed_drone") {
       liveState.spectrumStatus = `Confirmed drone telemetry on channel ${message.channelIndex ?? "?"}.`;
-    } else if (message.event === "complete") {
+    } else if (message.event === "complete" || message.event === "background_oocr_complete") {
       liveState.spectrumStatus = `Recovery complete: ${Number(message.recoveredCount) || 0} recovered.`;
     }
-    if (["started", "confirmation_listen", "candidate_listen", "packet_seen", "confirmed_drone", "assignment_recovered", "candidate_failed", "complete"].includes(message.event)) {
+    if ([
+      "started",
+      "background_oocr_started",
+      "background_oocr_channel_scanned",
+      "background_oocr_paused",
+      "background_oocr_complete",
+      "confirmation_listen",
+      "candidate_listen",
+      "packet_seen",
+      "confirmed_drone",
+      "assignment_recovered",
+      "candidate_failed",
+      "complete",
+    ].includes(message.event)) {
       const nodeText = message.nodeId !== undefined ? ` node ${message.nodeId}` : "";
       const channelText = message.channelIndex !== undefined ? ` ch ${message.channelIndex}` : "";
       const reasonText = message.reason ? ` (${message.reason})` : "";
       appendLiveDebug(`orphan recovery: ${message.event}${nodeText}${channelText}${reasonText}`);
     }
     renderLiveGcStatus();
+  } else if (message.type === "telemetry_rebind_event") {
+    liveState.scannerEvents.push(message);
+    const recoveryNodeId = Number(message.nodeId);
+    if (Number.isFinite(recoveryNodeId)) {
+      upsertLiveRecoveryState(recoveryNodeId, message);
+      if (message.event === "timing_hint_sent" && hasLiveBindingState(recoveryNodeId)) {
+        updateExistingLiveBindingPhase(message, "telemetry_bind", source);
+      }
+      if (message.event === "cancelled") clearLiveRecoveryState(recoveryNodeId);
+    }
+    const nodeText = message.nodeId !== undefined ? ` node ${message.nodeId}` : "";
+    const requestText = message.requestId !== undefined ? ` req ${message.requestId}` : "";
+    const reasonText = message.reason ? ` (${message.reason})` : message.resultReason ? ` (${message.resultReason})` : "";
+    const eventText = String(message.event || "event").replaceAll("_", " ");
+    const prefix = String(message.event || "").startsWith("short_loss_") ? "short loss" : "assisted re-bind";
+    appendLiveDebug(`${prefix}: ${eventText}${nodeText}${requestText}${reasonText}`);
+    renderLiveGcStatus();
   } else if (message.type === "drone_link_status") {
     const nodeId = Number(message.nodeId);
     if (Number.isFinite(nodeId)) {
+      const state = normalizeLiveDisplayState(message.state);
+      if (isLiveTerminalLinkState(state) && hasRecentLiveTelemetryForNode(nodeId)) {
+        recordLiveGcDiagnosticEvent("terminal_link_status_ignored_recent_telemetry", {
+          nodeId,
+          state,
+          sourceRole: message.sourceRole || "",
+          reason: message.reason || "",
+          gcMillis: message.gcMillis ?? null,
+        });
+        renderLiveGcStatus();
+        return;
+      }
       const drone = drones.find((d) => d.id === nodeId);
       const latest = drone && typeof drone.getLatest === "function" ? drone.getLatest() : null;
       const latestGcMillis = Number(latest?.gcMillis);
@@ -7109,12 +8112,7 @@ function handleLiveProtocolMessage(message, source = "serial") {
       }
       handleLiveLinkStatusForBinding(message, source);
       liveState.linkStatuses.set(nodeId, { ...message, receivedAt: Date.now() });
-      if (normalizeLiveDisplayState(message.state) === "binding") {
-        liveState.relockRequests.set(nodeId, {
-          expiresAt: Date.now() + LIVE_RELOCK_TIMEOUT_MS,
-          commandId: message.commandId || null,
-        });
-      } else if (message.state === "weak" || message.state === "off" || message.state === "offline") {
+      if (message.state === "weak" || message.state === "off" || message.state === "offline") {
         liveState.relockRequests.delete(nodeId);
       }
       updateStatusList();
@@ -7203,12 +8201,18 @@ async function sendLiveSerialCommand(command, fields = {}) {
     commandId,
     ...fields,
   };
-  liveState.pendingCommands.set(commandId, { command, sentAt: Date.now(), ...fields });
+  const target = fields.target ? String(fields.target).trim().toLowerCase() : "";
+  const direction = target === "magc"
+    ? "sgc_to_magc"
+    : target === "telegc"
+      ? "sgc_to_telegc"
+      : "sgc_to_gc";
+  liveState.pendingCommands.set(commandId, { command, sentAt: Date.now(), target, direction, ...fields });
   try {
     const writer = liveState.port.writable.getWriter();
     try {
       const encodedPayload = JSON.stringify(payload);
-      recordLiveGcDiagnosticLine(encodedPayload, { parsed: payload, direction: "sgc_to_gc" });
+      recordLiveGcDiagnosticLine(encodedPayload, { parsed: payload, direction });
       await writer.write(new TextEncoder().encode(`${encodedPayload}\n`));
     } finally {
       writer.releaseLock();
@@ -7269,6 +8273,73 @@ function cancelFreshSessionConfirmation() {
   renderLiveGcStatus();
 }
 
+function isTransientLiveFreshSessionForwardFailure(message = {}) {
+  const reason = String(message.reason || message.message || "").toLowerCase();
+  return reason === "inter_gc_forward_failed" ||
+    reason === "magc_link_unavailable" ||
+    reason === "timeout" ||
+    reason === "command_timeout" ||
+    reason.includes("failed to forward") ||
+    reason.includes("magc link is not available") ||
+    reason.includes("timeout");
+}
+
+function clearLiveFreshSessionRetryTimer() {
+  if (liveState.freshSessionRetryTimer) {
+    window.clearTimeout(liveState.freshSessionRetryTimer);
+    liveState.freshSessionRetryTimer = null;
+  }
+}
+
+function armLiveFreshSessionCommandTimeout(commandId) {
+  if (!commandId) return;
+  window.setTimeout(() => {
+    if (!liveState.pendingCommands.has(commandId)) return;
+    liveState.pendingCommands.delete(commandId);
+    recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "clear_all_assignments", commandId });
+    if (!scheduleFreshSessionRetry({ reason: "command_timeout" })) {
+      liveState.freshSessionPending = false;
+      clearLiveFreshSessionRetryTimer();
+      appendLiveDebug("command timeout: clear_all_assignments");
+    }
+    renderLiveControls();
+    renderLiveGcStatus();
+  }, 8000);
+}
+
+async function sendFreshSessionClearCommand() {
+  const commandId = await sendLiveSerialCommand("clear_all_assignments", {
+    target: "magc",
+    persist: true,
+    reason: "start_fresh_session",
+  });
+  if (commandId) {
+    armLiveFreshSessionCommandTimeout(commandId);
+  } else {
+    liveState.freshSessionPending = false;
+    clearLiveFreshSessionRetryTimer();
+    renderLiveControls();
+    renderLiveGcStatus();
+  }
+}
+
+function scheduleFreshSessionRetry(message = {}) {
+  if (!liveState.freshSessionPending) return false;
+  if (!isTransientLiveFreshSessionForwardFailure(message)) return false;
+  if (liveState.freshSessionRetryCount >= LIVE_FRESH_SESSION_RETRY_MAX) return false;
+  liveState.freshSessionRetryCount += 1;
+  const retryCount = liveState.freshSessionRetryCount;
+  const delayMs = LIVE_FRESH_SESSION_RETRY_DELAY_MS * retryCount;
+  clearLiveFreshSessionRetryTimer();
+  appendLiveDebug(`reset retry ${retryCount}/${LIVE_FRESH_SESSION_RETRY_MAX}: MaGC link busy`);
+  liveState.freshSessionRetryTimer = window.setTimeout(() => {
+    liveState.freshSessionRetryTimer = null;
+    if (!liveState.freshSessionPending) return;
+    sendFreshSessionClearCommand();
+  }, delayMs);
+  return true;
+}
+
 async function startFreshSession() {
   if (liveState.freshSessionPending) return;
   if (isLiveCommandReadOnlyMode()) {
@@ -7287,27 +8358,11 @@ async function startFreshSession() {
   }
   liveState.freshSessionConfirming = false;
   liveState.freshSessionPending = true;
+  liveState.freshSessionRetryCount = 0;
+  clearLiveFreshSessionRetryTimer();
   renderLiveControls();
   renderLiveGcStatus();
-  const commandId = await sendLiveSerialCommand("clear_all_assignments", {
-    persist: true,
-    reason: "start_fresh_session",
-  });
-  if (commandId) {
-    window.setTimeout(() => {
-      if (!liveState.pendingCommands.has(commandId)) return;
-      liveState.pendingCommands.delete(commandId);
-      liveState.freshSessionPending = false;
-      recordLiveGcDiagnosticEvent("ui_command_timeout", { command: "clear_all_assignments", commandId });
-      appendLiveDebug("command timeout: clear_all_assignments");
-      renderLiveControls();
-      renderLiveGcStatus();
-    }, 8000);
-  } else {
-    liveState.freshSessionPending = false;
-    renderLiveControls();
-    renderLiveGcStatus();
-  }
+  await sendFreshSessionClearCommand();
 }
 
 async function readLiveSerialLoop() {
@@ -7343,6 +8398,8 @@ function markLiveSerialDisconnected(reason) {
   liveState.port = null;
   liveState.reader = null;
   liveState.lineBuffer = "";
+  liveState.interGcStatus = null;
+  liveState.usbDeviceRole = null;
   liveState.portLabel = liveState.lastSerialPort ? describeLiveSerialPort(liveState.lastSerialPort) : "None";
   setLiveSerialState("error", "Disconnected", reason);
   renderLiveControls();
@@ -7380,6 +8437,9 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
     liveState.userClosedSerial = false;
     clearLiveSerialReconnectTimer();
     liveState.lineBuffer = "";
+    liveState.gcStatus = null;
+    liveState.interGcStatus = null;
+    liveState.usbDeviceRole = null;
     liveState.baudRate = baudRate;
     setLiveSerialState(
       "connected",
@@ -7457,10 +8517,266 @@ async function closeLiveSerialPort() {
   liveState.connected = false;
   liveState.portLabel = "None";
   liveState.lineBuffer = "";
+  liveState.interGcStatus = null;
+  liveState.usbDeviceRole = null;
   setLiveSerialState("waiting", "Disconnected", "Ready to open the GC ESP32 serial port.");
   renderLiveControls();
   renderLiveGcStatus();
   ensureLiveRelayForCurrentState();
+}
+
+function setLiveDebugState(message) {
+  liveState.debugStateText = message || "Idle";
+  renderLiveControls();
+}
+
+async function sendLiveTargetDebugCommand(target, command, fields = {}) {
+  const commandId = await sendLiveSerialCommand(command, { target, ...fields });
+  setLiveDebugState(commandId ? `${target} ${command}` : "Command rejected");
+  return commandId;
+}
+
+function processLiveDroneDebugLine(rawLine, { direction = "drone_to_sgc" } = {}) {
+  const line = String(rawLine || "").trim();
+  if (!line) return;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(line);
+  } catch (err) {
+    recordLiveGcDiagnosticLine(line, {
+      parseError: err.message,
+      direction,
+    });
+    appendLiveDebug(`drone parse error: ${err.message}`);
+    return;
+  }
+  recordLiveGcDiagnosticLine(line, {
+    parsed,
+    direction,
+  });
+  if (parsed.type === "drone_debug_status") {
+    liveState.droneDebugStatus = { ...parsed, receivedAt: Date.now() };
+    liveState.droneDebugTelemetryPaused = parsed.telemetryPaused === true;
+  } else if (parsed.type === "drone_debug_event") {
+    appendLiveDebug(`drone debug: ${String(parsed.event || "event").replaceAll("_", " ")}`);
+    if (parsed.telemetryPaused !== undefined) {
+      liveState.droneDebugTelemetryPaused = parsed.telemetryPaused === true;
+    }
+  } else if (parsed.type === "command_ack" && parsed.commandId && liveState.droneDebugPendingCommands.has(parsed.commandId)) {
+    const pending = liveState.droneDebugPendingCommands.get(parsed.commandId);
+    liveState.droneDebugPendingCommands.delete(parsed.commandId);
+    const ackLatencyMs = Math.max(0, Date.now() - Number(pending.sentAt || Date.now()));
+    recordLiveGcDiagnosticEvent("drone_command_ack_matched", {
+      commandId: parsed.commandId,
+      command: parsed.command,
+      accepted: parsed.accepted === true,
+      ackLatencyMs,
+      sourceRole: parsed.sourceRole || "drone",
+      target: "drone",
+    });
+    appendLiveDebug(`${parsed.accepted ? "drone ok" : "drone rejected"}: ${parsed.command || pending.command}`);
+  }
+  renderLiveControls();
+}
+
+function processLiveDroneDebugChunk(chunk) {
+  liveState.droneDebugLineBuffer += chunk;
+  const lines = liveState.droneDebugLineBuffer.split(/\r\n|\n|\r/);
+  liveState.droneDebugLineBuffer = lines.pop() ?? "";
+  lines.forEach(processLiveDroneDebugLine);
+}
+
+async function readLiveDroneDebugLoop() {
+  const decoder = new TextDecoder();
+  while (liveState.droneDebugPort?.readable && liveState.droneDebugKeepReading) {
+    liveState.droneDebugReader = liveState.droneDebugPort.readable.getReader();
+    try {
+      while (liveState.droneDebugKeepReading) {
+        const { value, done } = await liveState.droneDebugReader.read();
+        if (done) break;
+        if (value) processLiveDroneDebugChunk(decoder.decode(value, { stream: true }));
+      }
+    } catch (err) {
+      if (liveState.droneDebugKeepReading) {
+        appendLiveDebug(`drone reader error: ${err.message || err}`);
+      }
+    } finally {
+      try {
+        liveState.droneDebugReader?.releaseLock();
+      } catch {
+        // ignore
+      }
+      liveState.droneDebugReader = null;
+    }
+  }
+}
+
+async function openLiveDroneDebugSerialPort() {
+  if (!liveState.debugEnabled) return;
+  if (!("serial" in navigator)) {
+    appendLiveDebug("drone serial unavailable: Web Serial unsupported");
+    return;
+  }
+  try {
+    const baudRate = getLiveBaudRate();
+    const port = await navigator.serial.requestPort();
+    liveState.droneDebugPortLabel = describeLiveSerialPort(port);
+    await port.open({ baudRate });
+    liveState.droneDebugPort = port;
+    liveState.droneDebugConnected = true;
+    liveState.droneDebugKeepReading = true;
+    liveState.droneDebugLineBuffer = "";
+    recordLiveGcDiagnosticEvent("drone_serial_opened", {
+      baudRate,
+      port: liveState.droneDebugPortLabel,
+      portInfo: getLiveSerialPortInfo(port),
+    });
+    appendLiveDebug(`drone serial opened: ${liveState.droneDebugPortLabel}`);
+    renderLiveControls();
+    readLiveDroneDebugLoop();
+    window.setTimeout(() => sendLiveDroneDebugCommand("get_status"), 150);
+  } catch (err) {
+    appendLiveDebug(`drone serial open failed: ${err.message || err}`);
+    recordLiveGcDiagnosticEvent("drone_serial_open_failed", { reason: err.message || String(err) });
+    liveState.droneDebugConnected = false;
+    renderLiveControls();
+  }
+}
+
+async function closeLiveDroneDebugSerialPort() {
+  liveState.droneDebugKeepReading = false;
+  try {
+    if (liveState.droneDebugReader) await liveState.droneDebugReader.cancel();
+  } catch (err) {
+    appendLiveDebug(`drone reader cancel warning: ${err.message || err}`);
+  }
+  try {
+    if (liveState.droneDebugPort) await liveState.droneDebugPort.close();
+  } catch (err) {
+    appendLiveDebug(`drone close warning: ${err.message || err}`);
+  }
+  liveState.droneDebugPort = null;
+  liveState.droneDebugReader = null;
+  liveState.droneDebugConnected = false;
+  liveState.droneDebugLineBuffer = "";
+  liveState.droneDebugStatus = null;
+  recordLiveGcDiagnosticEvent("drone_serial_closed");
+  renderLiveControls();
+}
+
+async function sendLiveDroneDebugCommand(command, fields = {}) {
+  if (!liveState.droneDebugConnected || !liveState.droneDebugPort?.writable) {
+    appendLiveDebug("drone command rejected locally: drone serial is not connected");
+    return null;
+  }
+  const commandId = `sgc-drone-${String(++liveState.droneDebugCommandSeq).padStart(4, "0")}`;
+  const payload = {
+    type: "command",
+    command,
+    commandId,
+    ...fields,
+  };
+  liveState.droneDebugPendingCommands.set(commandId, { command, sentAt: Date.now(), ...fields });
+  try {
+    const writer = liveState.droneDebugPort.writable.getWriter();
+    try {
+      const encodedPayload = JSON.stringify(payload);
+      recordLiveGcDiagnosticLine(encodedPayload, { parsed: payload, direction: "sgc_to_drone" });
+      await writer.write(new TextEncoder().encode(`${encodedPayload}\n`));
+    } finally {
+      writer.releaseLock();
+    }
+    appendLiveDebug(`drone command sent: ${command}`);
+    return commandId;
+  } catch (err) {
+    liveState.droneDebugPendingCommands.delete(commandId);
+    appendLiveDebug(`drone command failed: ${err.message || err}`);
+    return null;
+  }
+}
+
+function normalizeLiveDroneWifiBaseUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    const url = new URL(raw.includes("://") ? raw : `http://${raw}`);
+    if (!url.port) url.port = "8080";
+    url.pathname = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return "";
+  }
+}
+
+function readLiveDroneWifiHost() {
+  const input = document.getElementById("liveDebugDroneWifiHost");
+  const host = String(input?.value || liveState.droneWifiHost || "simple-mesh-7.local").trim();
+  liveState.droneWifiHost = host || "simple-mesh-7.local";
+  try {
+    window.localStorage?.setItem(LIVE_DRONE_WIFI_HOST_STORAGE_KEY, liveState.droneWifiHost);
+  } catch {
+    // Wi-Fi debug host persistence is optional.
+  }
+  return liveState.droneWifiHost;
+}
+
+function processLiveDroneWifiResponse(text) {
+  String(text || "")
+    .split(/\r\n|\n|\r/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .forEach((line) => processLiveDroneDebugLine(line, { direction: "drone_wifi_to_sgc" }));
+}
+
+async function sendLiveDroneWifiDebugCommand(command, fields = {}) {
+  if (!liveState.debugEnabled) return null;
+  const host = readLiveDroneWifiHost();
+  const baseUrl = normalizeLiveDroneWifiBaseUrl(host);
+  if (!baseUrl) {
+    appendLiveDebug("drone Wi-Fi host is invalid");
+    return null;
+  }
+  const commandId = `sgc-drone-wifi-${String(++liveState.droneDebugCommandSeq).padStart(4, "0")}`;
+  const payload = {
+    type: "command",
+    command,
+    commandId,
+    ...fields,
+  };
+  const encodedPayload = JSON.stringify(payload);
+  liveState.droneDebugPendingCommands.set(commandId, { command, sentAt: Date.now(), transport: "wifi", ...fields });
+  liveState.droneWifiBusy = true;
+  liveState.droneWifiStateText = "Sending...";
+  renderLiveControls();
+  recordLiveGcDiagnosticLine(encodedPayload, { parsed: payload, direction: "sgc_to_drone_wifi" });
+  try {
+    const response = await fetch(`${baseUrl}/debug/command`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: encodedPayload,
+    });
+    const text = await response.text();
+    processLiveDroneWifiResponse(text);
+    liveState.droneWifiStateText = response.ok ? "OK" : `HTTP ${response.status}`;
+    appendLiveDebug(`drone Wi-Fi ${response.ok ? "ok" : "rejected"}: ${command}`);
+    return commandId;
+  } catch (err) {
+    liveState.droneDebugPendingCommands.delete(commandId);
+    liveState.droneWifiStateText = "Failed";
+    appendLiveDebug(`drone Wi-Fi command failed: ${err.message || err}`);
+    recordLiveGcDiagnosticEvent("drone_wifi_command_failed", {
+      commandId,
+      command,
+      host,
+      reason: err.message || String(err),
+    });
+    return null;
+  } finally {
+    liveState.droneWifiBusy = false;
+    renderLiveControls();
+  }
 }
 
 function stopLivePositionMock({ clearDrones = false, clearStatus = false } = {}) {
@@ -8069,6 +9385,8 @@ function initLivePositionUi() {
   const tokenEl = document.getElementById("liveRelayPublishToken");
   const logDownloadBtn = document.getElementById("liveGcLogDownloadBtn");
   const logClearBtn = document.getElementById("liveGcLogClearBtn");
+  const droneWifiHostEl = document.getElementById("liveDebugDroneWifiHost");
+  document.body.classList.toggle("live-debug-enabled", liveState.debugEnabled);
   openBtn?.addEventListener("click", () => openLiveSerialPort());
   closeBtn?.addEventListener("click", closeLiveSerialPort);
   resetBtn?.addEventListener("click", requestFreshSessionConfirmation);
@@ -8078,6 +9396,59 @@ function initLivePositionUi() {
   sourceEl?.addEventListener("change", () => setLiveTelemetrySourceMode(sourceEl.value));
   relayConnectBtn?.addEventListener("click", () => connectLiveRelay());
   relayDisconnectBtn?.addEventListener("click", () => closeLiveRelayConnection({ user: true }));
+  document.getElementById("liveDebugTeleGcStatusBtn")?.addEventListener("click", () => sendLiveTargetDebugCommand("telegc", "get_status"));
+  document.getElementById("liveDebugMaGcStatusBtn")?.addEventListener("click", () => sendLiveTargetDebugCommand("magc", "get_status"));
+  document.getElementById("liveDebugMaGcBindBtn")?.addEventListener("click", () => sendLiveTargetDebugCommand("magc", "start_search"));
+  document.getElementById("liveDebugMaGcCancelBtn")?.addEventListener("click", () => sendLiveTargetDebugCommand("magc", "cancel_search"));
+  document.getElementById("liveDebugDroneOpenBtn")?.addEventListener("click", openLiveDroneDebugSerialPort);
+  document.getElementById("liveDebugDroneCloseBtn")?.addEventListener("click", closeLiveDroneDebugSerialPort);
+  document.getElementById("liveDebugDroneHoldBtn")?.addEventListener("click", () => sendLiveDroneDebugCommand("debug_join_control", { joinMode: "hold" }));
+  document.getElementById("liveDebugDroneJoinBtn")?.addEventListener("click", () => sendLiveDroneDebugCommand("debug_send_join_request"));
+  document.getElementById("liveDebugDroneRestartHoldBtn")?.addEventListener("click", () => sendLiveDroneDebugCommand("debug_restart_join", { hold: true }));
+  document.getElementById("liveDebugDronePauseBtn")?.addEventListener("click", () => {
+    sendLiveDroneDebugCommand("debug_pause_telemetry", { enabled: !liveState.droneDebugTelemetryPaused });
+  });
+  document.getElementById("liveDebugDroneRfLoss2Btn")?.addEventListener("click", () => {
+    sendLiveDroneDebugCommand("debug_simulate_rf_loss", { cycles: 2 });
+  });
+  document.getElementById("liveDebugDroneDelay20Btn")?.addEventListener("click", () => {
+    sendLiveDroneDebugCommand("debug_delay_next_telemetry", { delayMs: 20 });
+  });
+  document.getElementById("liveDebugDroneDrop2Btn")?.addEventListener("click", () => {
+    sendLiveDroneDebugCommand("debug_drop_telemetry", { cycles: 2 });
+  });
+  document.getElementById("liveDebugDroneRebootHoldBtn")?.addEventListener("click", () => {
+    sendLiveDroneDebugCommand("debug_reboot", { bootJoinMode: "hold", delayMs: 250 });
+  });
+  droneWifiHostEl?.addEventListener("input", readLiveDroneWifiHost);
+  droneWifiHostEl?.addEventListener("change", readLiveDroneWifiHost);
+  document.getElementById("liveDebugDroneWifiStatusBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("get_status");
+  });
+  document.getElementById("liveDebugDroneWifiHoldBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_join_control", { joinMode: "hold" });
+  });
+  document.getElementById("liveDebugDroneWifiJoinBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_send_join_request");
+  });
+  document.getElementById("liveDebugDroneWifiRestartHoldBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_restart_join", { hold: true });
+  });
+  document.getElementById("liveDebugDroneWifiPauseBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_pause_telemetry", { enabled: !liveState.droneDebugTelemetryPaused });
+  });
+  document.getElementById("liveDebugDroneWifiRfLoss2Btn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_simulate_rf_loss", { cycles: 2 });
+  });
+  document.getElementById("liveDebugDroneWifiDelay20Btn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_delay_next_telemetry", { delayMs: 20 });
+  });
+  document.getElementById("liveDebugDroneWifiDrop2Btn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_drop_telemetry", { cycles: 2 });
+  });
+  document.getElementById("liveDebugDroneWifiRebootHoldBtn")?.addEventListener("click", () => {
+    sendLiveDroneWifiDebugCommand("debug_reboot", { bootJoinMode: "hold", delayMs: 250 });
+  });
   endpointEl?.addEventListener("input", () => {
     liveState.relayEndpoint = String(endpointEl.value || "").trim();
   });
@@ -8111,12 +9482,13 @@ function renderLiveStatusList() {
   host.innerHTML = "";
   const now = Date.now();
   const prunedBindings = pruneLiveBindingStates(now);
+  const prunedRecoveries = pruneLiveRecoveryStates(now);
   const sorted = [...drones]
     .filter((drone) => {
       if (!drone) return false;
       const latest = drone.getLatest && drone.getLatest();
       const id = Number(drone.id);
-      return latest || liveState.bindingStates.has(id) || liveState.linkStatuses.has(id);
+      return latest || liveState.bindingStates.has(id) || liveState.linkStatuses.has(id) || liveState.recoveryStates.has(id);
     })
     .sort((a, b) => a.id - b.id);
 
@@ -8131,6 +9503,7 @@ function renderLiveStatusList() {
   sorted.forEach((d) => {
     const latest = d.getLatest();
     const bindingState = liveState.bindingStates.get(Number(d.id));
+    const recoveryState = liveState.recoveryStates.get(Number(d.id));
     const linkStatus = liveState.linkStatuses.get(Number(d.id));
     const freshness = latest ? getLiveFreshnessState(d, now) : "offline";
     const displayState = getLiveDisplayState(d, freshness, now);
@@ -8159,19 +9532,23 @@ function renderLiveStatusList() {
     const detail = document.createElement("div");
     if (latest) {
       renderLiveTimingLine(detail, d, latest, now);
+      if (recoveryState && displayState !== "binding") appendLiveRecoveryDetail(detail, recoveryState, now);
     } else if (bindingState) {
       renderLiveBindingLine(detail, bindingState, now);
+    } else if (recoveryState) {
+      renderLiveBridgeCardLine(detail, linkStatus || { state: displayState, receivedAt: recoveryState.updatedAt }, now, displayState);
+      appendLiveRecoveryDetail(detail, recoveryState, now);
     } else {
-      renderLiveBridgeCardLine(detail, linkStatus, now);
+      renderLiveBridgeCardLine(detail, linkStatus, now, displayState);
     }
     const grid = document.createElement("div");
     grid.className = "live-entry-grid";
     const speed = Number(latest?.groundSpeed);
     const displayLatest = latest || {
-      frequencyMhz: bindingState?.frequencyMhz ?? linkStatus?.frequencyMhz ?? null,
-      radioProfileId: bindingState?.radioProfileId ?? linkStatus?.radioProfileId ?? null,
-      rssi: bindingState?.rssi ?? linkStatus?.rssi ?? null,
-      snr: bindingState?.snr ?? linkStatus?.snr ?? null,
+      frequencyMhz: bindingState?.frequencyMhz ?? linkStatus?.frequencyMhz ?? recoveryState?.frequencyMhz ?? null,
+      radioProfileId: bindingState?.radioProfileId ?? linkStatus?.radioProfileId ?? recoveryState?.radioProfileId ?? null,
+      rssi: bindingState?.rssi ?? linkStatus?.rssi ?? recoveryState?.rssi ?? null,
+      snr: bindingState?.snr ?? linkStatus?.snr ?? recoveryState?.snr ?? null,
       satelliteCount: bindingState?.satelliteCount ?? linkStatus?.satelliteCount ?? null,
     };
     const fields = [
@@ -8238,7 +9615,7 @@ function renderLiveStatusList() {
     host.appendChild(row);
   });
   syncLiveBindingAnimationTimer();
-  if (prunedBindings) {
+  if (prunedBindings || prunedRecoveries) {
     publishLiveDronesState({ force: true, minIntervalMs: 0 });
   }
 }

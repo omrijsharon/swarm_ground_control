@@ -1,0 +1,82 @@
+﻿HTTP 200 http://192.168.68.111:8080
+{
+  "event": "join_start_shared_channel",
+  "gcMillis": 1205003,
+  "joinAttemptCount": 0,
+  "joinFastLbtFailCount": 0,
+  "nodeId": 6,
+  "radioProfileId": 0,
+  "state": "backoff",
+  "type": "drone_join_event"
+}
+{
+  "backoffMs": 445,
+  "event": "join_backoff",
+  "gcMillis": 1205003,
+  "joinAttemptCount": 0,
+  "joinBackoffKind": "first_fast",
+  "joinFastLbtFailCount": 0,
+  "nextActionMs": 1205448,
+  "nodeId": 6,
+  "reason": "boot_or_rejoin",
+  "state": "backoff",
+  "type": "drone_join_event"
+}
+{
+  "event": "join_runtime_reset",
+  "forcedJoinTxCount": 0,
+  "gcMillis": 1205004,
+  "joinHeld": false,
+  "joinMode": "auto",
+  "nodeId": 6,
+  "reason": "auto",
+  "runtimeResetCount": 3,
+  "state": "backoff",
+  "telemetryDropRemaining": 0,
+  "telemetryDropTotalCount": 0,
+  "telemetryPaused": false,
+  "telemetryRfLossRemaining": 0,
+  "telemetryRfLossTotalCount": 0,
+  "type": "drone_debug_event"
+}
+{
+  "accepted": true,
+  "command": "debug_restart_join",
+  "commandId": "wifi-91278797",
+  "gcMillis": 1205004,
+  "message": "join runtime reset",
+  "sourceRole": "drone",
+  "target": "drone",
+  "type": "command_ack"
+}
+{
+  "bootCount": 2,
+  "channelIndex": 51,
+  "commandCount": 53,
+  "forcedJoinTxCount": 0,
+  "frequencyMhz": 915,
+  "gcMillis": 1205005,
+  "holdUntilMs": 0,
+  "joinAttemptCount": 0,
+  "joinBackoffKind": "first_fast",
+  "joinBackoffMs": 445,
+  "joinFastLbtFailCount": 0,
+  "joinHeld": false,
+  "joinMode": "auto",
+  "joinRequestSentMs": 0,
+  "nextActionMs": 1205448,
+  "nodeId": 6,
+  "radioProfileId": 0,
+  "rebootPending": false,
+  "resetReason": 3,
+  "runtimeResetCount": 3,
+  "sourceRole": "drone",
+  "state": "backoff",
+  "telemetryDropRemaining": 0,
+  "telemetryDropTotalCount": 0,
+  "telemetryPaused": false,
+  "telemetryRfLossRemaining": 0,
+  "telemetryRfLossTotalCount": 0,
+  "telemetryTxCount": 0,
+  "type": "drone_debug_status"
+}

@@ -24,9 +24,9 @@
     defer
   ></script>
 
-  <link rel="stylesheet" href="./style.css?v=live-scene-relay-5" />
+  <link rel="stylesheet" href="./style.css?v=live-scene-relay-8" />
   <script src="./config.js" defer></script>
-  <script src="./script.js?v=live-scene-relay-5" defer></script>
+  <script src="./script.js?v=live-scene-relay-8" defer></script>
 </head>
 
 <body>
@@ -103,6 +103,56 @@
               </div>
             </div>
           </div>
+          <section class="live-debug-panel" id="liveDebugPanel" aria-label="Live debug tools" hidden>
+            <div class="live-debug-head">
+              <span>Debug</span>
+              <strong id="liveDebugState">Idle</strong>
+            </div>
+            <div class="live-debug-grid">
+              <button class="live-btn" id="liveDebugTeleGcStatusBtn" type="button">TeleGC Status</button>
+              <button class="live-btn" id="liveDebugMaGcStatusBtn" type="button">MaGC Status</button>
+              <button class="live-btn" id="liveDebugMaGcBindBtn" type="button">MaGC Bind</button>
+              <button class="live-btn" id="liveDebugMaGcCancelBtn" type="button">Cancel Bind</button>
+            </div>
+            <div class="live-debug-head live-debug-head-secondary">
+              <span>Drone USB</span>
+              <strong id="liveDebugDroneState">Disconnected</strong>
+            </div>
+            <div class="live-debug-grid">
+              <button class="live-btn" id="liveDebugDroneOpenBtn" type="button">Open Drone</button>
+              <button class="live-btn" id="liveDebugDroneCloseBtn" type="button" disabled>Close Drone</button>
+              <button class="live-btn" id="liveDebugDroneHoldBtn" type="button" disabled>Hold JOIN</button>
+              <button class="live-btn" id="liveDebugDroneJoinBtn" type="button" disabled>JOIN Now</button>
+              <button class="live-btn" id="liveDebugDroneRestartHoldBtn" type="button" disabled>Restart Hold</button>
+              <button class="live-btn" id="liveDebugDronePauseBtn" type="button" disabled>Pause Telemetry</button>
+              <button class="live-btn" id="liveDebugDroneRfLoss2Btn" type="button" disabled>RF Loss 2</button>
+              <button class="live-btn" id="liveDebugDroneDelay20Btn" type="button" disabled>Delay 20ms</button>
+              <button class="live-btn" id="liveDebugDroneDrop2Btn" type="button" disabled>Drop 2 Cycles</button>
+              <button class="live-btn live-danger-btn" id="liveDebugDroneRebootHoldBtn" type="button" disabled>Reboot Hold</button>
+            </div>
+            <div class="live-debug-head live-debug-head-secondary">
+              <span>Drone Wi-Fi</span>
+              <strong id="liveDebugDroneWifiState">Idle</strong>
+            </div>
+            <div class="live-debug-wifi-row">
+              <label class="live-field live-debug-wifi-host">
+                <span>Host</span>
+                <input id="liveDebugDroneWifiHost" type="text" value="simple-mesh-7.local" spellcheck="false" />
+              </label>
+              <button class="live-btn" id="liveDebugDroneWifiStatusBtn" type="button">Status</button>
+            </div>
+            <div class="live-debug-grid">
+              <button class="live-btn" id="liveDebugDroneWifiHoldBtn" type="button">Hold JOIN</button>
+              <button class="live-btn" id="liveDebugDroneWifiJoinBtn" type="button">JOIN Now</button>
+              <button class="live-btn" id="liveDebugDroneWifiRestartHoldBtn" type="button">Restart Hold</button>
+              <button class="live-btn" id="liveDebugDroneWifiPauseBtn" type="button">Pause Telemetry</button>
+              <button class="live-btn" id="liveDebugDroneWifiRfLoss2Btn" type="button">RF Loss 2</button>
+              <button class="live-btn" id="liveDebugDroneWifiDelay20Btn" type="button">Delay 20ms</button>
+              <button class="live-btn" id="liveDebugDroneWifiDrop2Btn" type="button">Drop 2 Cycles</button>
+              <button class="live-btn live-danger-btn" id="liveDebugDroneWifiRebootHoldBtn" type="button">Reboot Hold</button>
+            </div>
+            <pre class="live-debug-log" id="liveSerialDebug" aria-label="Recent debug log"></pre>
+          </section>
         </section>
         <section class="live-gc-panel" id="liveGcStatus" aria-label="GC radio status"></section>
         <div class="status-list" id="statusList"></div>

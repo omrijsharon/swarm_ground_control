@@ -1,2 +1,5 @@
 logs/
 **/.wrangler/
+__pycache__/
+*.py[cod]
+$log
