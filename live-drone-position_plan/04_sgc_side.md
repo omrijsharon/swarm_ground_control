@@ -68,7 +68,7 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Draw heading arrow from the derived `heading` field.
   - [x] Show stale/offline state clearly on the map.
   - [x] Keep map redraw efficient for 2-5 Hz updates per drone.
-  - [x] Keep the map continuously centered on a drone selected from the live right-panel row until deselection.
+  - [x] Keep the map smoothly centered on a drone selected from the live right-panel row until deselection.
   - [x] Avoid command relationship visuals in live-position mode.
   - [x] Avoid mock swarm clutter in live mode.
 

@@ -79,6 +79,7 @@ const LIVE_RELAY_RECONNECT_MS = 1500;
 const LIVE_RELAY_DRONES_STATE_INTERVAL_MS = 250;
 const LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS = 80;
 const LIVE_RELAY_HOMES_STATE_INTERVAL_MS = 5000;
+const LIVE_FOLLOW_ANIMATION_DURATION_MS = 360;
 const LIVE_DEBUG_STORAGE_KEY = "sgc.livePosition.debugEnabled.v1";
 const LIVE_DRONE_WIFI_HOST_STORAGE_KEY = "sgc.livePosition.droneWifiHost.v1";
 const LIVE_BINDING_STALL_GRACE_MS = 1000;
@@ -270,8 +271,12 @@ const liveState = {
   droneAliases: loadLiveDroneAliases(),
   droneActionSheet: null,
   followDroneId: null,
-  followMovePending: false,
   followResumeAt: 0,
+  followTargetLatLng: null,
+  followFromLatLng: null,
+  followAnimationStartedAt: 0,
+  followAnimationDurationMs: LIVE_FOLLOW_ANIMATION_DURATION_MS,
+  followAnimationFrame: 0,
   homePlacementActive: false,
   mockEnabled: LIVE_POSITION_MOCK_DEFAULT,
   mockActive: false,
@@ -1916,9 +1921,16 @@ function scrollTeamIntoView(teamId) {
 
 function stopLiveDroneFollow() {
   if (!LIVE_POSITION_MODE) return;
+  if (liveState.followAnimationFrame) {
+    cancelAnimationFrame(liveState.followAnimationFrame);
+  }
   liveState.followDroneId = null;
-  liveState.followMovePending = false;
   liveState.followResumeAt = 0;
+  liveState.followTargetLatLng = null;
+  liveState.followFromLatLng = null;
+  liveState.followAnimationStartedAt = 0;
+  liveState.followAnimationDurationMs = LIVE_FOLLOW_ANIMATION_DURATION_MS;
+  liveState.followAnimationFrame = 0;
 }
 
 function syncLiveDroneFollowState() {
@@ -1939,9 +1951,41 @@ function startLiveDroneFollow(id, { resumeDelayMs = 650 } = {}) {
     return;
   }
   liveState.followDroneId = followId;
-  liveState.followMovePending = false;
+  liveState.followTargetLatLng = null;
+  liveState.followFromLatLng = null;
+  liveState.followAnimationStartedAt = 0;
+  liveState.followAnimationDurationMs = LIVE_FOLLOW_ANIMATION_DURATION_MS;
   const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   liveState.followResumeAt = now + Math.max(0, Number(resumeDelayMs) || 0);
+}
+
+function runLiveDroneFollowAnimationFrame() {
+  liveState.followAnimationFrame = 0;
+  if (!LIVE_POSITION_MODE || !map || !syncLiveDroneFollowState()) return;
+  const from = liveState.followFromLatLng;
+  const target = liveState.followTargetLatLng;
+  if (!from || !target) return;
+  const fromLat = Number(from.lat);
+  const fromLng = Number(from.lng);
+  const targetLat = Number(target.lat);
+  const targetLng = Number(target.lng);
+  if (![fromLat, fromLng, targetLat, targetLng].every(Number.isFinite)) return;
+
+  const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
+  const durationMs = Math.max(1, Number(liveState.followAnimationDurationMs) || LIVE_FOLLOW_ANIMATION_DURATION_MS);
+  const rawT = (now - Number(liveState.followAnimationStartedAt || now)) / durationMs;
+  const t = clamp01(rawT);
+  const eased = sigmoid01(t, 11);
+  const lat = fromLat + (targetLat - fromLat) * eased;
+  const lng = fromLng + (targetLng - fromLng) * eased;
+  map.setView([lat, lng], map.getZoom(), { animate: false });
+
+  if (t < 1) {
+    liveState.followAnimationFrame = requestAnimationFrame(runLiveDroneFollowAnimationFrame);
+    return;
+  }
+
+  liveState.followFromLatLng = { lat: targetLat, lng: targetLng };
 }
 
 function queueLiveDroneFollowCenter(drone, { force = false } = {}) {
@@ -1949,22 +1993,19 @@ function queueLiveDroneFollowCenter(drone, { force = false } = {}) {
   if (Number(drone.id) !== Number(liveState.followDroneId)) return;
   const now = typeof performance !== "undefined" && performance.now ? performance.now() : Date.now();
   if (!force && Number(liveState.followResumeAt) > now) return;
-  if (liveState.followMovePending) return;
-  liveState.followMovePending = true;
-  requestAnimationFrame(() => {
-    liveState.followMovePending = false;
-    if (!syncLiveDroneFollowState()) return;
-    const followedDrone = getDroneById(liveState.followDroneId);
-    const latest = followedDrone && followedDrone.getLatest && followedDrone.getLatest();
-    const lat = Number(latest?.lat);
-    const lng = Number(latest?.lng);
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
-    if (typeof map.panTo === "function") {
-      map.panTo([lat, lng], { animate: false });
-    } else {
-      map.setView([lat, lng], map.getZoom(), { animate: false });
-    }
-  });
+  const latest = drone.getLatest && drone.getLatest();
+  const lat = Number(latest?.lat);
+  const lng = Number(latest?.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+  const center = map.getCenter();
+  liveState.followFromLatLng = { lat: center.lat, lng: center.lng };
+  liveState.followTargetLatLng = { lat, lng };
+  liveState.followAnimationStartedAt = now;
+  liveState.followAnimationDurationMs = LIVE_FOLLOW_ANIMATION_DURATION_MS;
+  if (!liveState.followAnimationFrame) {
+    liveState.followAnimationFrame = requestAnimationFrame(runLiveDroneFollowAnimationFrame);
+  }
 }
 
 function setPinnedDrone(id) {
