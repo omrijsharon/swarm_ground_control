@@ -67,6 +67,10 @@ under that limit.
 - [x] Add SGC display for `LoRa live | ESP-NOW probing` and `ESP-NOW live | LoRa standby`.
 - [x] Preserve detailed bind-progress phases through ESP-NOW bridge snapshots.
 - [x] Update provisioning helper for ESP-NOW primary and LoRa fallback defaults.
+- [x] Keep MaGC ESP-NOW bridge service active in dual-GC shared-listen mode so
+  shared-channel LoRa priority cannot starve bridge beacons/snapshots.
+- [x] Use the runtime Wi-Fi STA channel for ESP-NOW peers and reinitialize
+  ESP-NOW if the STA channel changes.
 - [ ] Bench-verify ESP-NOW bridge connects and updates at about 4 Hz.
 - [ ] Bench-verify mutating commands ACK over ESP-NOW.
 - [ ] Bench-verify LoRa fallback after ESP-NOW stale/loss and promotion back to ESP-NOW.

@@ -263,7 +263,12 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Publish bridge-fed serial scenes to Cloudflare through the existing
     browser relay publisher.
   - [x] Detect `gc_status.bridgeMode === true`.
-  - [x] Show `LoRa bridge` in the source row when connected to a bridge receiver.
+  - [x] Accept compact bridge `gc_status` without requiring TeleGC/MaGC-only
+    fields.
+  - [x] Infer bridge mode from serial `drones_state.source` values
+    `lora_bridge`, `espnow_bridge`, and `bridge`.
+  - [x] Show explicit `Bridge LoRa mode` / `Bridge ESP-NOW mode` source
+    labels when connected to a bridge receiver.
   - [x] Disable GC-mutating controls in bridge mode: Reset, Bind, Re-bind,
     Delete assignment, Re-scan, and Profile Apply.
   - [x] Keep local SGC-only tools available in bridge mode: HOME markers, drone

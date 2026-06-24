@@ -231,6 +231,7 @@ const liveState = {
   gcStatus: null,
   interGcStatus: null,
   usbDeviceRole: null,
+  bridgeSource: null,
   channelTable: null,
   channelScanEvents: new RingLog(),
   scanInProgress: false,
@@ -406,8 +407,31 @@ function isLiveRemoteViewerMode() {
   return liveState.telemetrySourceMode === "live" || (liveState.telemetrySourceMode === "auto" && !liveState.connected);
 }
 
+function normalizeLiveBridgeSource(source) {
+  const value = String(source || "").trim().toLowerCase();
+  if (value === "lora_bridge" || value === "lora") return "lora_bridge";
+  if (value === "espnow_bridge" || value === "espnow" || value === "esp-now") return "espnow_bridge";
+  if (value === "bridge" || value === "bridge_receiver") return "bridge";
+  return "";
+}
+
+function rememberLiveBridgeSource(source) {
+  const normalized = normalizeLiveBridgeSource(source);
+  if (!normalized) return "";
+  if (
+    normalized !== "bridge" ||
+    !["lora_bridge", "espnow_bridge"].includes(liveState.bridgeSource)
+  ) {
+    liveState.bridgeSource = normalized;
+  }
+  rememberLiveUsbDeviceRole("bridge_receiver");
+  return liveState.bridgeSource;
+}
+
 function isLiveBridgeMode() {
-  return Boolean(liveState.gcStatus?.bridgeMode);
+  if (liveState.gcStatus?.bridgeMode === true) return true;
+  if (inferLiveUsbDeviceRole() === "bridge_receiver") return true;
+  return Boolean(normalizeLiveBridgeSource(liveState.bridgeSource));
 }
 
 function normalizeLiveUsbDeviceRole(role) {
@@ -450,7 +474,10 @@ function getLiveUsbRoleWarning(status = liveState.gcStatus || {}) {
 }
 
 function formatLiveLocalSourceValue(status = liveState.gcStatus || {}) {
-  if (isLiveBridgeMode()) return `${getLiveBridgeTransportLabel(status)} bridge`;
+  if (isLiveBridgeMode()) {
+    const bridgeLabel = getLiveBridgeTransportLabel(status);
+    return bridgeLabel === "Bridge" ? "Bridge mode unknown" : `Bridge ${bridgeLabel} mode`;
+  }
   if (!liveState.connected) return "USB disconnected";
   const role = inferLiveUsbDeviceRole(status);
   const label = labelLiveUsbDeviceRole(role);
@@ -466,6 +493,9 @@ function getLiveBridgeTransportLabel(status = liveState.gcStatus || {}) {
   const transport = String(status.bridgeTransport || "").toLowerCase();
   if (transport === "espnow") return "ESP-NOW";
   if (transport === "lora") return "LoRa";
+  const rememberedSource = normalizeLiveBridgeSource(liveState.bridgeSource);
+  if (rememberedSource === "espnow_bridge") return "ESP-NOW";
+  if (rememberedSource === "lora_bridge") return "LoRa";
   if (status.espnowBridgeLive === true) return "ESP-NOW";
   if (status.loraFallbackLive === true) return "LoRa";
   return "Bridge";
@@ -6643,6 +6673,19 @@ const liveProtocolSchemas = {
     operatorDiscoveryReason: "string",
     sharedJoinRequestCount: "integer",
     lastSharedJoinNodeId: "integer",
+    nodeRole: "string",
+    node_role: "string",
+    radioProfileId: "integer",
+    bridgeMode: "boolean",
+    bridgeControl: "boolean",
+    bridgeStale: "boolean",
+    bridgeTransport: "string",
+    espnowBridgeLive: "boolean",
+    loraFallbackLive: "boolean",
+    backhaulLastPacketAgeMs: "integer",
+    backhaulRssi: "number",
+    backhaulSnr: "number",
+    defaultAssignmentRadioProfileId: "integer",
     gcMillis: "integer",
   },
   assignment_event: {
@@ -6738,6 +6781,14 @@ function validateLiveProtocolMessage(message) {
   const schema = liveProtocolSchemas[type];
   if (!schema) return [];
   const issues = [];
+  if (type === "gc_status") {
+    Object.entries(schema).forEach(([field, fieldType]) => {
+      if (field in message && !matchesLiveType(message[field], fieldType)) {
+        issues.push(`${field} must be ${fieldType}.`);
+      }
+    });
+    return issues;
+  }
   Object.entries(schema).forEach(([field, fieldType]) => {
     if (!(field in message)) {
       issues.push(`Missing ${field}.`);
@@ -7480,6 +7531,15 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   const isBridgeSerialScene =
     isSerialSceneState &&
     (sceneSource === "lora_bridge" || sceneSource === "espnow_bridge" || sceneSource === "bridge");
+  let bridgeIdentityChanged = false;
+  if (isBridgeSerialScene) {
+    const previousBridgeSource = liveState.bridgeSource;
+    const previousUsbRole = liveState.usbDeviceRole;
+    rememberLiveBridgeSource(sceneSource);
+    bridgeIdentityChanged =
+      previousBridgeSource !== liveState.bridgeSource ||
+      previousUsbRole !== liveState.usbDeviceRole;
+  }
   if ((source === "live-endpoint" || isSerialSceneState) && !liveState.serialTelemetrySeen) {
     stopLivePositionMock({ clearDrones: true, clearStatus: true });
     liveState.serialTelemetrySeen = true;
@@ -7650,6 +7710,10 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     draw();
   }
   if (isSerialSceneState) {
+    if (bridgeIdentityChanged) {
+      renderLiveControls();
+      renderLiveGcStatus();
+    }
     ensureLiveRelayForCurrentState();
     publishLiveDronesState({ minIntervalMs: LIVE_RELAY_DRONES_STATE_DATA_MIN_INTERVAL_MS });
   }
@@ -7894,7 +7958,13 @@ function handleLiveProtocolMessage(message, source = "serial") {
     applyLiveTelemetry(message, source);
   } else if (message.type === "gc_status") {
     liveState.gcStatus = message;
-    rememberLiveUsbDeviceRole(message.nodeRole || message.node_role);
+    const role = rememberLiveUsbDeviceRole(message.nodeRole || message.node_role);
+    const bridgeSource = normalizeLiveBridgeSource(message.bridgeTransport || message.source);
+    if (message.bridgeMode === true || role === "bridge_receiver" || bridgeSource) {
+      rememberLiveBridgeSource(message.bridgeTransport || message.source || message.nodeRole || message.node_role || "bridge");
+    } else if (role && role !== "bridge_receiver") {
+      liveState.bridgeSource = null;
+    }
     syncLiveProfileDraftFromGcStatus();
     liveState.searchMode = !!message.searchMode;
     if (!liveState.searchMode || !!message.operatorDiscoveryActive) liveState.searchPending = false;
@@ -8507,6 +8577,7 @@ function markLiveSerialDisconnected(reason) {
   liveState.lineBuffer = "";
   liveState.interGcStatus = null;
   liveState.usbDeviceRole = null;
+  liveState.bridgeSource = null;
   liveState.portLabel = liveState.lastSerialPort ? describeLiveSerialPort(liveState.lastSerialPort) : "None";
   setLiveSerialState("error", "Disconnected", reason);
   renderLiveControls();
@@ -8547,6 +8618,7 @@ async function openLiveSerialPort({ port = null, auto = false } = {}) {
     liveState.gcStatus = null;
     liveState.interGcStatus = null;
     liveState.usbDeviceRole = null;
+    liveState.bridgeSource = null;
     liveState.baudRate = baudRate;
     setLiveSerialState(
       "connected",
@@ -8626,6 +8698,7 @@ async function closeLiveSerialPort() {
   liveState.lineBuffer = "";
   liveState.interGcStatus = null;
   liveState.usbDeviceRole = null;
+  liveState.bridgeSource = null;
   setLiveSerialState("waiting", "Disconnected", "Ready to open the GC ESP32 serial port.");
   renderLiveControls();
   renderLiveGcStatus();

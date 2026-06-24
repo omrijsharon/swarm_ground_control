@@ -103,6 +103,11 @@ automatic fallback.
     dialog, then send safe terminal/timing updates when the GC can retune.
   - [x] Service active LoRa bridge sessions during long CAD scans between
     samples so scan progress does not make the bridge look dead.
+  - [x] Keep MaGC dual-GC bridge backhaul from starving: ESP-NOW bridge service
+    runs before shared-discovery LoRa guards, and LoRa fallback is suppressed
+    only during critical shared/bind/recovery windows.
+  - [x] Use runtime ESP-NOW Wi-Fi channel for bridge peers and reset stale
+    ESP-NOW peer/session state when the STA channel changes.
   - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
   - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
   - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.

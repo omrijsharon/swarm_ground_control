@@ -242,10 +242,15 @@ Queue defaults:
   - Zero-assignment passive Bind / MaGC shared listening now uses the longer
     discovery dwell instead of the old short shared dwell, so bridge beacons do
     not phase-lock against long JOIN requests.
-- [x] Give shared discovery priority over LoRa bridge fallback when no assigned
-  drones exist, during operator Bind/Search, and during all-lost shared recovery.
-  ESP-NOW bridge updates may continue, but LoRa bridge beacons/deltas are skipped
-  because they retune the single SX1262 away from the shared channel.
+- [x] Give critical shared discovery priority over LoRa bridge fallback during
+  the initial no-assignment strong shared-RX window, operator Bind/Search, auto
+  shared-RX recovery, and all-lost shared recovery. ESP-NOW bridge updates
+  continue because they do not retune the SX1262; LoRa bridge beacons/deltas are
+  allowed again during idle shared listening so the bridge cannot starve forever.
+- [x] Fix dual-GC bridge backhaul starvation: MaGC now services ESP-NOW bridge
+  beacons/snapshots before shared-discovery LoRa guards, and LoRa fallback uses
+  only critical-window suppression rather than a permanent MaGC shared-listen
+  block.
 - [x] Avoid sending LoRa bridge beacons from bind-progress callbacks before a
   bridge LoRa session exists; pre-session bind progress should use ESP-NOW or
   wait until the shared bind sequence is complete.
