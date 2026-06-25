@@ -201,11 +201,13 @@ Live mode should:
 Freshness thresholds:
 
 ```text
-fresh:   < 1000 ms
-late:    1000-2000 ms
-stale:   2000-5000 ms
-offline: > 5000 ms
+fresh:   < 1500 ms
+late:    1500-3000 ms
+stale:   3000-6000 ms
+offline: >= 6000 ms
 ```
+
+When firmware provides `expectedUpdateMs`, SGC scales the thresholds to `max(1500, expectedUpdateMs * 2.0)`, `max(3000, expectedUpdateMs * 3.0)`, and `max(6000, expectedUpdateMs * 6.0)` for fresh, late, and stale respectively.
 
 Mock mode for this branch should simulate the real target:
 
@@ -352,6 +354,18 @@ The normal dual-GC bench connection is USB only to TeleGC. Commands sent to Tele
 TeleGC forwards MaGC-targeted SGC commands through a bounded reliable Inter-GC queue. A `magc:*` command should not fail merely because another reliable message is pending; it should either produce a real MaGC `command_ack` or a command-specific timeout such as `magc_ack_timeout`. `inter_gc_status` reports `reliableQueueDepth`, `eventOutboxDepth`, event drop counters, and queued command age. Treat any `inter_gc_forward_failed`, duplicate `command_ack`, malformed JSON payload, or corrupted event type as a transport failure.
 
 MaGC-to-TeleGC debug/event output is routed through a single Inter-GC event outbox. Critical command ACKs, assignment sync, bind milestones, post-bind acquire events, and telemetry timing hints have priority; low-value scanner/spectrum chatter may be coalesced or dropped under pressure and should be visible in the outbox counters. Large command result bodies such as `assignments` and `channel_table` may be compacted instead of forwarded as best-effort event lines; assignment sync remains the source of truth for those data sets.
+
+### Split-GC Wi-Fi Debug
+
+MaGC and TeleGC expose the same Web OTA/debug endpoints as drones after the split-GC Wi-Fi debug build:
+
+```powershell
+python tools\drone_wifi_debug.py --host simple-mesh-magc.local status
+python tools\drone_wifi_debug.py --host simple-mesh-telegc.local status
+python tools\drone_wifi_debug.py --host 192.168.68.101 raw "{\"type\":\"command\",\"command\":\"get_assignments\"}"
+```
+
+Use MaGC Wi-Fi status for shared-owner, bridge, and MaGC recovery fields. Use TeleGC Wi-Fi status for receiver-budget diagnostics such as `receiverBudgetNodes`, `recoveryBudgetDeniedCount`, `lastRecoveryBudgetDeniedNodeId`, `lastHealthyProtectedNodeId`, and owed-RX counters. The HTTP route queues commands for the firmware main loop; do not add handlers that mutate radio state directly from the WebServer task.
 
 ### USB-Connected Drone Debug
 

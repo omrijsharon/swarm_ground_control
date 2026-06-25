@@ -303,6 +303,16 @@ python tools\analyze_live_debug_log.py logs_summary\live_debug_bind.jsonl -o log
   - 2026-06-20: Smoke-tested `rf-loss 1` over Wi-Fi; command ACK was accepted and `telemetry_rf_loss_started` was emitted while Drone 7 was in `assigned_telemetry`.
 - [ ] Confirm Wi-Fi debug enabled does not regress reset-to-JOIN or steady TeleGC coverage.
 
+## Split-GC Wi-Fi Debug 2026-06-25
+
+- [x] Generalized the Web OTA/debug HTTP queue so split-GC roles can use the same `/debug/status` and `/debug/command` NDJSON endpoints as drones.
+- [x] Started MaGC and TeleGC Web OTA/debug service from the low-priority background task so HTTP commands can wait while the main loop drains the command queue safely.
+- [x] Added `processGcWifiCommands()` so MaGC/TeleGC Wi-Fi commands reuse the existing GC serial command parser and `gc_status` output.
+- [x] OTA flashed MaGC `192.168.68.101` and TeleGC `192.168.68.100` with the split-GC Wi-Fi debug build.
+- [x] Verified MaGC Wi-Fi `get_status` returns `sourceRole:"magic_ground_control"` and MaGC shared-owner/bridge diagnostics.
+- [x] Verified TeleGC Wi-Fi `get_status` returns receiver-budget diagnostics needed to debug offline/stale node servicing.
+  - 2026-06-25: Binding/servicing evidence showed node 2 recovered after temporary `knownPhase:false` acquisition, while node 6 was still transmitting assigned telemetry on Wi-Fi but TeleGC kept it `knownPhase:false` / `lastRxAgeMs:-1`; `lastRecoveryBudgetDeniedNodeId:6`, `lastHealthyProtectedNodeId:7`, and rising `healthyServiceProtectedCount` point to receiver recovery fairness/starvation, not a MaGC JOIN failure.
+
 ## Multi-Drone Safe Rollout 2026-06-20
 
 - [x] Added `tools\drone_safe_rollout.py` to audit one USB-connected drone before firmware rollout.
@@ -395,6 +405,21 @@ python tools\analyze_live_debug_log.py logs_summary\live_debug_bind.jsonl -o log
 - [x] Fixed SGC state precedence so recent TeleGC telemetry wins over any terminal `drone_link_status`; ignored terminal statuses are logged as `terminal_link_status_ignored_recent_telemetry`.
 - [x] Fixed bridge-originated `START_SEARCH` so it uses safe operator discovery when assignments exist instead of the old blocking shared-RX search.
 - [x] Fixed MaGC shared-rejoin priority so it renews the matching auto shared-RX lease while the lost-drone recovery remains active, and clears only when that recovery state is explicitly resolved/removed.
+- [x] Fixed MaGC shared-RX dwell starvation from bridge fallback: extended JOIN airtime now sizes the shared dwell, MaGC-owned discovery no longer relies on 75 ms LoRa receive windows, and LoRa bridge fallback waits until the active shared dwell ends while ESP-NOW continues during RX.
+- [x] Fixed the active-assignment variant of shared JOIN starvation: MaGC auto/operator discovery now uses a dedicated continuous `1200 ms` JOIN dwell and does not cut it short for assigned-slot slack; the `75 ms` constant remains only a short non-JOIN borrow chunk.
+- [x] Fixed automatic lost assigned-link recovery so MaGC tries assigned-channel recovery first (`3 * txPeriodMs + guard`), then one `6000 ms` shared JOIN fallback, then one assigned retry before `lost_link_recovery_exhausted`; TeleGC no longer parks local assigned recovery immediately after sending the assist request.
+- [x] Fixed dual-GC MaGC shared-owner mode so active assignments no longer stop
+  routine shared discovery. MaGC now runs repeated full shared discovery dwell
+  windows while TeleGC handles assigned telemetry; `magicSharedOwner*`
+  `gc_status` counters expose the behavior for bench checks.
+- [x] Bench with Drone 6 intentionally powered off: after flashing MaGC/TeleGC,
+  bridge USB capture `logs_summary\magc_shared_owner_drone6_off_bridge.jsonl`
+  showed 100 ESP-NOW `drones_state` snapshots in about 35 seconds, nodes `2`,
+  `3`, and `7` online, max per-node bridge ages under `1 s`, and no state
+  flicker or terminal-state regressions.
+- [ ] Direct MaGC `magicSharedOwner*` counter read remains pending until TeleGC
+  or MaGC is available over USB/serial; the bridge USB path exposes bridge
+  receiver status, not MaGC internal `gc_status`.
 - [x] Updated `tools\run_multi_drone_stress.py` with optional abuse phases:
   - `--manual-bind-abuse` for repeated bind/cancel non-disruption testing.
   - `--rf-loss-only-cycles ...` and `--rf-loss-only-repeats ...` for Wi-Fi simulated RF-loss matrices before destructive rejoin tests.
@@ -428,7 +453,7 @@ python tools\analyze_live_debug_log.py logs_summary\live_debug_bind.jsonl -o log
   - 2026-06-22: flashed MaGC `192.168.68.101`, TeleGC `192.168.68.106`, drone 3 `192.168.68.107`, drone 6 `192.168.68.111`, and drone 7 `192.168.68.100`.
 - [x] Added final receiver-budget hardening after the first three-drone stress failure:
   - Reverted `DRONE_FIRST_JOIN_FAST_ATTEMPTS` to `10` after the `24`-attempt build caused multi-drone shared-channel contention.
-  - Extended TeleGC local recovery defer to `6000 ms` after shared-rejoin handoff so TeleGC protects healthy drones while MaGC listens on shared.
+  - Superseded the immediate TeleGC local-recovery defer: automatic lost assigned links now keep assigned recovery available while MaGC runs assigned-first recovery, one `6000 ms` shared fallback, and one assigned retry.
   - Changed MaGC shared-rejoin priority to renew auto shared RX instead of falling out when the current shared-RX lease expires.
   - Treated missed known-phase candidates as recovery-budget consumers, and fixed stale recovery deadlines so overdue missing nodes cannot outrank healthy service deadlines.
 - [x] Bench validation for reachable drones 3/6/7:

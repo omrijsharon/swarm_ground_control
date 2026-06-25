@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Send live-position drone debug commands over the drone Web OTA/debug API.
+"""Send live-position debug commands over the Web OTA/debug API.
 
 Examples:
+  python tools/drone_wifi_debug.py --host simple-mesh-magc.local status
+  python tools/drone_wifi_debug.py --host simple-mesh-telegc.local status
   python tools/drone_wifi_debug.py --host simple-mesh-7.local status
   python tools/drone_wifi_debug.py --host simple-mesh-7.local config
   python tools/drone_wifi_debug.py --host simple-mesh-7.local files
@@ -145,8 +147,8 @@ def post_command(base_url: str, payload: dict[str, Any], timeout_s: float, auth:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Control a live-position drone over Wi-Fi debug HTTP.")
-    parser.add_argument("--host", required=True, help="Drone hostname, IP, or base URL, e.g. simple-mesh-7.local")
+    parser = argparse.ArgumentParser(description="Control or query a live-position device over Wi-Fi debug HTTP.")
+    parser.add_argument("--host", required=True, help="Device hostname, IP, or base URL, e.g. simple-mesh-magc.local")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port when --host has no explicit port")
     parser.add_argument("--timeout", type=float, default=3.0, help="HTTP timeout in seconds")
     parser.add_argument("--user", help="Optional OTA/debug basic-auth username")
@@ -186,7 +188,7 @@ def main() -> int:
                     print(stripped)
         return 0 if 200 <= status < 300 else 1
     except (ValueError, URLError, TimeoutError, OSError) as exc:
-        print(f"drone Wi-Fi debug failed: {exc}", file=sys.stderr)
+        print(f"Wi-Fi debug failed: {exc}", file=sys.stderr)
         return 2
 
 

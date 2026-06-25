@@ -70,7 +70,7 @@ automatic fallback.
   - [x] Route SGC Bind/Search/scan/allocation commands from TeleGC to MaGC.
   - [x] Keep TeleGC-local manual Re-bind for assigned telemetry reacquisition.
   - [x] Add NTP-style `micros()` clock sync and MaGC timing-hint conversion support.
-  - [x] Make MaGC shared/bind-only and TeleGC assigned-telemetry-only while preserving single-GC mixed behavior.
+  - [x] Make MaGC shared-owner/bind-only and TeleGC assigned-telemetry-only while preserving single-GC mixed behavior.
   - [ ] Bench-verify MaGC/TeleGC UART wiring at `921600`.
   - [ ] Bench-verify SGC connected to TeleGC can Bind through MaGC.
   - [ ] Bench-verify TeleGC receives telemetry and updates TST/period from packets.
@@ -108,6 +108,17 @@ automatic fallback.
     only during critical shared/bind/recovery windows.
   - [x] Use runtime ESP-NOW Wi-Fi channel for bridge peers and reset stale
     ESP-NOW peer/session state when the STA channel changes.
+  - [x] Keep MaGC shared discovery from being fragmented by LoRa bridge fallback:
+    SF12 shared RX now uses the airtime-derived discovery dwell, including
+    extended JOIN requests, and LoRa bridge fallback only transmits after a full
+    shared-RX dwell completes. ESP-NOW bridge updates continue during SX1262 RX.
+  - [x] Keep active-assignment MaGC auto/operator JOIN recovery on a continuous
+    `1200 ms` shared RX dwell; `MAGC_SAFE_SHARED_RX_CHUNK_MS = 75` remains only
+    the short non-JOIN radio-borrow chunk.
+  - [x] Make MaGC shared-owner mode explicit in dual-GC mode: active
+    assignments no longer suppress routine MaGC shared discovery, ESP-NOW
+    bridge work may continue during shared RX, and LoRa bridge fallback may run
+    only between complete shared discovery dwell windows.
   - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
   - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
   - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.
@@ -408,7 +419,7 @@ automatic fallback.
   - [x] Add MaGC priority recovery and background OOCR.
     - MaGC treats assigned-drone assisted re-bind as top-priority non-critical work and can preempt passive shared listening, but not the timing-critical silence/assign/ACK part of a shared bind dialog.
     - MaGC starts shared-channel listening immediately on boot and defers full scan/OOCR work.
-    - For normal profiles, MaGC now gives a lost assigned drone only two quick assigned-channel chances with a combined budget under `2 s`. If both fail, MaGC keeps shared discovery as the priority for that node so a power-cycled drone can rejoin from the shared channel. The SF12/BW125/CR4/8 long-range profile gets one profile-aware long sweep before shared priority.
+    - For lost assigned links, MaGC now assumes the drone may still be transmitting on its assigned channel: it listens for `3 * txPeriodMs + max(120 ms, 2 * airtime)`, falls back to one `6000 ms` shared JOIN window, retries assigned recovery once, then emits `lost_link_recovery_exhausted` and returns to normal shared discovery.
     - MaGC OOCR runs as short CAD slices at most every `250 ms`, restores shared RX after each slice, queues CAD hits, and attempts at most one decoded-telemetry confirmation per `10 s` cycle after the shared channel has been quiet for about `2 s`.
   - [x] Keep telemetry-period acquisition responsive after a drone rejoins.
     - After `JOIN_ACK`, the GC schedules assigned-channel telemetry acquisition immediately. If it misses a packet before timing locks, it retries after `20 ms` instead of backing off to the shared-channel interval.
@@ -597,7 +608,10 @@ These tasks mirror `08_field_test_followups.md`.
 - [x] Report Search state in `gc_status`.
 - [x] Report computed `searchSharedDwellMs` in `gc_status`.
 - [x] Emit `search_event` messages.
-- [x] Disable routine shared-channel visits while assigned drones exist and Search is inactive.
+- [x] Disable routine shared-channel visits while assigned drones exist and Search is inactive only for single-GC/assigned-telemetry scanner paths.
+  - Dual-GC MaGC is the exception: it is the shared-channel owner and must keep
+    repeated full shared discovery dwell windows active even while TeleGC tracks
+    assigned drones.
 - [x] Keep shared discovery automatic when no drones are assigned.
 - [x] Make operator Search preempt regular assigned-channel telemetry windows so the GC actually dwells on the shared discovery channel.
   - Without this, a healthy `100 ms` assigned drone can keep winning every scheduler decision, making Search appear active while the radio remains on the assigned channel.
@@ -722,5 +736,11 @@ These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
 - [x] Preserve LoRa bridge as automatic fallback.
 - [x] Keep ESP-NOW probe traffic active while LoRa fallback is live.
 - [x] Promote back to ESP-NOW automatically after fresh ESP-NOW bridge contact.
+- [x] Gate LoRa fallback behind complete MaGC shared-RX dwells so bridge TX does
+  not cut through SF12 JOIN reception.
+- [x] Use a dedicated active-assignment shared JOIN dwell of at least `1200 ms`
+  for MaGC auto/operator recovery instead of the short `75 ms` safe-borrow chunk.
+- [x] Keep dual-GC MaGC in explicit shared-owner mode after assignments exist;
+  status now exposes `magicSharedOwner*` counters for bench verification.
 - [ ] Bench-verify ESP-NOW bridge live status and 4 Hz snapshots.
 - [ ] Bench-verify LoRa fallback after ESP-NOW stale/loss and promotion back to ESP-NOW.

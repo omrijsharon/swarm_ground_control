@@ -31,12 +31,12 @@ const LIVE_POSITION_MODE = APP_MODE === "live-position";
 const LIVE_POSITION_MOCK_DEFAULT = cfg("LIVE_POSITION_MOCK_DEFAULT", false);
 const LIVE_POSITION_AUTO_CONNECT = cfg("LIVE_POSITION_AUTO_CONNECT", true);
 const LIVE_FRESHNESS_MS = {
-  fresh: 1000,
-  late: 2000,
-  stale: 5000,
+  fresh: 1500,
+  late: 3000,
+  stale: 6000,
 };
 const LIVE_FRESHNESS_SCALE = {
-  fresh: 1.8,
+  fresh: 2.0,
   late: 3.0,
   stale: 6.0,
 };

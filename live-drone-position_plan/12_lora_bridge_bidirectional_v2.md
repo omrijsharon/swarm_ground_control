@@ -237,8 +237,9 @@ Queue defaults:
 - [x] Service due bridge beacons/snapshots between complete shared Bind/search
   listen windows so a zero-assignment or all-lost GC still stays visible to the
   bridge without fragmenting SF12 discovery RX.
-  - SF12/BW125 discovery JOIN requests take about `925.7 ms`; bridge LoRa
-    maintenance must not retune away from shared inside that receive window.
+  - SF12/BW125 discovery JOIN requests take about `925.7 ms` for legacy JOIN
+    and about `1187.8 ms` for extended JOIN; bridge LoRa maintenance must not
+    retune away from shared inside that receive window.
   - Zero-assignment passive Bind / MaGC shared listening now uses the longer
     discovery dwell instead of the old short shared dwell, so bridge beacons do
     not phase-lock against long JOIN requests.
@@ -251,6 +252,13 @@ Queue defaults:
   beacons/snapshots before shared-discovery LoRa guards, and LoRa fallback uses
   only critical-window suppression rather than a permanent MaGC shared-listen
   block.
+- [x] Fix MaGC shared-RX window starvation: `discoverySearchSharedDwellMs()`
+  includes extended JOIN airtime, MaGC-owned discovery keeps unbroken shared RX
+  dwell deadlines, and LoRa bridge fallback is allowed only after the current
+  shared dwell has completed. ESP-NOW remains the 4 Hz bridge path during RX.
+- [x] Fix active-assignment JOIN starvation: MaGC auto/operator recovery now uses
+  a continuous `1200 ms` shared JOIN dwell, while `MAGC_SAFE_SHARED_RX_CHUNK_MS`
+  stays at `75 ms` for short non-JOIN opportunistic borrowing.
 - [x] Avoid sending LoRa bridge beacons from bind-progress callbacks before a
   bridge LoRa session exists; pre-session bind progress should use ESP-NOW or
   wait until the shared bind sequence is complete.

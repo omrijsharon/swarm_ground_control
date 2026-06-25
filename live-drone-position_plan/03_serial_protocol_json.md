@@ -104,11 +104,14 @@ MaGC recovery diagnostics may include `magcRecoveryActive`,
 `magcRecoveryMode:"assigned_rebind"|"shared_rejoin"|"background_oocr"|"idle"`,
 `magcRecoveryNodeId`, `magcRecoveryQueueDepth`, `magcNextOocrInMs`,
 `magcLastRecoveryReason`, `magcSharedRejoinPriorityActive`,
-`magcSharedRejoinNodeId`, `magcAssignedRecoveryAttempts`, and
-`magcAssignedRecoveryBudgetMs`. TeleGC asks MaGC for urgent assisted re-bind
-after one missed expected TST/packet; MaGC gives normal profiles two quick
-assigned-channel chances under `2 s`, or one long-range SF12/BW125/CR4/8 sweep,
-before switching to shared-channel rejoin priority. MaGC background OOCR reports
+`magcSharedRejoinWindowActive`, `magcSharedRejoinNodeId`,
+`magcSharedRejoinRemainingMs`, `magcLostRecoveryPhase`,
+`magcAssignedRecoveryAttempts`, `magcAssignedRecoveryMaxListenMs`, and
+`magcSharedFallbackListenMs`. TeleGC asks MaGC for urgent assisted re-bind
+after missed assigned telemetry; MaGC first listens on the drone's assigned
+channel for `3 * txPeriodMs + max(120 ms, 2 * airtime)`, then opens one
+`6000 ms` shared JOIN fallback, then retries assigned recovery once before
+emitting `lost_link_recovery_exhausted`. MaGC background OOCR reports
 progress through
 `orphan_recovery_event` values such as `background_oocr_started`,
 `background_oocr_slice`, `background_oocr_candidate_queued`,
@@ -610,6 +613,9 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Bridge receiver emits USB `gc_status` with `bridgeMode:true`, `bridgeControl`, `bridgeStale`, `bridgeCommandQueueDepth`, `backhaulLastPacketAgeMs`, `backhaulRssi`, and `backhaulSnr`.
 - [x] Bridge receiver emits optional `bridgeHandshake` status such as `waiting_for_beacon`, `beacon_seen`, `live`, or `stale`.
 - [x] Bridge receiver emits USB `command_ack` when a queued RF command is ACKed, rejected, or duplicate-ACKed by the GC/MaGC.
+- [x] Fresh Session clears both bridge receiver cache and MaGC/TeleGC bridge scene caches so accepted bridge `clear_all_assignments` ACKs are followed by empty `drones_state`, `assignments`, `channel_table` when available, and `gc_status` until drones freshly rejoin.
+- [x] After Fresh Session, MaGC ignores delayed non-empty Inter-GC bridge scene snapshots until TeleGC sends the first empty bridge scene snapshot, preventing one-frame stale card replay.
+- [x] Inter-GC `bridge_scene_snapshot` is treated as a full scene snapshot: empty snapshots clear MaGC bridge scene records, and omitted nodes are invalidated instead of kept as stale cards.
 - [x] Bridge receiver emits compact `assignments` and `channel_table` summaries from the latest RF snapshot.
 - [x] Bridge receiver reconstructs USB `drones_state` and `gc_status` from compact `BRIDGE_LIVE_DELTA` LoRa fallback packets without requiring new SGC message types.
 - [ ] Add a compact bridge event-batch USB mapping if we need event-level Bind/Search mirroring beyond the 250 ms compact snapshot/status path.

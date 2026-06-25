@@ -66,13 +66,13 @@ UART at `921600`.
   top-priority non-critical work, listens on the assigned channel/profile with
   its independent radio, and returns `assignment_timing_hint` if it decodes
   telemetry. TeleGC still confirms final TST from its own received telemetry.
-- For a lost normal-profile assigned drone, MaGC gets only two quick
-  assigned-channel chances, with a combined budget under `2 s`. If both fail,
-  MaGC enters shared-channel rejoin priority for that node and defers further
-  automatic stale-channel requests. The extra-long `SF12/BW125/CR4/8` profile
-  gets one profile-aware long assigned sweep before shared priority.
-- MaGC starts shared-channel listening immediately on boot; full boot spectrum
-  scan is deferred so new drones can be heard as soon as possible.
+- For a lost assigned drone, MaGC first tries bounded assigned-channel recovery,
+  then a `6000 ms` shared JOIN fallback, then one assigned retry before stopping
+  active recovery and returning to normal shared discovery.
+- MaGC starts shared-channel listening immediately on boot and remains the
+  shared-channel owner even when assignments exist; TeleGC owns assigned
+  telemetry receive. Full boot spectrum scan is deferred so new drones can be
+  heard as soon as possible.
 - MaGC also runs a low-disturbance background OOCR scheduler. It checks one
   Fast/Balanced/Robust CAD cursor slice at most every `250 ms`, restores shared
   RX immediately, queues CAD hits, and only runs decoded-telemetry confirmation
@@ -134,7 +134,8 @@ UART at `921600`.
 - [x] Add assisted Re-bind status fields to `inter_gc_status`.
 - [x] Add role-specific scanner mode:
   - single GC: shared + assigned telemetry
-  - MaGC: shared/bind only
+  - MaGC: shared-owner/bind only, with repeated full shared discovery dwell
+    windows even while assignments exist
   - TeleGC: assigned telemetry only
 - [x] Add MaGC-to-TeleGC best-effort `bind_progress_event` mirroring for
   pre-telemetry SGC bind rows.
@@ -142,6 +143,9 @@ UART at `921600`.
   connected instead of TeleGC.
 - [x] Add MaGC USB-visible shared-RX diagnostics in `gc_status` so bench tests
   can distinguish no shared RF packets from malformed or rejected JOIN packets.
+- [x] Add explicit MaGC shared-owner status counters in `gc_status` so bench
+  tests can verify MaGC keeps polling shared discovery while assigned drones are
+  already visible through TeleGC.
 - [x] Extend provisioning helper for `magc` and `telegc`.
 - [ ] Bench-verify two physical ESP32+SX1262 modules exchange Inter-GC UART
   messages at `921600`.
@@ -161,6 +165,11 @@ UART at `921600`.
 - [ ] Bench-verify MaGC-assisted Re-bind falls back to local TeleGC recovery
   when the Inter-GC link is unavailable.
 - [ ] Bench-verify MaGC reset and TeleGC reset snapshot recovery.
+- [ ] Bench-verify MaGC shared-owner mode with Drone 6 powered off and drones
+  `2`, `3`, and `7` already assigned: bridge stays live and MaGC
+  `magicSharedOwner*` counters advance while assignments exist.
+- [ ] Deferred admission test: power on Drone 6 after the shared-owner build is
+  flashed and confirm it binds automatically without operator Search.
 - [ ] Bench-verify single-GC mode still binds and receives telemetry.
 
 ## Bench Flow

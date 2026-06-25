@@ -52,11 +52,11 @@ Goal: turn SGC into a simple live drone position viewer for this branch while ke
   - [x] Store last received timestamp.
 
 - [x] Milestone 5: Implement freshness states
-  - [x] Keep Fast-profile minimum thresholds: fresh `< 1000 ms`, late `1000-2000 ms`, stale `2000-5000 ms`, offline `> 5000 ms`.
+  - [x] Keep Fast-profile minimum thresholds: fresh `< 1500 ms`, late `1500-3000 ms`, stale `3000-6000 ms`, offline `>= 6000 ms`.
   - [x] Scale freshness thresholds from the GC scheduler's `expectedUpdateMs` when Balanced/Robust or mixed profiles make slower updates normal.
-  - [x] Use `ONLINE < max(1000, expectedUpdateMs * 1.8)`.
-  - [x] Use `LATE < max(2000, expectedUpdateMs * 3.0)`.
-  - [x] Use `STALE < max(5000, expectedUpdateMs * 6.0)`.
+  - [x] Use `ONLINE < max(1500, expectedUpdateMs * 2.0)`.
+  - [x] Use `LATE < max(3000, expectedUpdateMs * 3.0)`.
+  - [x] Use `STALE < max(6000, expectedUpdateMs * 6.0)`.
   - [x] Fall back to channel-table assignment timing, recent receive history, and `txPeriodMs` when telemetry does not include `expectedUpdateMs`.
   - [x] Display the fresh state as `ONLINE` in the operator UI.
   - [x] Update marker style based on freshness.
@@ -402,6 +402,7 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Route normal SGC command JSON to the bridge receiver when bridge control is fresh; the bridge firmware queues RF uplink commands.
 - [x] Keep bridge controls disabled when the RF downlink is stale or the browser is a remote endpoint viewer.
 - [x] Consume bridge-emitted `command_ack` through the existing pending-command UI path.
+- [x] Expect bridge reset ACKs to be followed by empty bridge scene JSON from cleared receiver/MaGC/TeleGC scene caches so stale offline cached cards do not reappear after Fresh Session.
 - [x] Keep SGC parser unchanged for compact LoRa bridge deltas because the bridge receiver reconstructs the same `drones_state` and `gc_status` USB JSON.
 - [ ] Browser/RF-verify Bind, Re-bind, Re-scan, profile apply, and clear assignment through the bridge.
 
