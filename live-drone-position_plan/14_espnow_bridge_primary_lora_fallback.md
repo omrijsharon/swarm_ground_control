@@ -15,12 +15,17 @@ under that limit.
 
 ## Key Changes
 
-- Reuse existing bridge packet types over ESP-NOW:
-  - `BRIDGE_BEACON`
+- Reuse existing bridge packet types over ESP-NOW, but make discovery bridge-initiated:
   - `BRIDGE_HELLO`
   - `BRIDGE_SNAPSHOT`
   - `BRIDGE_COMMAND`
-- Keep LoRa bridge on `902.0 MHz / SF7 / BW500 / CR4/5` as fallback.
+- Keep LoRa bridge on known `902.0 MHz`; negotiate the fallback radio profile
+  with a compact shared-channel bridge join.
+- Add 3-byte shared-channel LoRa fallback discovery packets:
+  - `BRIDGE_JOIN_REQUEST`: `packet_type`, `requested_profile_id`, `session_seq`
+  - `BRIDGE_JOIN_ACK`: `packet_type`, `accepted_profile_id`, `session_seq`
+    is diagnostic/optional; the bridge immediately listens on `902 MHz` after
+    sending the request.
 - While LoRa fallback is active, use compact `BRIDGE_LIVE_DELTA` frames every
   `250 ms`; keep full `BRIDGE_SNAPSHOT` frames for activation and periodic
   metadata refresh.
@@ -34,17 +39,20 @@ under that limit.
   - `espnow_stale_ms`
   - `lora_fallback_after_ms`
 - GC/MaGC behavior:
-  - Broadcast ESP-NOW bridge beacons until a bridge replies.
+  - Listen for bridge-originated ESP-NOW hello/probe packets in the background.
   - Store the bridge MAC after `BRIDGE_HELLO`.
   - Send unicast snapshots every `250 ms` while ESP-NOW is live.
   - Keep command ACK/retry/duplicate behavior from LoRa V2.
-  - Use LoRa fallback when ESP-NOW is stale or unavailable.
-  - Continue ESP-NOW beacon probes while LoRa fallback is active.
+  - Stop broadcasting unsolicited bridge beacons over ESP-NOW or LoRa.
+  - Use LoRa fallback only after a bridge-originated shared-channel join request.
   - Promote back to ESP-NOW immediately after a valid ESP-NOW hello/command.
 - Bridge receiver behavior:
-  - Listen to ESP-NOW and LoRa fallback.
-  - Prefer ESP-NOW snapshots when fresh.
   - Send periodic ESP-NOW broadcast hello probes while ESP-NOW snapshots are not fresh.
+  - Prefer ESP-NOW snapshots when fresh.
+  - If no MaGC downlink is heard for `6000 ms`, send a 3-byte bridge join on
+    the shared discovery channel.
+  - If no `902 MHz` LoRa downlink follows the join request within `6000 ms`,
+    retry with the next profile in the fallback ladder.
   - Suppress duplicate LoRa snapshot USB output while ESP-NOW snapshots are fresh.
   - Emit the same USB JSON shapes SGC already consumes.
 - SGC behavior:
@@ -56,9 +64,9 @@ under that limit.
 
 - [x] Add ESP-NOW bridge transport config and defaults.
 - [x] Add ESP-NOW frame size checks for current 250-byte payload limit.
-- [x] Add GC/MaGC ESP-NOW beacon/snapshot/command handling.
-- [x] Add bridge receiver ESP-NOW beacon/snapshot/command handling.
-- [x] Keep LoRa bridge fallback automatic.
+- [x] Add GC/MaGC ESP-NOW snapshot/command handling after bridge-originated hello.
+- [x] Add bridge receiver ESP-NOW hello-probe/snapshot/command handling.
+- [x] Keep LoRa bridge fallback automatic through bridge-originated shared join.
 - [x] Keep ESP-NOW probing active while LoRa fallback is carrying the bridge.
 - [x] Promote back to ESP-NOW automatically when ESP-NOW snapshots become fresh.
 - [x] Use compact LoRa live deltas during fallback so LoRa source mode keeps
@@ -68,9 +76,12 @@ under that limit.
 - [x] Preserve detailed bind-progress phases through ESP-NOW bridge snapshots.
 - [x] Update provisioning helper for ESP-NOW primary and LoRa fallback defaults.
 - [x] Keep MaGC ESP-NOW bridge service active in dual-GC shared-listen mode so
-  shared-channel LoRa priority cannot starve bridge beacons/snapshots.
+  shared-channel LoRa priority cannot starve bridge hello processing/snapshots.
 - [x] Use the runtime Wi-Fi STA channel for ESP-NOW peers and reinitialize
   ESP-NOW if the STA channel changes.
+- [x] Replace MaGC-originated ESP-NOW/LoRa bridge beacons with bridge-originated
+  ESP-NOW hello probes and 3-byte shared-channel LoRa join/ACK.
+- [x] Add bridge LoRa profile retry ladder for rooftop/indoor fallback links.
 - [ ] Bench-verify ESP-NOW bridge connects and updates at about 4 Hz.
 - [ ] Bench-verify mutating commands ACK over ESP-NOW.
 - [ ] Bench-verify LoRa fallback after ESP-NOW stale/loss and promotion back to ESP-NOW.

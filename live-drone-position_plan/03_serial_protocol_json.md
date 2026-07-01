@@ -611,7 +611,7 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Bridge receiver emits card-only drone entries when the GC reports an assignment but no GPS telemetry is known yet.
   - These entries include `nodeId`, `displayState`, `frequencyMhz`, `radioProfileId`, `txPeriodMs`, RSSI/SNR when known, and omit `lat`/`lng`.
 - [x] Bridge receiver emits USB `gc_status` with `bridgeMode:true`, `bridgeControl`, `bridgeStale`, `bridgeCommandQueueDepth`, `backhaulLastPacketAgeMs`, `backhaulRssi`, and `backhaulSnr`.
-- [x] Bridge receiver emits optional `bridgeHandshake` status such as `waiting_for_beacon`, `beacon_seen`, `live`, or `stale`.
+- [x] Bridge receiver emits optional `bridgeHandshake` status such as `waiting_for_bridge_downlink`, `waiting_for_lora_join_downlink`, `joined_waiting_downlink`, `downlink_seen`, `live`, or `stale`.
 - [x] Bridge receiver emits USB `command_ack` when a queued RF command is ACKed, rejected, or duplicate-ACKed by the GC/MaGC.
 - [x] Fresh Session clears both bridge receiver cache and MaGC/TeleGC bridge scene caches so accepted bridge `clear_all_assignments` ACKs are followed by empty `drones_state`, `assignments`, `channel_table` when available, and `gc_status` until drones freshly rejoin.
 - [x] After Fresh Session, MaGC ignores delayed non-empty Inter-GC bridge scene snapshots until TeleGC sends the first empty bridge scene snapshot, preventing one-frame stale card replay.
@@ -628,3 +628,4 @@ These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
 - [x] Add bridge status fields for ESP-NOW probing, snapshot age, fallback reason, and promotion/demotion counters.
 - [x] Keep `source:"lora_bridge"` as fallback-compatible serial scene input.
 - [x] Add bridge transport status fields for ESP-NOW primary and LoRa fallback.
+- [x] Add optional bridge-initiated discovery status fields for ESP-NOW hello probing, shared-channel LoRa join attempts, accepted bridge backhaul profile, and current fallback phase.

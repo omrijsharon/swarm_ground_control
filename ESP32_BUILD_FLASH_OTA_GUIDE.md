@@ -339,9 +339,10 @@ The provisioning script temporarily writes `simple-mesh\data\config.json`, uploa
 ### Provision Single GC
 
 GC bridge support is enabled by default. ESP-NOW is the primary bridge transport
-on Wi-Fi channel `1`; the existing UF LoRa bridge remains the fallback. The GC
-starts with lightweight bridge beacons and only sends full bridge snapshots
-after a bridge receiver says hello.
+on the runtime Wi-Fi channel; the LoRa bridge remains the fallback. Discovery is
+bridge-initiated: the bridge sends ESP-NOW hello probes first, and if no MaGC
+downlink is heard for `6 s`, it sends a 3-byte shared-channel LoRa bridge join
+request that selects the `902.0 MHz` backhaul profile.
 For bench isolation, add `-BackhaulDisabled`.
 
 ```powershell
@@ -462,9 +463,10 @@ This writes:
 }
 ```
 
-The bridge receiver listens for ESP-NOW bridge beacons first and also keeps the
-LoRa fallback receiver on `902.0 MHz / SF7 / BW500 / CR4/5`. It decodes
-`BRIDGE_SNAPSHOT` over either transport and emits `drones_state`,
+The bridge receiver sends ESP-NOW hello probes first. When ESP-NOW downlink is
+not fresh for `6 s`, it sends a compact shared-channel LoRa bridge join request
+and then listens on `902.0 MHz` with the accepted profile. It decodes
+`BRIDGE_SNAPSHOT` / `BRIDGE_LIVE_DELTA` over either transport and emits `drones_state`,
 `assignments`, compact `channel_table`, and `gc_status.bridgeMode = true` over
 USB.
 

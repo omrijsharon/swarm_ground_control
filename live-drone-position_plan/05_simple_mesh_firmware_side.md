@@ -93,10 +93,11 @@ automatic fallback.
   - [x] Add TeleGC-to-MaGC scene snapshot forwarding over Inter-GC UART.
   - [x] Add bridge receiver decode path and USB `drones_state` /
     `gc_status.bridgeMode` output.
-  - [x] Add `BRIDGE_BEACON` / `BRIDGE_HELLO` presence handshake so GC/MaGC only
-    sends full snapshots after a bridge is present.
-  - [x] Add bridge hello heartbeat and GC/MaGC session timeout fallback to beacon
-    mode.
+  - [x] Add bridge-initiated presence handshake so GC/MaGC only sends full
+    snapshots after a bridge is present.
+  - [x] Replace GC/MaGC beacon mode with bridge-originated ESP-NOW hello probes
+    and 3-byte shared-channel LoRa `BRIDGE_JOIN_REQUEST` / `BRIDGE_JOIN_ACK`.
+  - [x] Add bridge hello heartbeat after an active LoRa session exists.
   - [x] Keep full bridge snapshots on activation/metadata refresh and use
     compact live deltas every `250 ms` while LoRa fallback is active.
   - [x] Defer non-terminal LoRa bridge updates during the critical shared Bind
@@ -119,6 +120,9 @@ automatic fallback.
     assignments no longer suppress routine MaGC shared discovery, ESP-NOW
     bridge work may continue during shared RX, and LoRa bridge fallback may run
     only between complete shared discovery dwell windows.
+  - [x] Add dynamic LoRa bridge backhaul profile selection from the 3-byte
+    bridge join request, with the bridge retrying progressively more robust
+    profiles after `6000 ms` without `902 MHz` downlink.
   - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
   - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
   - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.
@@ -731,7 +735,8 @@ These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
 
 - [x] Add `live_position.bridge_transport` config and defaults.
 - [x] Add ESP-NOW bridge frame size checks for the current 250-byte payload limit.
-- [x] Add GC/MaGC ESP-NOW beacon, snapshot, command, ACK, and duplicate handling.
+- [x] Add bridge-originated ESP-NOW hello, GC/MaGC ESP-NOW snapshot, command,
+  ACK, and duplicate handling.
 - [x] Add bridge receiver ESP-NOW snapshot and command queue handling.
 - [x] Preserve LoRa bridge as automatic fallback.
 - [x] Keep ESP-NOW probe traffic active while LoRa fallback is live.

@@ -80,7 +80,9 @@ Do not keep SGC open on the same COM port while using this tool.
 
 GC `gc_status` should include:
 
-- `bridgeBeaconTxCount`
+- `bridgeJoinRequestRxCount`
+- `bridgeJoinAckTxCount`
+- `bridgeBackhaulProfileId`
 - `bridgeSnapshotTxCount`
 - `bridgeHelloRxCount`
 - `bridgeCommandRxCount`
@@ -90,7 +92,10 @@ GC `gc_status` should include:
 Bridge `gc_status` should include:
 
 - `bridgeHandshake`
-- `bridgeBeaconRxCount`
+- `bridgeJoinAttemptCount`
+- `bridgeJoinAckRxCount`
+- `bridgeJoinRequestedProfileId`
+- `bridgeJoinAcceptedProfileId`
 - `bridgeSnapshotRxCount`
 - `bridgeHelloTxCount`
 - `bridgeCommandTxCount`
@@ -100,12 +105,22 @@ Bridge `gc_status` should include:
 Expected healthy sequence:
 
 ```text
-GC:     BRIDGE beacon tx ok
-Bridge: BRIDGE hello tx ok
-GC:     BRIDGE session active source=hello
+Bridge: ESP-NOW hello probe tx
+GC:     BRIDGE session active source=espnow
 GC:     BRIDGE backhaul snapshot tx ok
 Bridge: bridgeHandshake:"live", bridgeControl:true
 Bridge: drones_state source:"lora_bridge"
+```
+
+If ESP-NOW does not produce a downlink for more than `6 s`, the expected LoRa
+fallback sequence is:
+
+```text
+Bridge: shared-channel bridge join tx profile=<id>
+GC:     bridgeJoinRequestRxCount increments
+GC:     bridgeJoinAckTxCount increments
+Bridge: bridgeJoinAckRxCount increments
+Bridge: bridgeHandshake:"joined_waiting_downlink" then "live"
 ```
 
 ## Current Bench Finding
@@ -119,8 +134,8 @@ The first dual-port capture after this tool was added showed:
 - `-2` is RadioLib `RADIOLIB_ERR_CHIP_NOT_FOUND`.
 - GC entered OTA-only mode with `meshReady:false`, `radioReady:false`, and
   `radioError:"mesh_init_failed"`.
-- Because the GC mesh/radio was not ready, it could not transmit bridge beacons
-  or snapshots, so the bridge correctly stayed in `waiting_for_beacon`.
+- Because the GC mesh/radio was not ready, it could not receive bridge join
+  requests or transmit snapshots, so the bridge correctly stayed in discovery.
 
 This failure is therefore below the bridge protocol layer. Check that `COM18` is
 the real GC LoRa board, then power-cycle or inspect the GC SX1262 wiring/module.
@@ -135,10 +150,14 @@ The terminal fallback should still answer `ping` and `get_status` in this state.
 2. Start dual-port capture for at least `60 s`.
 3. Confirm boot roles and bridge profile.
 4. Confirm handshake counters:
-   - GC `bridgeBeaconTxCount` increases while inactive.
-   - Bridge `bridgeBeaconRxCount` increases after hearing GC.
-   - Bridge `bridgeHelloTxCount` increases after beacons/snapshots.
-   - GC `bridgeHelloRxCount` increases after bridge hello.
+   - Bridge `bridgeHelloTxCount` increases while probing ESP-NOW.
+   - GC `bridgeHelloRxCount` increases after bridge ESP-NOW hello.
+   - If ESP-NOW is stale, Bridge `bridgeJoinAttemptCount` increases.
+   - If MaGC hears shared-channel fallback, GC `bridgeJoinRequestRxCount` and
+     `bridgeJoinAckTxCount` increase.
+   - Bridge `bridgeJoinAttemptCount` increases after no downlink for about
+     `6 s`, and the requested profile rotates through the fallback ladder if no
+     downlink follows.
    - GC `bridgeSnapshotTxCount` increases after session activation.
    - Bridge `bridgeSnapshotRxCount` increases after snapshots.
 5. Confirm drone path:
@@ -147,11 +166,13 @@ The terminal fallback should still answer `ping` and `get_status` in this state.
    - If no assignment exists, run `gc bind` first.
    - Then run `bridge bind` and verify RF command ACK behavior.
 6. Reproduce historical failure modes:
-   - zero assignments/passive Bind still produces bridge beacons.
-   - shared Bind/Search still produces bridge beacons or snapshots.
+   - zero assignments/passive Bind still accepts bridge-originated discovery.
+   - shared Bind/Search still allows ESP-NOW snapshots or delayed LoRa snapshots
+     between complete shared-RX windows.
    - healthy 10 Hz assigned drone still allows about 1 Hz bridge snapshots.
-   - bridge powered after GC becomes live within about `1-2 s`.
-   - bridge powered off makes GC fall back to beacon mode after about `6 s`.
+   - bridge powered after GC becomes live through ESP-NOW when available.
+   - bridge with no ESP-NOW downlink starts shared-channel LoRa join after about
+     `6 s`.
 
 ## Checklist
 

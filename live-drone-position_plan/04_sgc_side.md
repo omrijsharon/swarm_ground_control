@@ -398,7 +398,7 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 - [x] Preserve local drone aliases for bridge-fed `nodeId` rows.
 - [x] Enable GC-mutating controls in bridge mode only when `gc_status.bridgeControl === true` and the backhaul packet age is under `3 s`.
 - [x] Show a persistent `Bridge RF` status-grid row in bridge mode with live/stale state, packet age, RSSI/SNR, and command queue depth.
-- [x] Show bridge handshake states so the operator can distinguish waiting for GC beacon, beacon-only RF contact, and live bridge control.
+- [x] Show bridge handshake states so the operator can distinguish waiting for bridge downlink, waiting for LoRa join ACK, joined-but-waiting, and live bridge control.
 - [x] Route normal SGC command JSON to the bridge receiver when bridge control is fresh; the bridge firmware queues RF uplink commands.
 - [x] Keep bridge controls disabled when the RF downlink is stale or the browser is a remote endpoint viewer.
 - [x] Consume bridge-emitted `command_ack` through the existing pending-command UI path.
@@ -411,7 +411,7 @@ These tasks mirror `12_lora_bridge_bidirectional_v2.md`.
 These tasks mirror `14_espnow_bridge_primary_lora_fallback.md`.
 
 - [x] Show active bridge transport as ESP-NOW, LoRa, or generic bridge.
-- [x] Show secondary bridge transport state such as `ESP-NOW probing`, `ESP-NOW beacon`, or `LoRa standby`.
+- [x] Show secondary bridge transport state such as `ESP-NOW probing`, shared-channel LoRa join, or `LoRa standby`.
 - [x] Keep bridge controls governed by `bridgeControl` and fresh packet age.
 - [x] Parse ESP-NOW bridge snapshots without changing drone card/map behavior.
 - [x] Use bridge-fed `bindPhase`, `phaseElapsedMs`, `phaseExpectedMs`, and timing lock fields to animate bridge Bind progress like direct GC USB.

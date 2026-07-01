@@ -25,17 +25,26 @@ connected to the GC, only at a lower update rate.
 
 ## RF Scheduling And Reliability
 
-- Keep the bridge channel at `902.0 MHz / SF7 / BW500 / CR4/5`.
-- GC/MaGC supports bridge backhaul by default, but only sends full snapshots
-  after a bridge presence handshake.
-- When no bridge session is active, GC/MaGC sends a small `BRIDGE_BEACON`
-  (`0xB0`) about every `1000 ms`, then opens the normal scheduled uplink slot.
-- The bridge receiver listens continuously and replies with `BRIDGE_HELLO`
-  (`0xC0`) in that slot. The next full snapshot is the hello ACK.
-- While active, the bridge sends a queued command if one exists; otherwise it
-  sends a `BRIDGE_HELLO` heartbeat at least every `2000 ms`.
-- If GC/MaGC receives no bridge hello/command for `6000 ms`, it stops full
-  snapshots and returns to beacon mode.
+- Keep the bridge downlink channel at `902.0 MHz`; the bridge-selected profile
+  starts at `SF7 / BW500 / CR4/5` and can fall back through a known profile
+  ladder if no MaGC downlink is heard.
+- GC/MaGC supports bridge backhaul by default, but only sends LoRa full
+  snapshots after a bridge-initiated presence handshake.
+- MaGC no longer transmits unsolicited LoRa bridge presence packets. When the
+  bridge has no fresh ESP-NOW or LoRa downlink for `6000 ms`, it sends a compact
+  3-byte shared-channel bridge join request containing packet type, requested
+  profile ID, and session sequence.
+- MaGC listens for that bridge join on the normal shared discovery channel,
+  switches the bridge backhaul profile to the accepted profile, and then sends
+  snapshots/deltas on `902 MHz`. A compact 3-byte bridge join ACK may be sent
+  for diagnostics, but the bridge immediately listens on `902 MHz` after each
+  join request and retries with the next profile only after `6000 ms` without
+  downlink.
+- While active, the bridge sends a queued command if one exists in the scheduled
+  uplink slot after a valid downlink; otherwise it stays silent.
+- If GC/MaGC receives no bridge command/uplink contact and the bridge stops
+  hearing downlink, the bridge restarts discovery by ESP-NOW hello first and
+  then shared-channel LoRa bridge join after the stale timeout.
 - When ESP-NOW is not fresh and a LoRa bridge session is active, GC/MaGC sends
   compact `BRIDGE_LIVE_DELTA` frames every `250 ms`.
 - GC/MaGC still sends a full `BRIDGE_SNAPSHOT` on session activation and then
@@ -228,30 +237,30 @@ Queue defaults:
 
 - [x] Add V2 bridge packet constants, command enum, ACK enum, static size checks,
   and airtime diagnostics.
-- [x] Add bridge presence handshake packets: `BRIDGE_BEACON 0xB0` and
-  `BRIDGE_HELLO 0xC0`.
-- [x] Gate full GC/MaGC snapshots behind an active bridge session; use beacon
-  mode while inactive and return to beacon mode after session timeout.
-- [x] Service due bridge beacons/snapshots from a safe post-telemetry RX slot so
-  a healthy fast assigned drone does not starve the bridge handshake.
-- [x] Service due bridge beacons/snapshots between complete shared Bind/search
+- [x] Add bridge presence handshake packets and later replace unsolicited
+  MaGC-originated presence with bridge-originated ESP-NOW hello and compact
+  shared-channel LoRa bridge join packets.
+- [x] Gate full GC/MaGC snapshots behind an active bridge session; while
+  inactive, wait for bridge-originated ESP-NOW hello or LoRa bridge join.
+- [x] Service due bridge snapshots from a safe post-telemetry RX slot so a
+  healthy fast assigned drone does not starve the bridge backhaul.
+- [x] Service due bridge snapshots between complete shared Bind/search
   listen windows so a zero-assignment or all-lost GC still stays visible to the
   bridge without fragmenting SF12 discovery RX.
   - SF12/BW125 discovery JOIN requests take about `925.7 ms` for legacy JOIN
     and about `1187.8 ms` for extended JOIN; bridge LoRa maintenance must not
     retune away from shared inside that receive window.
   - Zero-assignment passive Bind / MaGC shared listening now uses the longer
-    discovery dwell instead of the old short shared dwell, so bridge beacons do
-    not phase-lock against long JOIN requests.
+    discovery dwell instead of the old short shared dwell, so bridge backhaul
+    work does not phase-lock against long JOIN requests.
 - [x] Give critical shared discovery priority over LoRa bridge fallback during
   the initial no-assignment strong shared-RX window, operator Bind/Search, auto
   shared-RX recovery, and all-lost shared recovery. ESP-NOW bridge updates
-  continue because they do not retune the SX1262; LoRa bridge beacons/deltas are
-  allowed again during idle shared listening so the bridge cannot starve forever.
+  continue because they do not retune the SX1262; LoRa bridge deltas are allowed
+  again during idle shared listening only after a bridge session exists.
 - [x] Fix dual-GC bridge backhaul starvation: MaGC now services ESP-NOW bridge
-  beacons/snapshots before shared-discovery LoRa guards, and LoRa fallback uses
-  only critical-window suppression rather than a permanent MaGC shared-listen
-  block.
+  snapshots before shared-discovery LoRa guards, and LoRa fallback uses only
+  critical-window suppression rather than a permanent MaGC shared-listen block.
 - [x] Fix MaGC shared-RX window starvation: `discoverySearchSharedDwellMs()`
   includes extended JOIN airtime, MaGC-owned discovery keeps unbroken shared RX
   dwell deadlines, and LoRa bridge fallback is allowed only after the current
@@ -259,10 +268,11 @@ Queue defaults:
 - [x] Fix active-assignment JOIN starvation: MaGC auto/operator recovery now uses
   a continuous `1200 ms` shared JOIN dwell, while `MAGC_SAFE_SHARED_RX_CHUNK_MS`
   stays at `75 ms` for short non-JOIN opportunistic borrowing.
-- [x] Avoid sending LoRa bridge beacons from bind-progress callbacks before a
+- [x] Avoid sending LoRa bridge updates from bind-progress callbacks before a
   bridge LoRa session exists; pre-session bind progress should use ESP-NOW or
   wait until the shared bind sequence is complete.
-- [x] Add bridge receiver hello-on-beacon and hello-heartbeat behavior.
+- [x] Add bridge receiver ESP-NOW hello probing and shared-channel LoRa bridge
+  join fallback behavior.
 - [x] Make GC/MaGC provisioning enable backhaul by default while keeping an
   explicit disable override for bench use.
 - [x] Add command duplicate cache and retry-safe ACK state.
