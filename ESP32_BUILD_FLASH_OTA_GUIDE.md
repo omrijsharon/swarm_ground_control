@@ -465,7 +465,8 @@ This writes:
 
 The bridge receiver sends ESP-NOW hello probes first. When ESP-NOW downlink is
 not fresh for `6 s`, it sends a compact shared-channel LoRa bridge join request
-and then listens on `902.0 MHz` with the accepted profile. It decodes
+and then listens on `902.0 MHz` for MaGC's join ACK and later snapshots with the
+accepted profile. It decodes
 `BRIDGE_SNAPSHOT` / `BRIDGE_LIVE_DELTA` over either transport and emits `drones_state`,
 `assignments`, compact `channel_table`, and `gc_status.bridgeMode = true` over
 USB.

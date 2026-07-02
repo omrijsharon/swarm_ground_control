@@ -118,10 +118,19 @@ fallback sequence is:
 ```text
 Bridge: shared-channel bridge join tx profile=<id>
 GC:     bridgeJoinRequestRxCount increments
-GC:     bridgeJoinAckTxCount increments
+GC:     bridgeJoinAckTxCount increments on 902 MHz with accepted profile
 Bridge: bridgeJoinAckRxCount increments
 Bridge: bridgeHandshake:"joined_waiting_downlink" then "live"
 ```
+
+Force a specific LoRa fallback profile from the bridge USB side with:
+
+```powershell
+python tools\gc_bridge_serial_debug.py --bridge COM4 --send bridge:join-profile:46 --duration 20 --log logs_summary\bridge_join_profile_46.jsonl
+```
+
+This sends bridge-local `debug_bridge_join_profile`; it must not change MaGC's
+default drone assignment radio profile.
 
 ## Current Bench Finding
 
@@ -155,6 +164,8 @@ The terminal fallback should still answer `ping` and `get_status` in this state.
    - If ESP-NOW is stale, Bridge `bridgeJoinAttemptCount` increases.
    - If MaGC hears shared-channel fallback, GC `bridgeJoinRequestRxCount` and
      `bridgeJoinAckTxCount` increase.
+   - Bridge `bridgeJoinAckRxCount` increases after MaGC ACKs on the selected
+     `902 MHz` backhaul profile.
    - Bridge `bridgeJoinAttemptCount` increases after no downlink for about
      `6 s`, and the requested profile rotates through the fallback ladder if no
      downlink follows.

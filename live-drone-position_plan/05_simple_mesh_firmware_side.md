@@ -123,6 +123,12 @@ automatic fallback.
   - [x] Add dynamic LoRa bridge backhaul profile selection from the 3-byte
     bridge join request, with the bridge retrying progressively more robust
     profiles after `6000 ms` without `902 MHz` downlink.
+  - [x] Make bridge/MaGC LoRa JOIN ACK consistent with the backhaul handshake:
+    MaGC sends the ACK on `902 MHz` using the accepted profile, and the bridge
+    counts `bridgeJoinAckRxCount` before normal live downlink.
+  - [x] Expire stale bridge `locking` records to `offline` and clear bind
+    progress before bridge JSON output, so old snapshots cannot freeze SGC in
+    Bind progress.
   - [ ] Bench-verify classic GC backhaul TX to bridge receiver.
   - [ ] Bench-verify MaGC backhaul TX from TeleGC-forwarded scene records.
   - [ ] Bench-verify bridge receiver JSON drives SGC and Cloudflare publisher.

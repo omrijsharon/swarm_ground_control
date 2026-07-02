@@ -206,6 +206,11 @@ let nextDistanceMeasurementId = 1;
 let distanceMeasurementMenuEl = null;
 let distanceMeasurementHelperEl = null;
 let distanceMeasurementHitRegions = [];
+let liveObjectAssignments = new Map(); // source droneId -> { id, source, target, createdAt }
+let nextLiveObjectAssignmentId = 1;
+let liveObjectAssignmentHitRegions = [];
+let liveObjectAssignmentMenuEl = null;
+let liveObjectAssignmentHelperEl = null;
 let statusMemberMenuEl = null;
 let pendingStatusMember = null;
 let followMenuEl = null;
@@ -244,6 +249,7 @@ const liveState = {
   spectrumRescanPending: false,
   spectrumRescanConfirming: false,
   spectrumStatus: "",
+  bridgePanelOpen: false,
   lastScanCompletedAt: null,
   channelTableReceivedAt: null,
   lastCommandAck: null,
@@ -268,6 +274,7 @@ const liveState = {
   bindingAnimationTimer: null,
   relockRequests: new Map(),
   deleteRequests: new Map(),
+  pendingObjectAssignment: null,
   assignmentTelemetryWatchdogs: new Map(),
   droneAliases: loadLiveDroneAliases(),
   droneActionSheet: null,
@@ -1282,6 +1289,7 @@ function renderGroundStationMenu() {
       const currentName = (gs.name || `Home #${gs.id + 1}`).trim();
       if (!window.confirm(`Delete ${currentName}? This only removes the local HOME marker.`)) return;
       groundStations = groundStations.filter((g) => Number(g.id) !== Number(gs.id));
+      removeLiveObjectAssignmentsForHome(gs.id, { silent: true });
       if (Number(userGroundStationId) === Number(gs.id)) {
         userGroundStationId = groundStations.length ? groundStations[0].id : null;
       }
@@ -4523,7 +4531,7 @@ function formatLiveRelayDebugSummary() {
 }
 
 function formatLiveBridgeRfSummary(status = liveState.gcStatus || {}) {
-  if (!status?.bridgeMode) return "N/A";
+  if (!status?.bridgeMode) return isLiveBridgeMode() ? "Waiting for status" : "N/A";
   const handshake = String(status.bridgeHandshake || "");
   const ageMs = Number(status.backhaulLastPacketAgeMs);
   const transport = getLiveBridgeTransportLabel(status);
@@ -4532,25 +4540,11 @@ function formatLiveBridgeRfSummary(status = liveState.gcStatus || {}) {
     return "No GC RF";
   }
   const live = status.bridgeControl === true && status.bridgeStale !== true && ageMs <= 3000;
-  const rssi = Number(status.backhaulRssi);
-  const snr = Number(status.backhaulSnr);
-  const queueDepth = Number(status.bridgeCommandQueueDepth);
   const secondary = getLiveBridgeSecondaryStatus(status);
-  const parts = [
-    live ? `${transport} live` : (handshake === "beacon_seen" ? `${transport} beacon` : `${transport} stale`),
-    secondary,
-    `age ${formatRelayDebugMs(ageMs)}`,
-  ];
-  if (Number.isFinite(rssi) && rssi > -127) {
-    parts.push(`${rssi.toFixed(0)} dBm`);
-  }
-  if (Number.isFinite(snr)) {
-    parts.push(`${snr.toFixed(1)} dB`);
-  }
-  if (Number.isFinite(queueDepth) && queueDepth > 0) {
-    parts.push(`q${queueDepth}`);
-  }
-  return parts.join(" | ");
+  if (live) return `${transport} live`;
+  if (handshake === "beacon_seen") return `${transport} beacon`;
+  if (status.bridgeJoinWaitingAck === true || status.bridgeJoinWaitingDownlink === true) return `${transport} joining`;
+  return secondary || `${transport} stale`;
 }
 
 function formatLiveBridgeRfDetails(status = liveState.gcStatus || {}) {
@@ -4585,6 +4579,159 @@ function formatLiveBridgeRfDetails(status = liveState.gcStatus || {}) {
     Number.isFinite(queueDepth) ? `Command queue: ${queueDepth}.` : "",
     `Last ACK: ${ackStatus}${ackReason}.`,
   ].filter(Boolean).join(" ");
+}
+
+function formatLiveBridgeAge(value) {
+  const ms = Number(value);
+  if (!Number.isFinite(ms) || ms < 0 || ms >= 0xFFFFFFFF) return "N/A";
+  return formatRelayDebugMs(ms);
+}
+
+function formatLiveBridgeOptionalNumber(value, suffix = "", digits = 0, { invalidBelow = null } = {}) {
+  if (value === "" || value === null || value === undefined) return "N/A";
+  const number = Number(value);
+  if (!Number.isFinite(number) || (invalidBelow !== null && number <= invalidBelow)) return "N/A";
+  return `${number.toFixed(digits)}${suffix}`;
+}
+
+function formatLiveBridgeBool(value, trueText = "yes", falseText = "no") {
+  if (value === true) return trueText;
+  if (value === false) return falseText;
+  return "N/A";
+}
+
+function formatLiveBridgeProfileSummary(status = liveState.gcStatus || {}) {
+  const profileId = Number(
+    status.backhaulProfileId ??
+    status.bridgeBackhaulProfileId ??
+    status.radioProfileId ??
+    status.bridgeJoinAcceptedProfileId
+  );
+  const profileText = status.backhaulProfile
+    ? String(status.backhaulProfile)
+    : (Number.isFinite(Number(status.spreadingFactor)) &&
+       Number.isFinite(Number(status.bandwidthHz)) &&
+       Number.isFinite(Number(status.codingRate)))
+      ? formatLiveRadioProfile({
+          spreadingFactor: Number(status.spreadingFactor),
+          bandwidthHz: Number(status.bandwidthHz),
+          codingRate: Number(status.codingRate),
+        })
+      : "";
+  if (profileText && Number.isFinite(profileId)) return `P${profileId} ${profileText}`;
+  if (profileText) return profileText;
+  return Number.isFinite(profileId) ? `Profile ${profileId}` : "N/A";
+}
+
+function makeLiveBridgeDetailRow(label, value, title = "") {
+  const row = document.createElement("div");
+  row.className = "live-bridge-row";
+  if (title) row.title = title;
+  const keyEl = document.createElement("div");
+  keyEl.className = "live-bridge-key";
+  keyEl.textContent = label;
+  const valueEl = document.createElement("div");
+  valueEl.className = "live-bridge-value";
+  valueEl.textContent = value === undefined || value === null || value === "" ? "N/A" : String(value);
+  row.appendChild(keyEl);
+  row.appendChild(valueEl);
+  return row;
+}
+
+function appendLiveBridgeDetailSection(panel, title, rows) {
+  const visibleRows = rows.filter((row) => row && row[1] !== undefined && row[1] !== null && row[1] !== "");
+  if (!visibleRows.length) return;
+  const titleEl = document.createElement("div");
+  titleEl.className = "live-bridge-section-title";
+  titleEl.textContent = title;
+  panel.appendChild(titleEl);
+  const grid = document.createElement("div");
+  grid.className = "live-bridge-grid";
+  visibleRows.forEach(([label, value, rowTitle]) => {
+    grid.appendChild(makeLiveBridgeDetailRow(label, value, rowTitle));
+  });
+  panel.appendChild(grid);
+}
+
+function renderLiveBridgePanel(host, status = liveState.gcStatus || {}) {
+  if (!liveState.bridgePanelOpen || !isLiveBridgeMode()) return;
+  const panel = document.createElement("div");
+  panel.className = "live-bridge-panel";
+
+  const header = document.createElement("div");
+  header.className = "live-bridge-header";
+  const title = document.createElement("div");
+  title.textContent = "Bridge Link";
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "live-profile-close";
+  closeBtn.type = "button";
+  closeBtn.setAttribute("aria-label", "Close bridge details");
+  closeBtn.title = "Close";
+  closeBtn.addEventListener("click", closeLiveBridgePanel);
+  header.appendChild(title);
+  header.appendChild(closeBtn);
+  panel.appendChild(header);
+
+  const note = document.createElement("div");
+  note.className = "live-bridge-note";
+  note.textContent = formatLiveBridgeRfDetails(status) || "No bridge RF details have been received yet.";
+  panel.appendChild(note);
+
+  const transport = getLiveBridgeTransportLabel(status);
+  const fallbackReason = status.bridgeFallbackReason ? String(status.bridgeFallbackReason).replace(/_/g, " ") : "N/A";
+  appendLiveBridgeDetailSection(panel, "Connection", [
+    ["Transport", transport],
+    ["Control", formatLiveBridgeBool(status.bridgeControl, "ready", "not ready")],
+    ["Stale", formatLiveBridgeBool(status.bridgeStale)],
+    ["Handshake", status.bridgeHandshake || "N/A"],
+    ["Fallback", fallbackReason],
+    ["Downlink age", formatLiveBridgeAge(status.backhaulLastPacketAgeMs)],
+    ["Command queue", formatLiveBridgeOptionalNumber(status.bridgeCommandQueueDepth)],
+    ["Last ACK", `${status.bridgeLastAckStatus || "none"}${status.bridgeLastAckReason ? ` (${status.bridgeLastAckReason})` : ""}`],
+  ]);
+
+  appendLiveBridgeDetailSection(panel, "LoRa Backhaul", [
+    ["Frequency", formatLiveBridgeOptionalNumber(status.backhaulFrequencyMhz, " MHz", 3)],
+    ["Profile", formatLiveBridgeProfileSummary(status)],
+    ["TX power", formatLiveBridgeOptionalNumber(status.txPowerDbm, " dBm")],
+    ["RSSI", formatLiveBridgeOptionalNumber(status.backhaulRssi, " dBm", 0, { invalidBelow: -127 })],
+    ["SNR", formatLiveBridgeOptionalNumber(status.backhaulSnr, " dB", 1)],
+    ["LoRa age", formatLiveBridgeAge(status.loraLastPacketAgeMs)],
+    ["Delta airtime", formatLiveBridgeOptionalNumber(status.telemetryAirtimeMs, " ms", 1)],
+    ["Snapshot airtime", formatLiveBridgeOptionalNumber(status.bridgeFullSnapshotAirtimeMs, " ms", 1)],
+    ["Delta period", formatLiveBridgeOptionalNumber(status.txPeriodMs, " ms")],
+    ["Last RF event", status.bridgeLastRfEvent || "N/A"],
+  ]);
+
+  appendLiveBridgeDetailSection(panel, "LoRa JOIN", [
+    ["Waiting ACK", formatLiveBridgeBool(status.bridgeJoinWaitingAck)],
+    ["Attempts", formatLiveBridgeOptionalNumber(status.bridgeJoinAttemptCount)],
+    ["ACK RX", formatLiveBridgeOptionalNumber(status.bridgeJoinAckRxCount)],
+    ["Session", formatLiveBridgeOptionalNumber(status.bridgeJoinSessionSeq)],
+    ["Requested profile", formatLiveBridgeOptionalNumber(status.bridgeJoinRequestedProfileId)],
+    ["Accepted profile", formatLiveBridgeOptionalNumber(status.bridgeJoinAcceptedProfileId)],
+    ["Profile index", formatLiveBridgeOptionalNumber(status.bridgeJoinProfileIndex)],
+    ["Last TX age", formatLiveBridgeAge(status.bridgeJoinLastTxAgeMs)],
+    ["Last ACK age", formatLiveBridgeAge(status.bridgeJoinLastAckAgeMs)],
+    ["Beacons RX", formatLiveBridgeOptionalNumber(status.bridgeBeaconRxCount)],
+    ["Snapshots RX", formatLiveBridgeOptionalNumber(status.bridgeSnapshotRxCount)],
+    ["Deltas RX", formatLiveBridgeOptionalNumber(status.bridgeLiveDeltaRxCount)],
+  ]);
+
+  appendLiveBridgeDetailSection(panel, "ESP-NOW", [
+    ["Live", formatLiveBridgeBool(status.espnowBridgeLive)],
+    ["Probing", formatLiveBridgeBool(status.espnowProbing)],
+    ["Channel", formatLiveBridgeOptionalNumber(status.espnowChannel)],
+    ["Packet age", formatLiveBridgeAge(status.espnowLastPacketAgeMs)],
+    ["Snapshot age", formatLiveBridgeAge(status.espnowLastSnapshotAgeMs)],
+    ["Hello TX", formatLiveBridgeOptionalNumber(status.espnowHelloTxCount)],
+    ["Probe TX", formatLiveBridgeOptionalNumber(status.espnowProbeTxCount)],
+    ["Snapshot RX", formatLiveBridgeOptionalNumber(status.espnowSnapshotRxCount)],
+    ["Promotions", formatLiveBridgeOptionalNumber(status.bridgePromotionCount)],
+    ["Demotions", formatLiveBridgeOptionalNumber(status.bridgeDemotionCount)],
+  ]);
+
+  host.appendChild(panel);
 }
 
 function formatLiveRelayDebugDetails() {
@@ -6001,6 +6148,7 @@ function toggleLiveProfilePicker() {
     ensureLiveProfileDraft();
     liveState.spectrumPanelOpen = false;
     liveState.spectrumRescanConfirming = false;
+    liveState.bridgePanelOpen = false;
   }
   liveState.profilePickerOpen = !liveState.profilePickerOpen;
   renderLiveGcStatus();
@@ -6015,6 +6163,7 @@ function openLiveSpectrumPanel() {
   liveState.spectrumPanelOpen = true;
   liveState.spectrumRescanConfirming = false;
   liveState.profilePickerOpen = false;
+  liveState.bridgePanelOpen = false;
   renderLiveGcStatus();
 }
 
@@ -6024,6 +6173,22 @@ function closeLiveSpectrumPanel() {
   if (!liveState.scanAnimationVisible && !liveState.scanInProgress) {
     liveState.scanRows.clear();
   }
+  renderLiveGcStatus();
+}
+
+function toggleLiveBridgePanel() {
+  if (!isLiveBridgeMode()) return;
+  if (!liveState.bridgePanelOpen) {
+    liveState.profilePickerOpen = false;
+    liveState.spectrumPanelOpen = false;
+    liveState.spectrumRescanConfirming = false;
+  }
+  liveState.bridgePanelOpen = !liveState.bridgePanelOpen;
+  renderLiveGcStatus();
+}
+
+function closeLiveBridgePanel() {
+  liveState.bridgePanelOpen = false;
   renderLiveGcStatus();
 }
 
@@ -6445,6 +6610,9 @@ function renderLiveGcStatus() {
   const sourceValue = isLiveRemoteViewerMode()
     ? formatLiveRemotePublisherSource()
     : formatLiveLocalSourceValue(status);
+  if (!isLiveBridgeMode()) {
+    liveState.bridgePanelOpen = false;
+  }
   const items = [
     { label: "Source", value: sourceValue },
     ...(usbRoleWarning ? [{ label: "Warning", value: usbRoleWarning, severity: "warning" }] : []),
@@ -6456,7 +6624,7 @@ function renderLiveGcStatus() {
           title: formatLiveRemotePublisherBridgeDetails(),
         }]
       : []),
-    ...(isLiveBridgeMode() ? [{ label: "Bridge", value: formatLiveBridgeRfSummary(status), title: formatLiveBridgeRfDetails(status) }] : []),
+    ...(isLiveBridgeMode() ? [{ label: "Bridge", value: formatLiveBridgeRfSummary(status), title: formatLiveBridgeRfDetails(status), action: "bridge" }] : []),
     { label: "Profile", value: liveState.gcStatus ? formatLiveRadioProfile(liveProfileFromGcStatus()) : "N/A", action: "profile" },
     { label: "Discovery", value: status.discoverySpreadingFactor ? formatLiveRadioProfile(liveDiscoveryProfileFromGcStatus()) : "N/A" },
     { label: "Assigned", value: Number.isFinite(assignedDebug.count) ? String(assignedDebug.count) : "N/A" },
@@ -6493,24 +6661,32 @@ function renderLiveGcStatus() {
     item.className = "live-gc-item";
     if (severity === "warning") item.classList.add("live-gc-item-warning");
     if (title) item.title = title;
-    if (action === "profile" || action === "channels") {
+    if (action === "profile" || action === "channels" || action === "bridge") {
       item.classList.add("live-gc-item-action");
       item.setAttribute("role", "button");
       item.tabIndex = 0;
       item.setAttribute("aria-expanded", action === "profile"
         ? liveState.profilePickerOpen ? "true" : "false"
-        : liveState.spectrumPanelOpen ? "true" : "false");
+        : action === "channels"
+          ? liveState.spectrumPanelOpen ? "true" : "false"
+          : liveState.bridgePanelOpen ? "true" : "false");
       item.title = action === "profile"
         ? "Choose the default profile for future drone assignments"
-        : "Open the latest spectrum scan";
-      item.addEventListener("click", action === "profile" ? toggleLiveProfilePicker : openLiveSpectrumPanel);
+        : action === "channels"
+          ? "Open the latest spectrum scan"
+          : "Open bridge RF details";
+      item.addEventListener("click", action === "profile"
+        ? toggleLiveProfilePicker
+        : action === "channels" ? openLiveSpectrumPanel : toggleLiveBridgePanel);
       item.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           if (action === "profile") {
             toggleLiveProfilePicker();
-          } else {
+          } else if (action === "channels") {
             openLiveSpectrumPanel();
+          } else {
+            toggleLiveBridgePanel();
           }
         }
       });
@@ -6538,6 +6714,7 @@ function renderLiveGcStatus() {
   });
   host.appendChild(grid);
 
+  renderLiveBridgePanel(host, status);
   renderLiveProfilePicker(host);
 
   if (liveState.spectrumPanelOpen) {
@@ -7565,16 +7742,22 @@ function applyLiveDronesState(message, source = "live-endpoint") {
     const lat = Number(entry?.lat);
     const lng = Number(entry?.lng);
     if (!Number.isFinite(nodeId)) return;
-    const displayState = normalizeLiveDisplayState(entry.displayState);
+    const rawDisplayState = normalizeLiveDisplayState(entry.displayState);
     const bindPhaseName = String(entry.bindPhase || "").trim().toLowerCase();
     const hasPosition = Number.isFinite(lat) && Number.isFinite(lng);
     const ageMs = Number(entry.ageMs);
+    const staleBridgeBindingSnapshot =
+      isBridgeSerialScene &&
+      rawDisplayState === "binding" &&
+      (!Number.isFinite(ageMs) || ageMs >= LIVE_FRESHNESS_MS.offline || ageMs >= 0xFFFF);
+    const displayState = staleBridgeBindingSnapshot ? "offline" : rawDisplayState;
     const hasSequence = entry.sequenceId !== undefined && entry.sequenceId !== null;
     const freshBridgeTelemetrySnapshot =
       isBridgeSerialScene &&
       hasPosition &&
       hasSequence &&
-      displayState === "binding" &&
+      rawDisplayState === "binding" &&
+      !staleBridgeBindingSnapshot &&
       !entry.bindPhase &&
       Number.isFinite(ageMs) &&
       ageMs < LIVE_FRESHNESS_MS.fresh;
@@ -7583,7 +7766,10 @@ function applyLiveDronesState(message, source = "live-endpoint") {
       entry.timingAccepted === true ||
       freshBridgeTelemetrySnapshot ||
       (hasPosition && ["online", "fresh"].includes(displayState));
-    const isBindingSnapshot = !isBindCompleteSnapshot && (isLiveBindingStateName(displayState) || entry.bindPhase);
+    const isBindingSnapshot =
+      !staleBridgeBindingSnapshot &&
+      !isBindCompleteSnapshot &&
+      (isLiveBindingStateName(displayState) || entry.bindPhase);
     const isBridgeCardSnapshot =
       isBridgeSerialScene &&
       !hasPosition &&
@@ -7703,8 +7889,9 @@ function applyLiveDronesState(message, source = "live-endpoint") {
   });
   if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
+  const prunedObjectAssignments = pruneLiveObjectAssignments({ redraw: false });
   syncLiveDroneFollowState();
-  if (before !== drones.length || entries.length) {
+  if (before !== drones.length || entries.length || prunedObjectAssignments) {
     updateStatusList();
     updateTooltip();
     draw();
@@ -7745,6 +7932,7 @@ function applyLiveHomesState(message, source = "live-endpoint") {
   if (activeGroundStationId !== null && !groundStations.some((home) => Number(home.id) === Number(activeGroundStationId))) {
     activeGroundStationId = null;
   }
+  pruneLiveObjectAssignments({ redraw: false });
   renderLiveHomeTool();
   updateStatusList();
   draw();
@@ -7853,7 +8041,11 @@ function applyLiveTelemetry(message, source = "serial") {
 
 function clearLiveSerialDrones({ clearAssignments = false } = {}) {
   const before = drones.length;
+  const hadObjectAssignments = liveObjectAssignments.size > 0;
   drones = drones.filter((drone) => drone.type !== "live");
+  liveObjectAssignments.clear();
+  closeLiveObjectAssignmentMenu();
+  if (liveState.pendingObjectAssignment) cancelLiveObjectAssignmentTargetPick("cancelled");
   if (pinnedDroneId !== null && !getDroneById(pinnedDroneId)) pinnedDroneId = null;
   if (hoveredDroneId !== null && !getDroneById(hoveredDroneId)) hoveredDroneId = null;
   syncLiveDroneFollowState();
@@ -7873,7 +8065,7 @@ function clearLiveSerialDrones({ clearAssignments = false } = {}) {
       };
     }
   }
-  if (drones.length !== before) {
+  if (drones.length !== before || hadObjectAssignments) {
     updateStatusList();
     draw();
   }
@@ -7884,6 +8076,7 @@ function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
   if (!Number.isFinite(id)) return;
   const before = drones.length;
   drones = drones.filter((drone) => Number(drone.id) !== id);
+  const removedObjectAssignment = removeLiveObjectAssignmentsForDrone(id, { silent: true });
   liveState.relockRequests.delete(id);
   liveState.linkStatuses.delete(id);
   liveState.bindingStates.delete(id);
@@ -7900,7 +8093,7 @@ function removeLiveDroneLocally(nodeId, { clearAssignment = false } = {}) {
     stopLiveDroneFollow();
   }
   if (hoveredDroneId === id) hoveredDroneId = null;
-  if (before !== drones.length) {
+  if (before !== drones.length || removedObjectAssignment) {
     updateStatusList();
     renderLiveGcStatus();
     draw();
@@ -8968,6 +9161,9 @@ function stopLivePositionMock({ clearDrones = false, clearStatus = false } = {})
   }
   if (clearDrones) {
     drones = [];
+    liveObjectAssignments.clear();
+    closeLiveObjectAssignmentMenu();
+    if (liveState.pendingObjectAssignment) cancelLiveObjectAssignmentTargetPick("cancelled");
     pinnedDroneId = null;
     hoveredDroneId = null;
     stopLiveDroneFollow();
@@ -9251,11 +9447,27 @@ function findDistanceMeasurementHit(containerPoint) {
   return null;
 }
 
+function findLiveObjectAssignmentHit(containerPoint) {
+  if (!containerPoint || !liveObjectAssignmentHitRegions.length) return null;
+  for (let i = liveObjectAssignmentHitRegions.length - 1; i >= 0; i--) {
+    const hit = liveObjectAssignmentHitRegions[i];
+    if (!hit || !hit.measurement) continue;
+    if (hit.labelRect && pointInRotatedRect(containerPoint, hit.labelRect)) {
+      return hit.measurement;
+    }
+    if (hit.start && hit.end && pointToSegmentDistancePx(containerPoint, hit.start, hit.end) <= 12) {
+      return hit.measurement;
+    }
+  }
+  return null;
+}
+
 function openDistanceMeasurementMenu(measurement, containerPoint) {
   if (!measurement || !containerPoint || !map) return;
   const host = document.getElementById("app") || document.body;
   closeLiveMapMenu();
   closeDistanceMeasurementMenu();
+  closeLiveObjectAssignmentMenu();
   closeGroundStationMenu(false);
   closeGroundStationNameMenu();
   closeLiveDroneActionSheet();
@@ -9472,6 +9684,24 @@ function openLiveDroneActionSheet(drone, anchor = null) {
   });
   actions.appendChild(renameBtn);
 
+  const objectAssignment = getLiveObjectAssignment(drone.id);
+  const assignBtn = document.createElement("button");
+  assignBtn.className = objectAssignment ? "live-btn live-danger-btn" : "live-btn";
+  assignBtn.type = "button";
+  assignBtn.textContent = objectAssignment ? "Unassign" : "Assign";
+  assignBtn.title = objectAssignment
+    ? `Remove assignment to ${getLiveObjectTargetName(objectAssignment.target)}`
+    : "Assign this drone to a HOME or another drone";
+  assignBtn.addEventListener("click", () => {
+    if (objectAssignment) {
+      removeLiveObjectAssignment(drone.id);
+      closeLiveDroneActionSheet();
+      return;
+    }
+    startLiveObjectAssignmentTargetPick(drone.id);
+  });
+  actions.appendChild(assignBtn);
+
   const relockBtn = document.createElement("button");
   relockBtn.className = "live-btn";
   relockBtn.type = "button";
@@ -9523,6 +9753,7 @@ function attachLiveDroneLongPress(row, drone) {
     start = null;
   };
   row.addEventListener("pointerdown", (event) => {
+    if (liveState.pendingObjectAssignment) return;
     if (typeof event.button === "number" && event.button !== 0) return;
     clear();
     start = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
@@ -9551,6 +9782,336 @@ function getLiveEmptyStatusMessage() {
     return "Open USB serial to broadcast telemetry.";
   }
   return liveState.connected ? "Waiting for drone telemetry." : "Open USB serial to receive telemetry.";
+}
+
+function getGroundStationById(id) {
+  const numericId = Number(id);
+  if (!Number.isFinite(numericId)) return null;
+  return groundStations.find((station) => Number(station.id) === numericId) || null;
+}
+
+function getLiveObjectAssignment(sourceDroneId) {
+  const id = Number(sourceDroneId);
+  return Number.isFinite(id) ? liveObjectAssignments.get(id) || null : null;
+}
+
+function getLiveObjectTargetName(target) {
+  if (!target) return "target";
+  if (target.type === "drone") return getLiveDroneDisplayName(target.droneId);
+  if (target.type === "home") {
+    const home = getGroundStationById(target.homeId);
+    return (home?.name || `Home #${Number(target.homeId) + 1}`).trim();
+  }
+  return "target";
+}
+
+function showLiveObjectAssignmentHelper() {
+  const pending = liveState.pendingObjectAssignment;
+  if (!pending) return;
+  const host = document.getElementById("app") || document.body;
+  if (!liveObjectAssignmentHelperEl) {
+    liveObjectAssignmentHelperEl = document.createElement("div");
+    liveObjectAssignmentHelperEl.className = "distance-measure-helper";
+  }
+  liveObjectAssignmentHelperEl.textContent =
+    `Choose assignment target for ${getLiveDroneDisplayName(pending.sourceDroneId)}: click HOME or drone`;
+  if (!liveObjectAssignmentHelperEl.parentNode) {
+    host.appendChild(liveObjectAssignmentHelperEl);
+  }
+  window.addEventListener("keydown", handleLiveObjectAssignmentKeydown, true);
+}
+
+function hideLiveObjectAssignmentHelper() {
+  if (liveObjectAssignmentHelperEl && liveObjectAssignmentHelperEl.parentNode) {
+    liveObjectAssignmentHelperEl.parentNode.removeChild(liveObjectAssignmentHelperEl);
+  }
+  window.removeEventListener("keydown", handleLiveObjectAssignmentKeydown, true);
+}
+
+function handleLiveObjectAssignmentKeydown(event) {
+  if (!liveState.pendingObjectAssignment || event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  cancelLiveObjectAssignmentTargetPick("escape");
+}
+
+function startLiveObjectAssignmentTargetPick(sourceDroneId) {
+  const id = Number(sourceDroneId);
+  if (!Number.isFinite(id) || !getDroneById(id)) return;
+  cancelPendingDistanceMeasurement();
+  closeDistanceMeasurementMenu();
+  closeLiveObjectAssignmentMenu();
+  closeGroundStationMenu(false);
+  closeGroundStationNameMenu();
+  closeLiveMapMenu();
+  closeLiveDroneActionSheet();
+  liveState.pendingObjectAssignment = { sourceDroneId: id, startedAt: Date.now() };
+  appendLiveDebug(`assignment: choose target for ${getLiveDroneDisplayName(id)}`);
+  showLiveObjectAssignmentHelper();
+  suppressMapClickUntil = performance.now() + 250;
+  longPressSuppressUntil = performance.now() + 250;
+  forceRedraw();
+}
+
+function cancelLiveObjectAssignmentTargetPick(reason = "cancelled") {
+  if (!liveState.pendingObjectAssignment) return;
+  appendLiveDebug(`assignment ${reason}`);
+  liveState.pendingObjectAssignment = null;
+  hideLiveObjectAssignmentHelper();
+  suppressMapClickUntil = performance.now() + 250;
+  longPressSuppressUntil = performance.now() + 250;
+  forceRedraw();
+}
+
+function upsertLiveObjectAssignment(sourceDroneId, target) {
+  const id = Number(sourceDroneId);
+  if (!Number.isFinite(id) || !target) return null;
+  const existing = liveObjectAssignments.get(id);
+  const assignment = {
+    id: existing?.id || nextLiveObjectAssignmentId++,
+    source: { type: "drone", droneId: id },
+    target,
+    createdAt: existing?.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  };
+  liveObjectAssignments.set(id, assignment);
+  updateStatusList();
+  forceRedraw();
+  return assignment;
+}
+
+function removeLiveObjectAssignment(sourceDroneId, { silent = false } = {}) {
+  const id = Number(sourceDroneId);
+  if (!Number.isFinite(id)) return false;
+  const removed = liveObjectAssignments.delete(id);
+  if (removed) {
+    closeLiveObjectAssignmentMenu();
+    if (!silent) appendLiveDebug(`assignment removed for ${getLiveDroneDisplayName(id)}`);
+    updateStatusList();
+    forceRedraw();
+  }
+  return removed;
+}
+
+function removeLiveObjectAssignmentsForDrone(droneId, { silent = false } = {}) {
+  const id = Number(droneId);
+  if (!Number.isFinite(id)) return false;
+  let changed = false;
+  liveObjectAssignments.forEach((assignment, sourceId) => {
+    if (
+      Number(sourceId) === id ||
+      (assignment?.target?.type === "drone" && Number(assignment.target.droneId) === id)
+    ) {
+      liveObjectAssignments.delete(sourceId);
+      changed = true;
+    }
+  });
+  if (changed) {
+    closeLiveObjectAssignmentMenu();
+    if (!silent) appendLiveDebug(`assignment removed for missing ${getLiveDroneDisplayName(id)}`);
+    updateStatusList();
+    forceRedraw();
+  }
+  return changed;
+}
+
+function removeLiveObjectAssignmentsForHome(homeId, { silent = false } = {}) {
+  const id = Number(homeId);
+  if (!Number.isFinite(id)) return false;
+  let changed = false;
+  liveObjectAssignments.forEach((assignment, sourceId) => {
+    if (assignment?.target?.type === "home" && Number(assignment.target.homeId) === id) {
+      liveObjectAssignments.delete(sourceId);
+      changed = true;
+    }
+  });
+  if (changed) {
+    closeLiveObjectAssignmentMenu();
+    if (!silent) appendLiveDebug("assignment removed for deleted HOME");
+    updateStatusList();
+    forceRedraw();
+  }
+  return changed;
+}
+
+function pruneLiveObjectAssignments({ redraw = true } = {}) {
+  let changed = false;
+  liveObjectAssignments.forEach((assignment, sourceId) => {
+    const source = getDroneById(sourceId);
+    const target = assignment?.target;
+    const targetExists =
+      target?.type === "drone"
+        ? Boolean(getDroneById(target.droneId))
+        : target?.type === "home"
+          ? Boolean(getGroundStationById(target.homeId))
+          : false;
+    if (!source || !targetExists) {
+      liveObjectAssignments.delete(sourceId);
+      changed = true;
+    }
+  });
+  if (changed) {
+    closeLiveObjectAssignmentMenu();
+    updateStatusList();
+    if (redraw) forceRedraw();
+  }
+  return changed;
+}
+
+function getLiveObjectEndpoint(ref) {
+  if (!ref) return null;
+  if (ref.type === "drone") {
+    const drone = getDroneById(ref.droneId);
+    const latest = drone?.getLatest?.();
+    const lat = Number(latest?.lat);
+    const lng = Number(latest?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  }
+  if (ref.type === "home") {
+    const home = getGroundStationById(ref.homeId);
+    const lat = Number(home?.lat);
+    const lng = Number(home?.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { lat, lng };
+  }
+  return null;
+}
+
+function findLiveObjectAssignmentTarget(containerPoint, sourceDroneId) {
+  if (!containerPoint || !map) return null;
+  const radius = getHoverRadius() + 6;
+  const candidates = [];
+  const drone = findNearestDrone(containerPoint, radius);
+  if (drone) {
+    const latest = drone.getLatest?.();
+    if (latest) {
+      const point = map.latLngToContainerPoint([latest.lat, latest.lng]);
+      candidates.push({
+        type: "drone",
+        droneId: Number(drone.id),
+        distancePx: Math.hypot(point.x - containerPoint.x, point.y - containerPoint.y),
+      });
+    }
+  }
+  const home = findNearestGroundStation(containerPoint, radius);
+  if (home) {
+    const point = map.latLngToContainerPoint([home.lat, home.lng]);
+    candidates.push({
+      type: "home",
+      homeId: Number(home.id),
+      distancePx: Math.hypot(point.x - containerPoint.x, point.y - containerPoint.y),
+    });
+  }
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.distancePx - b.distancePx);
+  const target = candidates[0];
+  if (target.type === "drone" && Number(target.droneId) === Number(sourceDroneId)) {
+    return { type: "self", droneId: Number(target.droneId) };
+  }
+  return target.type === "drone"
+    ? { type: "drone", droneId: target.droneId }
+    : { type: "home", homeId: target.homeId };
+}
+
+function completeLiveObjectAssignmentTarget(target) {
+  const pending = liveState.pendingObjectAssignment;
+  if (!pending || !target) return false;
+  const sourceId = Number(pending.sourceDroneId);
+  if (!Number.isFinite(sourceId)) return false;
+  if (target.type === "self" || (target.type === "drone" && Number(target.droneId) === sourceId)) {
+    appendLiveDebug("assignment rejected: target cannot be the same drone");
+    showLiveObjectAssignmentHelper();
+    return true;
+  }
+  const sourceName = getLiveDroneDisplayName(sourceId);
+  const targetName = getLiveObjectTargetName(target);
+  if (!window.confirm(`Assign ${sourceName} to ${targetName}?`)) {
+    cancelLiveObjectAssignmentTargetPick("cancelled");
+    return true;
+  }
+  upsertLiveObjectAssignment(sourceId, target);
+  liveState.pendingObjectAssignment = null;
+  hideLiveObjectAssignmentHelper();
+  appendLiveDebug(`assignment: ${sourceName} -> ${targetName}`);
+  suppressMapClickUntil = performance.now() + 250;
+  longPressSuppressUntil = performance.now() + 250;
+  return true;
+}
+
+function completeLiveObjectAssignmentFromPoint(containerPoint) {
+  const pending = liveState.pendingObjectAssignment;
+  if (!pending) return false;
+  const target = findLiveObjectAssignmentTarget(containerPoint, pending.sourceDroneId);
+  if (!target) {
+    cancelLiveObjectAssignmentTargetPick("cancelled");
+    return true;
+  }
+  return completeLiveObjectAssignmentTarget(target);
+}
+
+function closeLiveObjectAssignmentMenu() {
+  if (liveObjectAssignmentMenuEl && liveObjectAssignmentMenuEl.parentNode) {
+    liveObjectAssignmentMenuEl.parentNode.removeChild(liveObjectAssignmentMenuEl);
+  }
+  liveObjectAssignmentMenuEl = null;
+  document.removeEventListener("pointerdown", handleLiveObjectAssignmentMenuOutsideClick, true);
+}
+
+function handleLiveObjectAssignmentMenuOutsideClick(event) {
+  if (!liveObjectAssignmentMenuEl) return;
+  if (liveObjectAssignmentMenuEl.contains(event.target)) return;
+  closeLiveObjectAssignmentMenu();
+}
+
+function openLiveObjectAssignmentMenu(assignment, containerPoint) {
+  if (!assignment || !containerPoint || !map) return;
+  const host = document.getElementById("app") || document.body;
+  closeLiveMapMenu();
+  closeDistanceMeasurementMenu();
+  closeLiveObjectAssignmentMenu();
+  closeGroundStationMenu(false);
+  closeGroundStationNameMenu();
+  closeLiveDroneActionSheet();
+
+  liveObjectAssignmentMenuEl = document.createElement("div");
+  liveObjectAssignmentMenuEl.className = "relative-menu distance-measure-menu";
+  liveObjectAssignmentMenuEl.addEventListener("pointerdown", (event) => event.stopPropagation());
+  host.appendChild(liveObjectAssignmentMenuEl);
+  enableMenuDrag(liveObjectAssignmentMenuEl);
+
+  liveObjectAssignmentMenuEl.innerHTML = `
+    <div class="menu-head">
+      <h4>Assignment</h4>
+    </div>
+    <div class="status-mission" style="line-height:1.35; opacity:0.85; margin-top:2px;">
+      ${getLiveDroneDisplayName(assignment.source.droneId)} -> ${getLiveObjectTargetName(assignment.target)}
+    </div>
+    <div class="command-list cmd-action-list column" style="margin-top:6px;">
+      <button class="cmd-chip cmd-action danger" data-action="delete-object-assignment" type="button">Delete</button>
+    </div>
+  `;
+
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const menuW = liveObjectAssignmentMenuEl.offsetWidth || 240;
+  const menuH = liveObjectAssignmentMenuEl.offsetHeight || 130;
+  const pad = 10;
+  const left = Math.max(pad, Math.min(window.innerWidth - menuW - pad, mapRect.left + containerPoint.x + 12));
+  const top = Math.max(pad, Math.min(window.innerHeight - menuH - pad, mapRect.top + containerPoint.y - 10));
+  liveObjectAssignmentMenuEl.style.left = `${left}px`;
+  liveObjectAssignmentMenuEl.style.top = `${top}px`;
+
+  const deleteBtn = liveObjectAssignmentMenuEl.querySelector("[data-action='delete-object-assignment']");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      removeLiveObjectAssignment(assignment.source.droneId);
+      suppressMapClickUntil = performance.now() + 350;
+      longPressSuppressUntil = performance.now() + 350;
+    });
+  }
+
+  document.addEventListener("pointerdown", handleLiveObjectAssignmentMenuOutsideClick, true);
 }
 
 function initLivePositionUi() {
@@ -9787,6 +10348,13 @@ function renderLiveStatusList() {
 
     row.addEventListener("click", () => {
       if (performance.now() < suppressStatusClickUntil) return;
+      if (liveState.pendingObjectAssignment) {
+        completeLiveObjectAssignmentTarget({
+          type: Number(d.id) === Number(liveState.pendingObjectAssignment.sourceDroneId) ? "self" : "drone",
+          droneId: Number(d.id),
+        });
+        return;
+      }
       if (pinnedDroneId === d.id) {
         stopLiveDroneFollow();
         setPinnedDrone(null);
@@ -10459,6 +11027,10 @@ function setupHoverHandlers() {
 function handleMapClick(e) {
   if (performance.now() < suppressMapClickUntil) return;
   if (isZooming || isMapDragging) return;
+  if (LIVE_POSITION_MODE && liveState.pendingObjectAssignment) {
+    completeLiveObjectAssignmentFromPoint(e.containerPoint);
+    return;
+  }
   if (pendingDistanceMeasurement && e && e.latlng) {
     completeDistanceMeasurement(e.latlng);
     return;
@@ -12584,6 +13156,10 @@ function attemptFollowMenuFromPoint(containerPoint) {
 function handleContextMenu(e) {
   e.originalEvent?.preventDefault?.();
   if (LIVE_POSITION_MODE) {
+    if (liveState.pendingObjectAssignment) {
+      completeLiveObjectAssignmentFromPoint(e.containerPoint);
+      return;
+    }
     if (pendingDistanceMeasurement) {
       cancelPendingDistanceMeasurement();
       suppressMapClickUntil = performance.now() + 350;
@@ -12591,15 +13167,26 @@ function handleContextMenu(e) {
       return;
     }
     if (pendingUserHomePlacement) return;
-    const measurementHit = findDistanceMeasurementHit(e.containerPoint);
-    if (measurementHit) {
-      openDistanceMeasurementMenu(measurementHit, e.containerPoint);
-      return;
-    }
     const nearGs = findNearestGroundStation(e.containerPoint, getHoverRadius() + 6);
     if (nearGs) {
       openGroundStationMenu(nearGs, e.containerPoint);
     } else {
+      const near = findNearestDrone(e.containerPoint, getHoverRadius());
+      if (near) {
+        setPinnedDrone(near.id);
+        openLiveDroneActionSheet(near, { x: e.containerPoint.x, y: e.containerPoint.y });
+        return;
+      }
+      const measurementHit = findDistanceMeasurementHit(e.containerPoint);
+      if (measurementHit) {
+        openDistanceMeasurementMenu(measurementHit, e.containerPoint);
+        return;
+      }
+      const assignmentHit = findLiveObjectAssignmentHit(e.containerPoint);
+      if (assignmentHit) {
+        openLiveObjectAssignmentMenu(assignmentHit, e.containerPoint);
+        return;
+      }
       openLiveMapMenu(e.latlng, e.containerPoint);
     }
     return;
@@ -12631,6 +13218,10 @@ function handleContextMenu(e) {
 
 function attemptActionLongPress(containerPoint) {
   if (LIVE_POSITION_MODE) {
+    if (liveState.pendingObjectAssignment) {
+      completeLiveObjectAssignmentFromPoint(containerPoint);
+      return;
+    }
     if (pendingDistanceMeasurement) {
       cancelPendingDistanceMeasurement();
       suppressMapClickUntil = performance.now() + 350;
@@ -12642,11 +13233,6 @@ function attemptActionLongPress(containerPoint) {
       addUserHomeAtLatLng(latlng);
       return;
     }
-    const measurementHit = findDistanceMeasurementHit(containerPoint);
-    if (measurementHit) {
-      openDistanceMeasurementMenu(measurementHit, containerPoint);
-      return;
-    }
     const nearGs = findNearestGroundStation(containerPoint, getHoverRadius() + 6);
     if (nearGs) {
       openGroundStationMenu(nearGs, containerPoint);
@@ -12656,6 +13242,16 @@ function attemptActionLongPress(containerPoint) {
     if (near) {
       setPinnedDrone(near.id);
       openLiveDroneActionSheet(near, { x: containerPoint.x, y: containerPoint.y });
+      return;
+    }
+    const measurementHit = findDistanceMeasurementHit(containerPoint);
+    if (measurementHit) {
+      openDistanceMeasurementMenu(measurementHit, containerPoint);
+      return;
+    }
+    const assignmentHit = findLiveObjectAssignmentHit(containerPoint);
+    if (assignmentHit) {
+      openLiveObjectAssignmentMenu(assignmentHit, containerPoint);
       return;
     }
     const latlng = map.containerPointToLatLng(containerPoint);
@@ -14251,121 +14847,157 @@ function formatDistanceMeasurement(distanceMeters) {
   return `${(distanceMeters / 1000).toFixed(1)} km`;
 }
 
+function drawLiveDistanceArrow(measurement, {
+  cacheHit = true,
+  preview = false,
+  hitRegions = null,
+  hitPayload = measurement,
+  arrowColor = "rgba(255,255,255,0.96)",
+  haloColor = "rgba(0,0,0,0.62)",
+  opacity = 1,
+  endInsetPx = 0,
+  showEndDot = true,
+} = {}) {
+  if (!measurement || !ctx || !map) return;
+  const start = latLngToScreen(measurement.startLat, measurement.startLng);
+  const end = latLngToScreen(measurement.endLat, measurement.endLng);
+  if (!start || !end) return;
+
+  const rawDx = end.x - start.x;
+  const rawDy = end.y - start.y;
+  const rawLen = Math.hypot(rawDx, rawDy);
+  if (rawLen < 2) return;
+
+  const rawUx = rawDx / rawLen;
+  const rawUy = rawDy / rawLen;
+  const insetPx = Math.max(0, Math.min(Number(endInsetPx) || 0, Math.max(0, rawLen - 28)));
+  const drawEnd = {
+    x: end.x - rawUx * insetPx,
+    y: end.y - rawUy * insetPx,
+  };
+
+  const dx = drawEnd.x - start.x;
+  const dy = drawEnd.y - start.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 2) return;
+
+  const ux = dx / len;
+  const uy = dy / len;
+  const perpX = -uy;
+  const perpY = ux;
+  const arrowLen = Math.max(12, Math.min(18, len * 0.18));
+  const arrowWidth = arrowLen * 0.52;
+  const shaftEnd = {
+    x: drawEnd.x - ux * arrowLen,
+    y: drawEnd.y - uy * arrowLen,
+  };
+  const drawOpacity = Number.isFinite(Number(opacity)) ? Math.max(0, Math.min(1, Number(opacity))) : 1;
+
+  ctx.save();
+  ctx.globalAlpha *= drawOpacity;
+  if (preview) {
+    ctx.globalAlpha *= 0.86;
+  }
+  ctx.setLineDash([]);
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.shadowColor = haloColor;
+  ctx.shadowBlur = 9;
+  ctx.shadowOffsetX = 0;
+  ctx.shadowOffsetY = 2;
+
+  [start, ...(showEndDot ? [drawEnd] : [])].forEach((point) => {
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
+    ctx.fillStyle = arrowColor;
+    ctx.fill();
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = "rgba(0,0,0,0.48)";
+    ctx.stroke();
+  });
+
+  ctx.lineWidth = 3.2;
+  ctx.strokeStyle = arrowColor;
+  ctx.beginPath();
+  ctx.moveTo(start.x, start.y);
+  ctx.lineTo(shaftEnd.x, shaftEnd.y);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(drawEnd.x, drawEnd.y);
+  ctx.lineTo(drawEnd.x - ux * arrowLen + perpX * arrowWidth, drawEnd.y - uy * arrowLen + perpY * arrowWidth);
+  ctx.lineTo(drawEnd.x - ux * arrowLen - perpX * arrowWidth, drawEnd.y - uy * arrowLen - perpY * arrowWidth);
+  ctx.closePath();
+  ctx.fillStyle = arrowColor;
+  ctx.fill();
+
+  ctx.shadowBlur = 0;
+  ctx.shadowOffsetY = 0;
+  ctx.restore();
+
+  const distanceMeters = map.distance(
+    [measurement.startLat, measurement.startLng],
+    [measurement.endLat, measurement.endLng]
+  );
+  const label = formatDistanceMeasurement(distanceMeters);
+  const midX = (start.x + drawEnd.x) / 2;
+  const midY = (start.y + drawEnd.y) / 2;
+  const labelX = midX + perpX * 18;
+  const labelY = midY + perpY * 18;
+  let angle = Math.atan2(dy, dx);
+  if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
+    angle += Math.PI;
+  }
+
+  ctx.save();
+  ctx.globalAlpha *= drawOpacity;
+  ctx.font = "800 13px Inter, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const textWidth = ctx.measureText(label).width;
+  const boxWidth = textWidth + 16;
+  const boxHeight = 24;
+  ctx.translate(labelX, labelY);
+  ctx.rotate(angle);
+  ctx.fillStyle = "rgba(18,24,32,0.88)";
+  ctx.strokeStyle = "rgba(0,0,0,0.55)";
+  ctx.lineWidth = 3;
+  roundedRectPath(ctx, -boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight, 7);
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = "rgba(235,250,255,0.98)";
+  ctx.shadowColor = "rgba(0,0,0,0.75)";
+  ctx.shadowBlur = 4;
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
+
+  if (cacheHit && hitRegions) {
+    hitRegions.push({
+      measurement: hitPayload,
+      start,
+      end: drawEnd,
+      labelRect: {
+        cx: labelX,
+        cy: labelY,
+        width: boxWidth + 8,
+        height: boxHeight + 8,
+        angle,
+      },
+    });
+  }
+}
+
 function drawDistanceMeasurements() {
   distanceMeasurementHitRegions = [];
   if (!ctx || !map || !LIVE_POSITION_MODE) return;
 
-  const arrowColor = "rgba(255,255,255,0.96)";
-  const haloColor = "rgba(0,0,0,0.62)";
-
   const drawMeasurementArrow = (measurement, { cacheHit = true, preview = false } = {}) => {
-    if (!measurement) return;
-    const start = latLngToScreen(measurement.startLat, measurement.startLng);
-    const end = latLngToScreen(measurement.endLat, measurement.endLng);
-    if (!start || !end) return;
-
-    const dx = end.x - start.x;
-    const dy = end.y - start.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 2) return;
-
-    const ux = dx / len;
-    const uy = dy / len;
-    const perpX = -uy;
-    const perpY = ux;
-    const arrowLen = Math.max(12, Math.min(18, len * 0.18));
-    const arrowWidth = arrowLen * 0.52;
-
-    ctx.save();
-    if (preview) {
-      ctx.globalAlpha = 0.86;
-    }
-    ctx.setLineDash([]);
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowColor = haloColor;
-    ctx.shadowBlur = 9;
-    ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = 2;
-
-    [start, end].forEach((point) => {
-      ctx.beginPath();
-      ctx.arc(point.x, point.y, 6, 0, Math.PI * 2);
-      ctx.fillStyle = arrowColor;
-      ctx.fill();
-      ctx.lineWidth = 1.4;
-      ctx.strokeStyle = "rgba(0,0,0,0.48)";
-      ctx.stroke();
+    drawLiveDistanceArrow(measurement, {
+      cacheHit,
+      preview,
+      hitRegions: distanceMeasurementHitRegions,
+      hitPayload: measurement,
     });
-
-    ctx.lineWidth = 3.2;
-    ctx.strokeStyle = arrowColor;
-    ctx.beginPath();
-    ctx.moveTo(start.x, start.y);
-    ctx.lineTo(end.x, end.y);
-    ctx.stroke();
-
-    ctx.beginPath();
-    ctx.moveTo(end.x, end.y);
-    ctx.lineTo(end.x - ux * arrowLen + perpX * arrowWidth, end.y - uy * arrowLen + perpY * arrowWidth);
-    ctx.lineTo(end.x - ux * arrowLen - perpX * arrowWidth, end.y - uy * arrowLen - perpY * arrowWidth);
-    ctx.closePath();
-    ctx.fillStyle = arrowColor;
-    ctx.fill();
-
-    ctx.shadowBlur = 0;
-    ctx.shadowOffsetY = 0;
-    ctx.restore();
-
-    const distanceMeters = map.distance(
-      [measurement.startLat, measurement.startLng],
-      [measurement.endLat, measurement.endLng]
-    );
-    const label = formatDistanceMeasurement(distanceMeters);
-    const midX = (start.x + end.x) / 2;
-    const midY = (start.y + end.y) / 2;
-    const labelX = midX + perpX * 18;
-    const labelY = midY + perpY * 18;
-    let angle = Math.atan2(dy, dx);
-    if (angle > Math.PI / 2 || angle < -Math.PI / 2) {
-      angle += Math.PI;
-    }
-
-    ctx.save();
-    ctx.font = "800 13px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    const textWidth = ctx.measureText(label).width;
-    const boxWidth = textWidth + 16;
-    const boxHeight = 24;
-    ctx.translate(labelX, labelY);
-    ctx.rotate(angle);
-    ctx.fillStyle = "rgba(18,24,32,0.88)";
-    ctx.strokeStyle = "rgba(0,0,0,0.55)";
-    ctx.lineWidth = 3;
-    roundedRectPath(ctx, -boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight, 7);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = "rgba(235,250,255,0.98)";
-    ctx.shadowColor = "rgba(0,0,0,0.75)";
-    ctx.shadowBlur = 4;
-    ctx.fillText(label, 0, 0);
-    ctx.restore();
-
-    if (cacheHit) {
-      distanceMeasurementHitRegions.push({
-        measurement,
-        start,
-        end,
-        labelRect: {
-          cx: labelX,
-          cy: labelY,
-          width: boxWidth + 8,
-          height: boxHeight + 8,
-          angle,
-        },
-      });
-    }
   };
 
   distanceMeasurements.forEach((measurement) => {
@@ -14409,6 +15041,35 @@ function drawDistanceMeasurements() {
   }
 }
 
+function drawLiveObjectAssignments() {
+  liveObjectAssignmentHitRegions = [];
+  if (!ctx || !map || !LIVE_POSITION_MODE) return;
+  pruneLiveObjectAssignments({ redraw: false });
+  liveObjectAssignments.forEach((assignment) => {
+    const start = getLiveObjectEndpoint(assignment.source);
+    const end = getLiveObjectEndpoint(assignment.target);
+    if (!start || !end) return;
+    drawLiveDistanceArrow(
+      {
+        id: assignment.id,
+        startLat: start.lat,
+        startLng: start.lng,
+        endLat: end.lat,
+        endLng: end.lng,
+      },
+      {
+        hitRegions: liveObjectAssignmentHitRegions,
+        hitPayload: assignment,
+        opacity: 0.8,
+        endInsetPx: 25,
+        showEndDot: false,
+        arrowColor: "rgba(255,255,255,0.96)",
+        haloColor: "rgba(0,0,0,0.42)",
+      }
+    );
+  });
+}
+
 function draw() {
   if (!ctx || !map) return;
 
@@ -14435,6 +15096,10 @@ function draw() {
   const zoom = map.getZoom();
   const selTeam = pinnedTeamId !== null ? getTeamById(pinnedTeamId) : null;
   const selMembers = selTeam ? selTeam.members : null;
+
+  if (LIVE_POSITION_MODE) {
+    drawLiveObjectAssignments();
+  }
 
   // Ground stations (anchors)
   const gsSize = Math.max(14, Math.min(26, zoom * 1.45)) * 0.75;

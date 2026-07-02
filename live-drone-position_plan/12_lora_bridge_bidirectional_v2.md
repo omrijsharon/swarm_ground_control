@@ -35,11 +35,11 @@ connected to the GC, only at a lower update rate.
   3-byte shared-channel bridge join request containing packet type, requested
   profile ID, and session sequence.
 - MaGC listens for that bridge join on the normal shared discovery channel,
-  switches the bridge backhaul profile to the accepted profile, and then sends
-  snapshots/deltas on `902 MHz`. A compact 3-byte bridge join ACK may be sent
-  for diagnostics, but the bridge immediately listens on `902 MHz` after each
-  join request and retries with the next profile only after `6000 ms` without
-  downlink.
+  switches the bridge backhaul profile to the accepted profile, sends a compact
+  3-byte bridge join ACK on `902 MHz` with that accepted profile, and then sends
+  snapshots/deltas on the same backhaul. The bridge immediately listens on
+  `902 MHz` after each join request and retries with the next profile only after
+  `6000 ms` without ACK or other downlink.
 - While active, the bridge sends a queued command if one exists in the scheduled
   uplink slot after a valid downlink; otherwise it stays silent.
 - If GC/MaGC receives no bridge command/uplink contact and the bridge stops
@@ -218,7 +218,7 @@ Queue defaults:
 - **GC busy:** GC/MaGC ACKs `accepted` once it accepts the command into its
   normal command path; long operations report progress through normal downlink
   events/status.
-- **Bridge stale:** if no downlink for more than `3 s`, SGC disables mutating
+- **Bridge stale:** if no downlink for more than `6 s`, SGC disables mutating
   controls and shows bridge stale/reconnecting.
 - **Drone off after GC reboot:** persisted assignment is still mirrored as a
   card-only `OFFLINE/OFF/BINDING` drone.
@@ -273,6 +273,16 @@ Queue defaults:
   wait until the shared bind sequence is complete.
 - [x] Add bridge receiver ESP-NOW hello probing and shared-channel LoRa bridge
   join fallback behavior.
+- [x] Fix bridge/MaGC LoRa JOIN handshake consistency: shared channel carries
+  the bridge JOIN request, while MaGC sends the 3-byte JOIN ACK on `902 MHz`
+  using the accepted backhaul profile before normal snapshots/deltas.
+- [x] Send one initial LoRa snapshot immediately after a successful bridge JOIN
+  ACK, then continue LoRa bridge fallback only between completed shared-RX
+  dwell windows. Bridge LoRa freshness is `6 s` so normal full-dwell cadence
+  does not flicker stale between packets.
+- [x] Keep the MaGC LoRa bridge session alive on successful downlink
+  snapshots/deltas, not only on bridge hello/uplink, so a missed short hello
+  window does not stop bridge updates.
 - [x] Make GC/MaGC provisioning enable backhaul by default while keeping an
   explicit disable override for bench use.
 - [x] Add command duplicate cache and retry-safe ACK state.

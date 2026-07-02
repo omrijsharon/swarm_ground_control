@@ -23,9 +23,9 @@ under that limit.
   with a compact shared-channel bridge join.
 - Add 3-byte shared-channel LoRa fallback discovery packets:
   - `BRIDGE_JOIN_REQUEST`: `packet_type`, `requested_profile_id`, `session_seq`
-  - `BRIDGE_JOIN_ACK`: `packet_type`, `accepted_profile_id`, `session_seq`
-    is diagnostic/optional; the bridge immediately listens on `902 MHz` after
-    sending the request.
+  - `BRIDGE_JOIN_ACK`: `packet_type`, `accepted_profile_id`, `session_seq`;
+    MaGC sends it on `902 MHz` with the accepted profile, and the bridge listens
+    there immediately after sending the request.
 - While LoRa fallback is active, use compact `BRIDGE_LIVE_DELTA` frames every
   `250 ms`; keep full `BRIDGE_SNAPSHOT` frames for activation and periodic
   metadata refresh.
@@ -82,6 +82,12 @@ under that limit.
 - [x] Replace MaGC-originated ESP-NOW/LoRa bridge beacons with bridge-originated
   ESP-NOW hello probes and 3-byte shared-channel LoRa join/ACK.
 - [x] Add bridge LoRa profile retry ladder for rooftop/indoor fallback links.
+- [x] Make the LoRa bridge JOIN ACK part of the backhaul handshake: MaGC ACKs on
+  `902 MHz` with the accepted profile, and bridge status requires
+  `bridgeJoinAckRxCount` to move for a clean handshake.
+- [x] Keep LoRa fallback freshness aligned with MaGC shared-RX dwell cadence:
+  first snapshot follows the ACK, later LoRa packets are sent between completed
+  shared dwells, and bridge stale timeout is `6 s`.
 - [ ] Bench-verify ESP-NOW bridge connects and updates at about 4 Hz.
 - [ ] Bench-verify mutating commands ACK over ESP-NOW.
 - [ ] Bench-verify LoRa fallback after ESP-NOW stale/loss and promotion back to ESP-NOW.

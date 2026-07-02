@@ -36,6 +36,8 @@ COMMAND_MAP = {
     "rescan": "rescan_channels",
     "rebind": "relock_drone",
     "profile": "set_radio_profile",
+    "join-profile": "debug_bridge_join_profile",
+    "debug-join-profile": "debug_bridge_join_profile",
     "clear": "clear_assignment",
     "clear-all": "clear_all_assignments",
 }
@@ -60,11 +62,11 @@ def build_command(name: str, args: list[str], command_id: str) -> dict[str, Any]
         if not args:
             raise ValueError(f"{normalized} requires nodeId")
         payload["nodeId"] = int(args[0])
-    elif normalized == "profile":
+    elif normalized in {"profile", "join-profile", "debug-join-profile"}:
         if not args:
-            raise ValueError("profile requires radioProfileId")
+            raise ValueError(f"{normalized} requires radioProfileId")
         payload["radioProfileId"] = int(args[0])
-        if len(args) > 1 and args[1].lower() in {"persist", "true", "1", "yes"}:
+        if normalized == "profile" and len(args) > 1 and args[1].lower() in {"persist", "true", "1", "yes"}:
             payload["persist"] = True
     return payload
 
@@ -178,7 +180,7 @@ def write_event(log_file: Any, index: int, event: dict[str, Any]) -> None:
 
 
 def interactive_loop(peers: dict[str, SerialPeer], command_counter: list[int]) -> None:
-    print("Interactive commands: gc status | bridge bind | both status | gc rebind 7 | bridge profile 0 persist | quit")
+    print("Interactive commands: gc status | bridge bind | both status | gc rebind 7 | bridge profile 0 persist | bridge join-profile 46 | quit")
     while True:
         try:
             line = input("dbg> ").strip()
